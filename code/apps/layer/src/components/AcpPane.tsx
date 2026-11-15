@@ -11,10 +11,11 @@ import {
 import { heldConversation, holdConversation, pruneConversations } from "../lib/acpPool";
 import { onAcpUpdate } from "../lib/acpUpdates";
 import { api } from "../lib/api";
+import type { IssueKeys } from "../lib/issue-keys";
 import { pastedImages, readImage, type PastedImage } from "../lib/pastedImage";
 import type { AcpEntry, AcpToolContent, AcpView, PaneInfo } from "../lib/types";
 import { useStore } from "../store";
-import { useKeyProjects } from "./IssueKeyLink";
+import { useIssueKeys } from "./IssueKeyLink";
 import { Markdown } from "./Markdown";
 import { TerminalPane } from "./Terminal";
 import { ErrorMessage, useFailure } from "./ui";
@@ -69,7 +70,7 @@ function AcpPane({
   const failure = useFailure();
   const fail = failure.fail;
   const textSize = useStore((s) => s.settings?.ui.conversation_font_size ?? 14);
-  const keys = useKeyProjects();
+  const keys = useIssueKeys();
   const shown = visible && appActive;
 
   // Started from what the pane held when last on screen (`acpPool.ts`), so
@@ -343,8 +344,8 @@ const Entry = memo(
     onAnswer,
   }: {
     entry: AcpEntry;
-    /** The projects whose ticket keys are links (ACP-18). */
-    keys: string;
+    /** Which ticket keys are links (ACP-18). */
+    keys: IssueKeys;
     onAnswer: (entry: number, option: string) => void;
   }) {
     switch (entry.kind) {

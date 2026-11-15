@@ -26,7 +26,7 @@ import { UsageView } from "./components/UsageView";
 import { api } from "./lib/api";
 import { CHAT_TASK_ID, needsYou, repoTrouble, reviewCounts, taskTotals } from "./lib/derive";
 import { goTo } from "./lib/goto";
-import { isHenchman, lair, lairCounts } from "./lib/lair";
+import { isHenchman, lairNeeds } from "./lib/lair";
 import { pressKeys } from "./lib/press";
 import { specProgress, useSpecs } from "./lib/specs";
 import type { TaskView } from "./lib/types";
@@ -54,7 +54,7 @@ function TopBar() {
     s.panes.some((p) => p.task_id === CHAT_TASK_ID && p.running && !isHenchman(p)),
   );
   // The tasks and chats in the lair's Needs you (HEN-1), and whether the Henchman works.
-  const needed = useStore((s) => lairCounts(lair(s.tasks, s.panes, s.prs)).needsYou);
+  const needed = useStore((s) => lairNeeds(s.tasks, s.panes, s.prs));
   const scheming = useStore((s) =>
     s.panes.some((p) => isHenchman(p) && p.running && p.activity === "working"),
   );

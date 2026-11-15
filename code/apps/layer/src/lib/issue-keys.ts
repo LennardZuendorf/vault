@@ -6,6 +6,14 @@
 // Jira's own rule for a project key: a capital, then capitals or digits.
 const KEY = /\b([A-Z][A-Z0-9]{0,9})-\d+\b/g;
 
+/** The projects whose keys are links, and the keys that have a task, each "A|B". */
+export interface IssueKeys {
+  projects: string;
+  tasked: string;
+}
+
+export const NO_KEYS: IssueKeys = { projects: "", tasked: "" };
+
 /**
  * The projects Layer knows, as one string ("ACME|OPS"), so a selector that
  * returns it changes only when a project comes or goes.

@@ -1,6 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useMemo, type MouseEvent, type ReactNode } from "react";
-import { splitKeys } from "../lib/issue-keys";
+import { NO_KEYS, splitKeys, type IssueKeys } from "../lib/issue-keys";
 import { parse, safeHref, type Block, type Inline } from "../lib/markdown";
 import { IssueKeyLink } from "./IssueKeyLink";
 
@@ -9,10 +9,10 @@ import { IssueKeyLink } from "./IssueKeyLink";
 /**
  * Markdown as GitHub shows it, built from React elements only (see
  * `lib/markdown.ts` for why never HTML). Links open in the browser, and a
- * click on one does not reach whatever row the text sits in. Given `keys`,
- * the projects `useKeyProjects` knows, a ticket's key is a link too (ACP-18).
+ * click on one does not reach whatever row the text sits in. Given `keys`
+ * (`useIssueKeys`), a ticket's key is a link too (ACP-18).
  */
-export function Markdown({ text, keys = "" }: { text: string; keys?: string }) {
+export function Markdown({ text, keys = NO_KEYS }: { text: string; keys?: IssueKeys }) {
   const tree = useMemo(() => parse(text), [text]);
   return <div className="md">{tree.map((b, i) => block(b, i, keys))}</div>;
 }
@@ -23,11 +23,11 @@ function open(e: MouseEvent, href: string) {
   if (safeHref(href)) void openUrl(href).catch(() => {});
 }
 
-function inlines(nodes: Inline[], keys: string): ReactNode[] {
+function inlines(nodes: Inline[], keys: IssueKeys): ReactNode[] {
   return nodes.map((n, i) => {
     switch (n.t) {
       case "text":
-        return keys ? withKeys(n.v, keys, i) : n.v;
+        return keys.projects ? withKeys(n.v, keys, i) : n.v;
       case "code":
         return <code key={i}>{n.v}</code>;
       case "strong":
@@ -47,7 +47,7 @@ function inlines(nodes: Inline[], keys: string): ReactNode[] {
             title={n.href}
             onClick={(e) => open(e, n.href)}
           >
-            {inlines(n.c, "")}
+            {inlines(n.c, NO_KEYS)}
           </a>
         );
     }
@@ -55,17 +55,24 @@ function inlines(nodes: Inline[], keys: string): ReactNode[] {
 }
 
 /** A text node with each key of a known project as its link. */
-function withKeys(text: string, keys: string, at: number): ReactNode {
-  const parts = splitKeys(text, keys);
+function withKeys(text: string, keys: IssueKeys, at: number): ReactNode {
+  const parts = splitKeys(text, keys.projects);
   if (parts.length === 1 && typeof parts[0] === "string") return text;
+  const tasked = new Set(keys.tasked.split("|"));
   return (
     <span key={at}>
-      {parts.map((p, n) => (typeof p === "string" ? p : <IssueKeyLink key={n} issueKey={p.key} />))}
+      {parts.map((p, n) =>
+        typeof p === "string" ? (
+          p
+        ) : (
+          <IssueKeyLink key={n} issueKey={p.key} tasked={tasked.has(p.key)} />
+        ),
+      )}
     </span>
   );
 }
 
-function block(b: Block, i: number, keys: string): ReactNode {
+function block(b: Block, i: number, keys: IssueKeys): ReactNode {
   const each = (c: Block, n: number) => block(c, n, keys);
   switch (b.t) {
     case "h": {

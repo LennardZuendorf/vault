@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { facts, isHenchman, lair, lairCounts, ran, shortCommand, sortTask } from "../src/lib/lair";
+import {
+  facts,
+  isHenchman,
+  lair,
+  lairCounts,
+  lairNeeds,
+  ran,
+  shortCommand,
+  sortTask,
+} from "../src/lib/lair";
 import type { CheckoutPr, PaneInfo, TaskView } from "../src/lib/types";
 
 function pane(over: Partial<PaneInfo> = {}): PaneInfo {
@@ -134,6 +143,15 @@ describe("the lair", () => {
     expect(isHenchman(henchman)).toBe(true);
     expect(isHenchman(pane({ task_id: "chat", cwd: "/w/_chat/henchmen" }))).toBe(false);
     expect(lair([], [henchman], {}).chats).toEqual([]);
+  });
+
+  test("the top bar's count follows the panes, though it is kept between changes", () => {
+    const tasks = [task("a")];
+    const prs = {};
+    const asking = [pane({ task_id: "a", activity: "asking" })];
+    expect(lairNeeds(tasks, asking, prs)).toBe(1);
+    expect(lairNeeds(tasks, asking, prs)).toBe(1);
+    expect(lairNeeds(tasks, [pane({ task_id: "a", activity: "working" })], prs)).toBe(0);
   });
 });
 

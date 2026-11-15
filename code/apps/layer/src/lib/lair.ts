@@ -118,6 +118,30 @@ export function lair(
   return { groups, chats, chatsAsking: chats.filter(asks).length };
 }
 
+let needsSeen: {
+  tasks: TaskView[];
+  panes: PaneInfo[];
+  prs: Record<string, CheckoutPr[]>;
+  n: number;
+} | null = null;
+
+/**
+ * How many need you, for the top bar's Henchman tab: worked out again only
+ * when the tasks, panes or PRs change. It is read in a selector, which runs on
+ * every change of anything in the store, and the lair walks every task's panes.
+ */
+export function lairNeeds(
+  tasks: TaskView[],
+  panes: PaneInfo[],
+  prs: Record<string, CheckoutPr[]>,
+): number {
+  const seen = needsSeen;
+  if (seen && seen.tasks === tasks && seen.panes === panes && seen.prs === prs) return seen.n;
+  const n = lairCounts(lair(tasks, panes, prs)).needsYou;
+  needsSeen = { tasks, panes, prs, n };
+  return n;
+}
+
 /** "20 open · 3 need you · 1 to finish · …": the line under the title. */
 export function lairCounts(l: Lair): { open: number; needsYou: number; line: string } {
   const g = l.groups;
