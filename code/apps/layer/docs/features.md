@@ -3564,7 +3564,10 @@ Slack come later.
   does not count as a chat that is working; its banners and messages
   open its tab. It is restored at launch like any chat (PANE-7). It
   opens in auto mode where its agent has one, restored too, so reading
-  Layer through its tools asks nothing first.
+  Layer through its tools asks nothing first. Its room's
+  `.claude/settings.json`, written with its context, allows its own
+  tools (HEN-4), so auto mode's classifier never refuses one; other
+  tools are judged as before.
 - **HEN-3** Woken, it MUST be asked to do what it may itself first (put
   tasks' agents on what their pull requests need, HEN-11; say go on to
   agents with plan left; restart ones that exited by themselves), then
@@ -3697,8 +3700,10 @@ Slack come later.
   the task's last CLI or else the Henchman's, over ACP where it speaks
   it. It is refused while the task's agent works (the Henchman hears
   when it finishes) or asks the user, for a task left alone (HEN-8), and
-  for a task with no agent and no open pull request: starting a ticket
-  is the user's. Past 8 agents started or picked up in an hour, it is
+  for a task with no agent and no open pull request unless the user
+  asked the Henchman to start it (`asked: true`): starting a ticket is
+  the user's, and their word is enough. A ticket with no task gets one
+  from `start_work`. Past 8 agents started or picked up in an hour, it is
   refused until the user says more. Two outward steps it may have a
   task's agent take without asking: mark the task's own pull request
   ready once the agent says its work is done and the only failing checks

@@ -113,7 +113,9 @@ pub(crate) fn write_context(state: &AppState, dir: &Path) -> Result<()> {
         "or picking it up, or starting one; say what to fix, plainly. Leave it while its agent ",
         "works. A check that fails for a cause outside the task (the CI environment down, a ",
         "weekend outage, a rule waiting for reviews) needs nothing: no agent, no word. Starting ",
-        "a ticket that has no work yet is the user's.\n",
+        "work on a ticket is the user's: when they ask you to, do it. A task with no agent ",
+        "yet: `task_work` with `asked: true` and what to do. A ticket with no task: ",
+        "`start_work` makes one, with its agent.\n",
         "- **Pick up.** The same message names agents put back after Layer quit in the middle ",
         "of their turn, and agents whose turn ended on an error a retry fixes (overloaded, a ",
         "rate limit, a lost connection): tell them to go on where they were. One that exited ",
@@ -178,7 +180,21 @@ pub(crate) fn write_context(state: &AppState, dir: &Path) -> Result<()> {
     }
     std::fs::write(dir.join("CLAUDE.md"), &md)?;
     std::fs::write(dir.join("AGENTS.md"), &md)?;
+    std::fs::create_dir_all(dir.join(".claude"))?;
+    std::fs::write(dir.join(".claude").join("settings.json"), serde_json::to_vec_pretty(&settings())?)?;
     Ok(())
+}
+
+/// Its Claude Code settings, in its room (HEN-2): its own tools allowed.
+/// In auto mode a classifier judges each tool call, and it refused
+/// `task_work` on a task the user had just asked to start. None of them
+/// changes shared state (HEN-4); the user's word is the check they need.
+fn settings() -> serde_json::Value {
+    let allow: Vec<String> = super::henchman_tools::names()
+        .into_iter()
+        .map(|name| format!("mcp__{}__{name}", crate::mcp::SERVER_NAME))
+        .collect();
+    serde_json::json!({ "permissions": { "allow": allow } })
 }
 
 #[cfg(test)]
@@ -188,5 +204,15 @@ mod tests {
     #[test]
     fn the_henchman_opens_in_auto_mode() {
         assert_eq!(presets(), [("mode".to_string(), "auto".to_string())]);
+    }
+
+    #[test]
+    fn the_henchmans_own_tools_are_allowed_so_auto_mode_never_refuses_them() {
+        let allow = settings()["permissions"]["allow"].clone();
+        let allow: Vec<&str> = allow.as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect();
+        assert!(allow.contains(&"mcp__villain-layer__task_work"));
+        assert!(allow.contains(&"mcp__villain-layer__need_you"));
+        let own = |name: &str| name.strip_prefix("mcp__villain-layer__").is_some_and(super::super::henchman_owns);
+        assert!(allow.iter().all(|name| own(name)), "only its own: {allow:?}");
     }
 }

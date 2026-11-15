@@ -16,7 +16,7 @@ use tauri::{AppHandle, Manager};
 use crate::acp::Body;
 use crate::config::Task;
 use crate::error::{Error, Result};
-use crate::mcp::{arg, required, str_prop, tool};
+use crate::mcp::{arg, bool_prop, required, str_prop, tool};
 use crate::pty::{Activity, PaneInfo, PaneKind};
 
 use super::github::CheckoutPr;
@@ -45,6 +45,11 @@ pub fn henchman_tools(app: &AppHandle, caller: Option<&str>) -> Vec<Value> {
         return Vec::new();
     }
     listed()
+}
+
+/// The names of the Henchman's own tools.
+pub(crate) fn names() -> Vec<String> {
+    listed().iter().filter_map(|t| t.get("name").and_then(Value::as_str)).map(str::to_string).collect()
 }
 
 fn listed() -> Vec<Value> {
@@ -106,8 +111,8 @@ fn listed() -> Vec<Value> {
              readiness asks. Its idle agent is told; one that exited is picked up on its \
              conversation and told; with none, a new one starts with the message. Refused while \
              its agent works (you hear when it finishes) or asks the user, for a task left \
-             alone, and for one with no agent and no open pull request: starting a ticket is \
-             the user's. Outward steps only as your context allows: its own pull request \
+             alone, and for one with no agent and no open pull request unless the user asked \
+             you to start it (asked: true). Outward steps only as your context allows: its own pull request \
              marked ready once its work is done and only failures with an outside cause are \
              left, its own progress comment on its ticket; merging and Slack never without a \
              standing order that says so.",
@@ -115,6 +120,7 @@ fn listed() -> Vec<Value> {
                 "task": str_prop("The task's id or ticket key, from work_overview"),
                 "text": str_prop("What to do, plainly: the comments, the failed check, the fix asked for"),
                 "agent_id": str_prop("The agent CLI for a new agent; by default the task's last, else yours"),
+                "asked": bool_prop("true only when the user asked you, in this conversation, to start work on this task"),
             }),
             vec!["task", "text"],
         ),
@@ -210,9 +216,12 @@ pub async fn henchman_call(app: &AppHandle, name: &str, args: Value, caller: Opt
             let text = required(&args, "text")?.to_string();
             let agent = arg(&args, "agent_id").map(str::to_string);
             let own = caller.and_then(|c| state.ptys.info(c).ok()).and_then(|p| p.agent_id);
+            let asked = args.get("asked").and_then(Value::as_bool).unwrap_or(false);
             let handle = app.clone();
-            super::blocking(app.clone(), move |s| super::henchman_work::task_work(&handle, s, &task, &text, agent, own))
-                .await
+            super::blocking(app.clone(), move |s| {
+                super::henchman_work::task_work(&handle, s, &task, &text, agent, own, asked)
+            })
+            .await
         }
         "need_you" => {
             let caller = caller.ok_or_else(|| Error::Other("need_you is the Henchman's".into()))?;

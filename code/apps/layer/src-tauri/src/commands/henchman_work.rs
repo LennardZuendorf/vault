@@ -1,9 +1,9 @@
 //! Work the Henchman starts by itself (HEN-11): a message to a task's agent,
 //! which wakes it if it is idle, picks it up on its conversation if it
 //! exited, or starts one if the task has none. Only for a task already
-//! started (an agent or an open pull request); what the agent then does
-//! lands on the task's own branch. Called from the Henchman's tools, off the
-//! main thread.
+//! started (an agent or an open pull request), or one the user asked it to
+//! start; what the agent then does lands on the task's own branch. Called
+//! from the Henchman's tools, off the main thread.
 
 use std::time::{Duration, Instant};
 
@@ -80,11 +80,17 @@ fn find(state: &AppState, task: &str) -> Result<Task> {
                 .find(|t| t.id == task || t.issue_key.as_deref().is_some_and(|k| k.eq_ignore_ascii_case(task)))
                 .cloned()
         })
-        .ok_or_else(|| Error::NotFound(format!("task {task}: use a task_id or key from work_overview")))
+        .ok_or_else(|| {
+            Error::NotFound(format!(
+                "no task {task}: use a task_id or key from work_overview; for a ticket with no task, start_work \
+                 makes one, on the user's word"
+            ))
+        })
 }
 
 /// Give a task's agent `text` (HEN-11). `agent` is the CLI for a new one;
-/// by default the task's last, else `own`, the Henchman's.
+/// by default the task's last, else `own`, the Henchman's. `asked`: the user
+/// asked the Henchman to start work on this task.
 pub(crate) fn task_work(
     app: &AppHandle,
     state: &AppState,
@@ -92,6 +98,7 @@ pub(crate) fn task_work(
     text: &str,
     agent: Option<String>,
     own: Option<String>,
+    asked: bool,
 ) -> Result<Value> {
     let task = find(state, task)?;
     let key = task.issue_key.clone().unwrap_or_else(|| task.name.clone());
@@ -105,9 +112,12 @@ pub(crate) fn task_work(
         .lock()
         .get(&task.id)
         .is_some_and(|rows| rows.iter().any(|r| r.pr.as_ref().is_some_and(|p| p.state == "open")));
-    // Starting on a ticket is the user's: the work is theirs to begin.
-    if agents.is_empty() && !open_pr {
-        return Err(Error::Other(format!("{key} isn't started: starting work on a ticket is the user's")));
+    // Starting on a ticket is the user's: the work is theirs to begin. Their
+    // word is enough: told "start ACME-12", it was refused all the same.
+    if agents.is_empty() && !open_pr && !asked {
+        return Err(Error::Other(format!(
+            "{key} isn't started: start it only when the user asks you to, with asked: true"
+        )));
     }
 
     let plan = plan(&agents);
