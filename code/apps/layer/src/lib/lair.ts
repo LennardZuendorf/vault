@@ -1,20 +1,12 @@
-import { CHAT_TASK_ID, taskTotals } from "./derive";
+import { CHAT_TASK_ID, paneName, taskTotals } from "./derive";
 import type { CheckoutPr, PaneInfo, TaskView } from "./types";
 
 /**
- * The lair (HEN-5): every task sorted by what it needs. The same rule as
- * `sort` in `commands/henchman_tools.rs`, which answers `work_overview`, so
- * the column and the Henchman's brief never disagree.
+ * How each task stands (HEN-5), by the same rule as `sort` in
+ * `commands/henchman_tools.rs`, which answers `work_overview`: the lair
+ * and the Henchman's brief never disagree.
  */
 export type LairGroup = "needs_you" | "to_finish" | "moving" | "not_started" | "quiet";
-
-export const LAIR_GROUPS: { id: LairGroup; label: string; open: boolean }[] = [
-  { id: "needs_you", label: "Needs you", open: true },
-  { id: "to_finish", label: "To finish", open: true },
-  { id: "moving", label: "Moving", open: false },
-  { id: "not_started", label: "Not started", open: false },
-  { id: "quiet", label: "Quiet", open: false },
-];
 
 /** The Henchman's pane: a chat in its own room (HEN-2). */
 export function isHenchman(p: Pick<PaneInfo, "task_id" | "cwd">): boolean {
@@ -76,49 +68,60 @@ export function sortTask(f: Facts): { group: LairGroup; rank: number; why: strin
   return { group: "quiet", rank: 0, why: f.agents ? "its agent is idle" : "nothing running" };
 }
 
-export interface LairRow {
-  task: TaskView;
+/** One thing in the tasks and chats that only the user can do (HEN-5). */
+export interface Waiting {
+  id: string;
+  /** The ticket key, the task's name, or "Chat". */
+  key: string;
   why: string;
-  rank: number;
+  task: TaskView | null;
+  /** The agent or chat that waits, which Open opens. */
+  pane: PaneInfo | null;
+  /** Every pull request merged: Finish, not Open. */
+  finish: boolean;
 }
 
-export interface Lair {
-  groups: Record<LairGroup, LairRow[]>;
-  /** Chats other than the Henchman, those asking first. */
-  chats: PaneInfo[];
-  /** Chats that ask you: they count in Needs you. */
-  chatsAsking: number;
-}
+const WAITS = ["asking", "usage_limit", "done"] as const;
 
-export function lair(
+/**
+ * What waits for the user, the most pressing first: an agent's or a chat's
+ * question, an agent out of budget, a task whose pull requests all merged.
+ * While the Henchman runs, the rest of Needs you in `sortTask` (a finished
+ * turn, changes asked for, checks failed) is its to handle; with none,
+ * nobody else will, so they are the user's too.
+ */
+export function waiting(
   tasks: TaskView[],
   panes: PaneInfo[],
   prs: Record<string, CheckoutPr[]>,
-): Lair {
-  const groups: Record<LairGroup, LairRow[]> = {
-    needs_you: [],
-    to_finish: [],
-    moving: [],
-    not_started: [],
-    quiet: [],
-  };
+): Waiting[] {
+  const henchman = panes.some((p) => p.running && isHenchman(p));
+  const out: { w: Waiting; rank: number }[] = [];
   for (const task of tasks) {
-    const t = taskTotals(task);
     const own = panes.filter((p) => p.task_id === task.id);
-    const sorted = sortTask(
-      facts(own, prs[task.id] ?? [], t.changed + t.ahead + t.staged + t.dirty),
-    );
-    groups[sorted.group].push({ task, why: sorted.why, rank: sorted.rank });
+    const t = taskTotals(task);
+    const s = sortTask(facts(own, prs[task.id] ?? [], t.changed + t.ahead + t.staged + t.dirty));
+    const finish = s.group === "to_finish";
+    if (!finish && !(s.group === "needs_you" && (!henchman || s.rank <= 1))) continue;
+    const live = own.filter((p) => p.kind === "agent" && p.running);
+    const pane =
+      WAITS.map((w) =>
+        live.find((p) => (w === "usage_limit" ? p.notice === w : p.activity === w)),
+      ).find(Boolean) ?? null;
+    const key = task.issue_key ?? task.name;
+    const why = finish ? "merged: finish the task" : s.why;
+    out.push({ w: { id: task.id, key, why, task, pane, finish }, rank: finish ? 9 : s.rank });
   }
-  groups.needs_you.sort((a, b) => a.rank - b.rank);
-  const asks = (p: PaneInfo) => p.running && p.activity === "asking";
-  const chats = panes
-    .filter((p) => p.task_id === CHAT_TASK_ID && p.kind === "agent" && !isHenchman(p))
-    .sort((a, b) => Number(asks(b)) - Number(asks(a)));
-  return { groups, chats, chatsAsking: chats.filter(asks).length };
+  for (const p of panes) {
+    if (p.task_id !== CHAT_TASK_ID || p.kind !== "agent" || isHenchman(p)) continue;
+    if (!p.running || p.activity !== "asking") continue;
+    const w = { id: p.id, key: "Chat", why: `“${paneName(p)}” asks you`, task: null, pane: p };
+    out.push({ w: { ...w, finish: false }, rank: 0.5 });
+  }
+  return out.sort((a, b) => a.rank - b.rank).map((o) => o.w);
 }
 
-let needsSeen: {
+let waitingSeen: {
   tasks: TaskView[];
   panes: PaneInfo[];
   prs: Record<string, CheckoutPr[]>;
@@ -126,36 +129,21 @@ let needsSeen: {
 } | null = null;
 
 /**
- * How many need you, for the top bar's Henchman tab: worked out again only
- * when the tasks, panes or PRs change. It is read in a selector, which runs on
- * every change of anything in the store, and the lair walks every task's panes.
+ * How many tasks and chats wait for the user, for the top bar's Henchman
+ * tab, beside the Henchman's own needs: worked out again only when the
+ * tasks, panes or PRs change. It is read in a selector, which runs on every
+ * change of anything in the store, and it walks every task's panes.
  */
-export function lairNeeds(
+export function waitingCount(
   tasks: TaskView[],
   panes: PaneInfo[],
   prs: Record<string, CheckoutPr[]>,
 ): number {
-  const seen = needsSeen;
+  const seen = waitingSeen;
   if (seen && seen.tasks === tasks && seen.panes === panes && seen.prs === prs) return seen.n;
-  const n = lairCounts(lair(tasks, panes, prs)).needsYou;
-  needsSeen = { tasks, panes, prs, n };
+  const n = waiting(tasks, panes, prs).length;
+  waitingSeen = { tasks, panes, prs, n };
   return n;
-}
-
-/** "20 open · 3 need you · 1 to finish · …": the line under the title. */
-export function lairCounts(l: Lair): { open: number; needsYou: number; line: string } {
-  const g = l.groups;
-  const open = Object.values(g).reduce((n, rows) => n + rows.length, 0);
-  const needsYou = g.needs_you.length + l.chatsAsking;
-  const parts = [
-    `${open} open`,
-    `${needsYou} need${needsYou === 1 ? "s" : ""} you`,
-    `${g.to_finish.length} to finish`,
-    `${g.moving.length} moving`,
-    `${g.not_started.length} not started`,
-    `${g.quiet.length} quiet`,
-  ];
-  return { open, needsYou, line: parts.join(" · ") };
 }
 
 /** "12s", "4m", "2h 5m", "3d": how long a process has run. */

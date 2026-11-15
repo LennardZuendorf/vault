@@ -2,12 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   facts,
   isHenchman,
-  lair,
-  lairCounts,
-  lairNeeds,
   ran,
   shortCommand,
   sortTask,
+  waiting,
+  waitingCount,
 } from "../src/lib/lair";
 import type { CheckoutPr, PaneInfo, TaskView } from "../src/lib/types";
 
@@ -116,46 +115,49 @@ describe("the lair's groups (HEN-5)", () => {
   });
 });
 
-describe("the lair", () => {
-  test("Needs you is ranked, and a chat that asks counts in it", () => {
-    const panes = [
-      pane({ task_id: "a", activity: "done" }),
-      pane({ id: "p2", task_id: "b", activity: "asking" }),
-      pane({ id: "c1", task_id: "chat", cwd: "/w/_chat/x", activity: "asking" }),
-    ];
-    const l = lair([task("a"), task("b"), task("c", 3)], panes, {});
-    expect(l.groups.needs_you.map((r) => r.task.id)).toEqual(["b", "a"]);
-    expect(l.groups.quiet.map((r) => r.task.id)).toEqual(["c"]);
-    expect(lairCounts(l)).toEqual({
-      open: 3,
-      needsYou: 3,
-      line: "3 open · 3 need you · 0 to finish · 0 moving · 0 not started · 1 quiet",
-    });
+describe("the lair's Needs you (HEN-5)", () => {
+  const tasks = [task("a"), task("b"), task("m"), task("c", 3)];
+  const prs = { m: [pr({ merged: true })] };
+  const panes = [
+    pane({ task_id: "a", activity: "done" }),
+    pane({ id: "p2", task_id: "b", activity: "asking" }),
+    pane({ id: "c1", task_id: "chat", cwd: "/w/_chat/x", activity: "asking", topic: "Why" }),
+  ];
+  const henchman = pane({ id: "h", task_id: "chat", cwd: "/w/_chat/henchman", activity: "asking" });
+
+  test("questions come first, then a chat that asks, then a finished turn, then merged tasks", () => {
+    const w = waiting(tasks, panes, prs);
+    expect(w.map((x) => x.id)).toEqual(["b", "c1", "a", "m"]);
+    expect(w[1].key).toBe("Chat");
+  });
+
+  test("while the Henchman runs, a finished turn is its to handle, not the user's", () => {
+    expect(waiting(tasks, [...panes, henchman], prs).map((x) => x.id)).toEqual(["b", "c1", "m"]);
+  });
+
+  test("Open goes to the agent that waits, and a merged task is to finish", () => {
+    const w = waiting(tasks, panes, prs);
+    expect(w[0].pane?.id).toBe("p2");
+    expect(w[3]).toMatchObject({ finish: true, why: "merged: finish the task" });
   });
 
   test("the Henchman is not one of its own chats", () => {
-    const henchman = pane({
-      id: "h",
-      task_id: "chat",
-      cwd: "/w/_chat/henchman",
-      activity: "asking",
-    });
     expect(isHenchman(henchman)).toBe(true);
     expect(isHenchman(pane({ task_id: "chat", cwd: "/w/_chat/henchmen" }))).toBe(false);
-    expect(lair([], [henchman], {}).chats).toEqual([]);
+    expect(waiting([], [henchman], {})).toEqual([]);
   });
 
   test("the top bar's count follows the panes, though it is kept between changes", () => {
-    const tasks = [task("a")];
-    const prs = {};
+    const one = [task("a")];
+    const none = {};
     const asking = [pane({ task_id: "a", activity: "asking" })];
-    expect(lairNeeds(tasks, asking, prs)).toBe(1);
-    expect(lairNeeds(tasks, asking, prs)).toBe(1);
-    expect(lairNeeds(tasks, [pane({ task_id: "a", activity: "working" })], prs)).toBe(0);
+    expect(waitingCount(one, asking, none)).toBe(1);
+    expect(waitingCount(one, asking, none)).toBe(1);
+    expect(waitingCount(one, [pane({ task_id: "a", activity: "working" })], none)).toBe(0);
   });
 });
 
-describe("the Running rows (HEN-6)", () => {
+describe("the At work rows (HEN-6)", () => {
   test("how long a process has run reads at a glance", () => {
     expect(ran(12)).toBe("12s");
     expect(ran(250)).toBe("4m");

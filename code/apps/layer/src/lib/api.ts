@@ -74,7 +74,7 @@ import type {
   S3Found,
 } from "./types";
 import type { EpicView, Filed, StartedSubTask } from "./types-epic";
-import type { HenchmanOrders, Process } from "./types-henchman";
+import type { HenchmanLair, HenchmanOrders, Process } from "./types-henchman";
 import type { PlanLimits } from "./types-limits";
 import type {
   Elsewhere,
@@ -190,6 +190,10 @@ export const api = {
   /** By the key the list gives: a task's id, or a chat's room. */
   henchmanLeaveAlone: (key: string, alone: boolean) =>
     invoke<HenchmanOrders>("henchman_leave_alone", { key, alone }),
+  /** The Henchman's open needs and what it did, kept across a restart (HEN-14). */
+  henchmanLair: () => invoke<HenchmanLair>("henchman_lair"),
+  /** The user closes one of the Henchman's needs. */
+  henchmanNeedDone: (id: string) => invoke<HenchmanLair>("henchman_need_done", { id }),
   ptyWrite: (paneId: string, data: string) => invoke<void>("pty_write", { paneId, data }),
   ptyResize: (paneId: string, rows: number, cols: number) =>
     invoke<void>("pty_resize", { paneId, rows, cols }),

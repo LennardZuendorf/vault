@@ -145,26 +145,29 @@ Each step is used for a few days before the next one starts.
 
 ## The screen
 
-A tab of its own, first in the top bar: **Henchman**, its count the tasks
-and chats that need you. Work, with its sidebar and All agents, stays as
-it is.
+A tab of its own, first in the top bar: **Henchman**, its count what
+needs you. Work, with its sidebar and All agents, stays as it is.
 
 - **Left: the conversation**, in a centred column: a title ("The lair at
-  9:00") and a line of counts (20 open · 3 need you · 1 to finish · 5
-  moving · 2 not started · 9 quiet), then the brief, confirm cards,
-  suggestions and what you tell it. Its box at the bottom.
+  9:00"), then the brief, confirm cards, suggestions and what you tell
+  it. Its box at the bottom.
 - **Right: the lair**, a narrow column that stays current without being
-  asked: Needs you and To finish as rows (key, title, what it waits for)
-  with their one button (Open, Finish); Moving, Not started, Quiet and
-  Chats folded to counts, opened with a click. A chat that asks you is
-  in Needs you. A ticket it drives is marked so.
+  asked, with only what you can act on: Needs you (what the Henchman
+  raised, until you close it, and what only you can answer or finish),
+  Done for you (a line for each thing it did), and At work (agents in a
+  turn, running processes). Everything else is in Work, one link away
+  at its foot, with the standing orders beside it. It is kept across a
+  restart. A ticket it drives is marked so.
 
 ## Decided (Nov 15)
 
 - **Where:** its own tab, first in the top bar. A first sketch put it
   beside the Work overview, and was dropped.
 - **Layout:** the conversation, with the lair beside it (B of two
-  sketched; A put everything in the conversation).
+  sketched; A put everything in the conversation). Redrawn the same day:
+  the first lair sorted every task into folded groups and said little a
+  user could act on, so it keeps only Needs you, Done for you and At
+  work.
 - **Talk:** it talks with every open agent and chat, not only tasks'.
   What you tell it to pass on goes straight away; it starts a chat on
   your word.

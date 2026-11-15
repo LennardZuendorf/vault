@@ -1,15 +1,15 @@
 import { useState } from "react";
 import { api } from "../../lib/api";
 import { useOrders } from "../../lib/henchman-orders";
-import { ErrorMessage, useFailure } from "../ui";
+import { ErrorMessage, Modal, useFailure } from "../ui";
 
 /**
  * The Henchman's standing orders and what it leaves alone (HEN-7, HEN-8):
  * what it answers for the user without asking, in the user's own words.
  * They are mostly made by telling it so; here they are read, written and
- * taken back.
+ * taken back, in a dialog from the lair's foot.
  */
-export function Orders({ shown }: { shown: boolean }) {
+export function OrdersDialog({ onClose }: { onClose: () => void }) {
   const orders = useOrders((s) => s.orders);
   const set = useOrders((s) => s.set);
   const [text, setText] = useState("");
@@ -35,21 +35,20 @@ export function Orders({ shown }: { shown: boolean }) {
     if (await run(() => api.addHenchmanOrder(text))) setText("");
   }
 
-  if (!shown || !orders) return null;
   return (
-    <>
-      {orders.orders.length + orders.left_alone.length === 0 && (
-        <div className="lair-none">
+    <Modal title="Standing orders" onClose={onClose}>
+      {orders && orders.orders.length + orders.left_alone.length === 0 && (
+        <div className="lair-calm">
           None yet. Tell the Henchman what to always answer, or write it here.
         </div>
       )}
-      {orders.orders.map((o) => (
-        <div key={o.id} className="lair-row lair-order">
-          <div className="lt" title={o.text}>
+      {orders?.orders.map((o) => (
+        <div key={o.id} className="order-row">
+          <div className="t" title={o.text}>
             {o.text}
           </div>
           <button
-            className="ui-button"
+            className="ui-link"
             disabled={busy}
             title="The Henchman asks you again"
             onClick={() => void run(() => api.removeHenchmanOrder(o.id))}
@@ -58,14 +57,14 @@ export function Orders({ shown }: { shown: boolean }) {
           </button>
         </div>
       ))}
-      {orders.left_alone.map((a) => (
-        <div key={a.key} className="lair-row">
-          <div className="lt" title={a.name}>
+      {orders?.left_alone.map((a) => (
+        <div key={a.key} className="order-row">
+          <div className="t" title={a.name}>
             {a.name}
           </div>
-          <div className="lw">left alone</div>
+          <div className="why">left alone</div>
           <button
-            className="ui-button"
+            className="ui-link"
             disabled={busy}
             title="Let the Henchman drive it again"
             onClick={() => void run(() => api.henchmanLeaveAlone(a.key, false))}
@@ -75,7 +74,8 @@ export function Orders({ shown }: { shown: boolean }) {
         </div>
       ))}
       <input
-        className="ui-field lair-add"
+        autoFocus
+        className="ui-field order-add"
         value={text}
         disabled={busy}
         placeholder="Always…, e.g. use bun, not npm"
@@ -86,6 +86,6 @@ export function Orders({ shown }: { shown: boolean }) {
         }}
       />
       <ErrorMessage>{failure.error}</ErrorMessage>
-    </>
+    </Modal>
   );
 }

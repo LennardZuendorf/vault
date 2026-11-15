@@ -29,14 +29,6 @@
   line-height: var(--type-wordmark-leading);
   color: var(--fg);
 }
-.hench-status {
-  margin-top: 6px;
-  color: var(--muted);
-  font-size: var(--type-ui-small-size);
-}
-.hench-warn {
-  color: var(--status-warn-ink);
-}
 .hench-empty {
   flex: 1;
   width: 100%;
@@ -55,113 +47,231 @@
   line-height: 1.55;
 }
 
-/* The lair: a narrow column that keeps itself current. */
+/* The lair (HEN-5): what needs the user, what the Henchman did, what is at
+   work. Sections are set apart by space, not lines; status colour only on
+   the count and the first need. */
 .lair {
   flex: none;
   width: 340px;
-  padding: 18px 12px;
+  padding: 18px 12px 14px;
   background: var(--surface);
   border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
   overflow-y: auto;
 }
-.lair section + section {
-  margin-top: 8px;
-}
-.lair-head {
-  width: 100%;
-  padding: 6px 8px;
+.lair-h {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding: 0 8px 4px;
   font-size: var(--type-ui-small-size);
-}
-.lair-head .n {
+  font-weight: 700;
   color: var(--muted);
 }
-.lair-row {
+.lair-h .n {
+  color: var(--status-warn-ink);
+}
+.lair-calm {
+  padding: 2px 8px;
+  color: var(--muted);
+}
+.lair button.k,
+.lair button.w {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.lair .k {
+  font-family: var(--font-mono);
+  font-size: var(--type-ui-small-size);
+  color: var(--faint);
+}
+
+/* One need: key and time, then what it is. The first leads with its button;
+   the rest show their actions in the time's place on hover or focus. */
+.lair-need {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 2px 10px;
-  align-items: center;
-  padding: 6px 8px;
+  padding: 8px;
   border-radius: var(--radius-md);
 }
-.lair-row:hover {
+.lair-need:hover {
   background: var(--hover);
 }
-.lair-row .lt {
+.lair-need.first {
+  background: color-mix(in srgb, var(--warn) var(--chip-tint), transparent);
+}
+.lair-need .k {
   min-width: 0;
-  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lair-need .when,
+.lair-need .side {
+  grid-area: 1 / 2;
+  justify-self: end;
+}
+.lair-need .when {
+  font-size: var(--type-ui-small-size);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.lair-need .side {
+  display: flex;
+  gap: 12px;
+  opacity: 0;
+}
+.lair-need:hover .side,
+.lair-need:focus-within .side {
+  opacity: 1;
+}
+.lair-need:hover .when,
+.lair-need:focus-within .when {
+  opacity: 0;
+}
+.lair-need .ui-link {
+  font-size: var(--type-ui-small-size);
+}
+.lair-need .t {
+  grid-column: 1 / -1;
+  color: var(--fg);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  user-select: text;
+}
+.lair-need .acts {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 6px;
+}
+
+/* Done for you: one muted line each, newest first, in columns that line
+   up whether or not a line has a key. */
+.lair-dids {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 6px 8px;
+  padding: 3px 8px;
+  font-size: var(--type-ui-small-size);
+  color: var(--muted);
+}
+.lair-did {
+  display: contents;
+}
+.lair-did .at {
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.lair-did .w {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lair-more {
+  margin: 4px 8px 0;
+  font-size: var(--type-ui-small-size);
+}
+
+/* At work: agents in a turn, then what the panes started. */
+.lair-work {
+  display: grid;
+  grid-template-columns: 6px minmax(0, 1fr) auto;
+  gap: 0 10px;
+  align-items: center;
+  width: 100%;
+  padding: 5px 8px;
   border: 0;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--fg);
   font: inherit;
   text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+button.lair-work {
   cursor: pointer;
 }
-.lair-row .key {
-  margin-right: 8px;
-  font-family: var(--font-mono);
-  font-size: var(--type-ui-small-size);
-  color: var(--faint);
+.lair-work:hover {
+  background: var(--hover);
 }
-.lair-row .lw {
-  grid-column: 1;
+.lair-work .k {
+  margin-right: 6px;
+}
+.lair-work .w {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.lair-work .dur,
+.lair-work .side {
+  grid-area: 1 / 3;
+  justify-self: end;
+  font-size: var(--type-ui-small-size);
+  font-variant-numeric: tabular-nums;
+}
+.lair-work .dur {
+  color: var(--faint);
+}
+.lair-work .side {
+  opacity: 0;
+}
+.lair-work:hover .side,
+.lair-work:focus-within .side {
+  opacity: 1;
+}
+.lair-work.proc:hover .dur,
+.lair-work.proc:focus-within .dur {
+  opacity: 0;
+}
+.lair-work.proc .w {
+  font-family: var(--font-mono);
   font-size: var(--type-ui-small-size);
   color: var(--muted);
 }
-.lair-row .lw-warn {
-  color: var(--status-warn-ink);
-}
-.lair-row .lw-danger {
-  color: var(--status-danger-ink);
-}
-.lair-row > .ui-button {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-}
-.lair-proc .lt {
-  font-family: var(--font-mono);
-  font-size: var(--type-ui-small-size);
-  cursor: text;
-  user-select: text;
-}
-/* Flex, so a long owner is cut with an ellipsis rather than dropped whole. */
-.lair-proc .lw {
+
+/* The way to everything else, quiet at the bottom. */
+.lair-foot {
+  margin-top: auto;
+  padding: 0 8px;
   display: flex;
-  white-space: pre;
+  gap: 14px;
 }
-.lair-proc .lw .ui-link {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: inherit;
-  font-weight: 400;
-}
-.lair-none {
-  padding: 4px 8px 6px 25px;
-  color: var(--faint);
+.lair-foot .ui-link {
   font-size: var(--type-ui-small-size);
 }
-/* An order is the user's sentence: shown whole up to three lines. */
-.lair-order .lt {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  white-space: normal;
-  cursor: text;
+
+/* The standing orders' dialog: each the user's sentence, whole. */
+.order-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 0;
+}
+.order-row .t {
   user-select: text;
 }
-.lair-order > .ui-button {
-  grid-row: 1;
-  align-self: start;
+.order-row .why {
+  font-size: var(--type-ui-small-size);
+  color: var(--muted);
 }
-.lair-add {
+.order-row .ui-link {
+  grid-column: 3;
+}
+.order-add {
   width: 100%;
-  margin-top: 6px;
+  margin-top: 10px;
 }

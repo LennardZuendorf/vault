@@ -248,9 +248,13 @@ async fn dispatch(app: &AppHandle, method: &str, params: Value, caller: Option<&
             let answer = if crate::browser::tools::owns(&name) {
                 crate::browser::tools::call(app, &name, args, caller).await
             } else {
-                call(app, &name, args, caller)
-                    .await
-                    .map(|value| vec![json!({ "type": "text", "text": to_text(&value) })])
+                // What the Henchman does is listed for the user (HEN-14).
+                let logged = commands::henchman_logs(&name, &args).then(|| args.clone());
+                let answer = call(app, &name, args, caller).await;
+                if let (Ok(value), Some(args)) = (&answer, logged) {
+                    commands::henchman_did(app, caller, &name, &args, value);
+                }
+                answer.map(|value| vec![json!({ "type": "text", "text": to_text(&value) })])
             };
             match answer {
                 Ok(content) => Ok(json!({ "content": content, "isError": false })),

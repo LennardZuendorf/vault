@@ -1,17 +1,20 @@
 //! The one way the Henchman reaches the user (HEN-13). While one runs, the
 //! agents it hears of finish and exit without a banner or a count on the
 //! dock: it handles them. When something really needs the user it calls
-//! `need_you`: a banner, a line in the message center, and a count on the
+//! `need_you`: a banner, a line in the message center, a row under "Needs
+//! you" in the lair until the user closes it (HEN-14), and a count on the
 //! dock until they open its conversation. Read by the attention pass
 //! (`attention.rs`), which owns the banners and the dock.
 
 use std::borrow::Cow;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tauri::AppHandle;
 
 use crate::error::{Error, Result};
 use crate::messages::{Kind, Level, New};
@@ -20,6 +23,7 @@ use crate::target::Target;
 
 use super::henchman::is_henchman;
 use super::henchman_feed::Heard;
+use super::henchman_lair::{change, task_named};
 use super::henchman_tools::cut;
 use super::panes::CHAT_TASK_ID;
 use super::AppState;
@@ -33,14 +37,26 @@ const HOUR: Duration = Duration::from_secs(60 * 60);
 /// How much of a need a banner says.
 const SAYS: usize = 240;
 
-/// One thing the Henchman needs the user for.
-#[derive(Debug, Clone, PartialEq)]
+/// One thing the Henchman needs the user for. Kept in the lair, and on
+/// disk with it, until the user closes it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Need {
-    /// The Henchman's pane, which a click opens.
-    pane_id: String,
+    pub id: String,
+    pub at: DateTime<Utc>,
+    /// The Henchman's pane, which a banner's click opens.
+    pub pane_id: String,
+    /// The task it is about, which the lair's Open opens.
+    #[serde(default)]
+    pub task_id: Option<String>,
     /// The task's ticket key, or its name.
-    key: Option<String>,
-    text: String,
+    #[serde(default)]
+    pub key: Option<String>,
+    pub text: String,
+    /// The user has looked at the Henchman's conversation since it was
+    /// raised: it no longer counts on the dock, but stays in the lair.
+    #[serde(default)]
+    pub seen: bool,
 }
 
 impl Need {
@@ -72,22 +88,22 @@ impl Need {
     }
 }
 
+/// What `need_you` keeps in memory: what to banner, and what was said
+/// lately. The needs themselves are the lair's.
 #[derive(Default)]
 struct Needs {
     /// Raised and not yet bannered.
     new: Vec<Need>,
-    /// When each need still open was raised: the count on the dock.
-    open: Vec<DateTime<Utc>>,
     /// What was raised lately, by its words, against saying it twice.
     said: VecDeque<(String, Instant)>,
 }
 
 impl Needs {
     const fn new() -> Self {
-        Needs { new: Vec::new(), open: Vec::new(), said: VecDeque::new() }
+        Needs { new: Vec::new(), said: VecDeque::new() }
     }
 
-    fn raise(&mut self, need: Need, now: Instant, at: DateTime<Utc>) -> Result<()> {
+    fn raise(&mut self, need: Need, now: Instant) -> Result<()> {
         self.said.retain(|(_, when)| now.duration_since(*when) < AGAIN);
         let words = words(&need.body());
         if self.said.iter().any(|(w, _)| *w == words) {
@@ -101,21 +117,31 @@ impl Needs {
             )));
         }
         self.said.push_back((words, now));
-        self.open.push(at);
         self.new.push(need);
         Ok(())
     }
+}
 
-    /// The needs to banner now, and how many are open. They close once the
-    /// user has looked at the Henchman's conversation after the turn that
-    /// raised them; with no Henchman, nobody holds them open.
-    fn take(&mut self, henchman: Option<&PaneInfo>) -> (usize, Vec<Need>) {
-        match henchman {
-            Some(h) if h.activity == Activity::Idle => self.open.retain(|at| *at > h.activity_since),
-            Some(_) => {}
-            None => self.open.clear(),
-        }
-        (self.open.len(), std::mem::take(&mut self.new))
+/// Mark the needs the user has seen: those raised before they last looked
+/// at the Henchman's conversation, after the turn that raised them.
+fn see(needs: &mut [Need], henchman: Option<&PaneInfo>) -> bool {
+    let Some(h) = henchman.filter(|h| h.activity == Activity::Idle) else {
+        return false;
+    };
+    let mut changed = false;
+    for need in needs.iter_mut().filter(|n| !n.seen && n.at <= h.activity_since) {
+        need.seen = true;
+        changed = true;
+    }
+    changed
+}
+
+/// The count on the dock. With no Henchman running nobody can open its
+/// conversation to clear it, so it counts nothing; the lair still lists them.
+fn unseen(needs: &[Need], henchman: Option<&PaneInfo>) -> usize {
+    match henchman {
+        Some(_) => needs.iter().filter(|n| !n.seen).count(),
+        None => 0,
     }
 }
 
@@ -127,31 +153,50 @@ fn words(text: &str) -> String {
 }
 
 /// The `need_you` tool: `caller` is the Henchman's pane, checked already.
-pub(crate) fn need_you(state: &AppState, caller: &str, text: &str, task: Option<&str>) -> Result<Value> {
+pub(crate) fn need_you(
+    app: &AppHandle,
+    state: &AppState,
+    caller: &str,
+    text: &str,
+    task: Option<&str>,
+) -> Result<Value> {
     let text = cut(text.trim(), SAYS);
     if text.is_empty() {
         return Err(Error::Other("say what you need the user for".into()));
     }
-    let key = task.map(|task| {
-        state
-            .config
-            .with(|c| {
-                c.tasks
-                    .iter()
-                    .find(|t| t.id == task || t.issue_key.as_deref().is_some_and(|k| k.eq_ignore_ascii_case(task)))
-                    .map(|t| t.issue_key.clone().unwrap_or_else(|| t.name.clone()))
-            })
-            .unwrap_or_else(|| task.to_string())
+    let (task_id, key) = match task {
+        Some(task) => task_named(state, task),
+        None => (None, String::new()),
+    };
+    let need = Need {
+        id: uuid::Uuid::new_v4().to_string(),
+        at: Utc::now(),
+        pane_id: caller.to_string(),
+        task_id,
+        key: Some(key).filter(|k| !k.is_empty()),
+        text,
+        seen: false,
+    };
+    NEEDS.lock().raise(need.clone(), Instant::now())?;
+    change(app, state, |lair| {
+        lair.add_need(need);
+        ((), true)
     });
-    let need = Need { pane_id: caller.to_string(), key, text };
-    NEEDS.lock().raise(need, Instant::now(), Utc::now())?;
-    Ok(json!({ "told": true, "note": "Don't raise it again: it waits until the user opens your conversation." }))
+    Ok(json!({ "told": true, "note": "Don't raise it again: it waits until the user closes it in the lair." }))
 }
 
-/// The needs to banner now, and how many wait for the user (HEN-13).
-pub fn henchman_needs(state: &AppState, panes: &[(PaneInfo, bool)]) -> (usize, Vec<Need>) {
+/// The needs to banner now, and how many wait for the user on the dock
+/// (HEN-13). Needs whose task is gone close here.
+pub fn henchman_needs(app: &AppHandle, state: &AppState, panes: &[(PaneInfo, bool)]) -> (usize, Vec<Need>) {
     let henchman = panes.iter().map(|(p, _)| p).find(|p| p.running && is_henchman(state, p));
-    NEEDS.lock().take(henchman)
+    let new = std::mem::take(&mut NEEDS.lock().new);
+    let tasks: HashSet<String> = state.config.with(|c| c.tasks.iter().map(|t| t.id.clone()).collect());
+    let waiting = change(app, state, |lair| {
+        let seen = see(&mut lair.needs, henchman);
+        let gone = lair.forget_gone(&tasks);
+        (unseen(&lair.needs, henchman), seen || gone)
+    });
+    (waiting, new)
 }
 
 /// The panes as attention sees them (HEN-13): while a Henchman runs, the
@@ -216,7 +261,15 @@ mod tests {
     }
 
     fn need(text: &str) -> Need {
-        Need { pane_id: "h".into(), key: Some("ACME-12".into()), text: text.into() }
+        Need {
+            id: text.into(),
+            at: Utc::now(),
+            pane_id: "h".into(),
+            task_id: None,
+            key: Some("ACME-12".into()),
+            text: text.into(),
+            seen: false,
+        }
     }
 
     #[test]
@@ -235,41 +288,45 @@ mod tests {
     #[test]
     fn a_need_is_bannered_once_and_counted_until_the_user_opens_the_conversation() {
         let mut needs = Needs::default();
-        let raised = Utc::now();
-        assert!(needs.raise(need("needs the staging password"), Instant::now(), raised).is_ok());
+        let raised = need("needs the staging password");
+        assert!(needs.raise(raised.clone(), Instant::now()).is_ok());
+        assert_eq!(std::mem::take(&mut needs.new)[0].banner().1, "ACME-12: needs the staging password");
+        let mut kept = vec![raised.clone()];
         let mut working = pane(Activity::Working);
-        working.activity_since = raised - chrono::Duration::seconds(5);
-        let (open, new) = needs.take(Some(&working));
-        assert_eq!((open, new.len()), (1, 1));
-        assert_eq!(new[0].banner().1, "ACME-12: needs the staging password");
-        let mut unseen = pane(Activity::Done);
-        unseen.activity_since = raised + chrono::Duration::seconds(5);
-        assert_eq!(needs.take(Some(&unseen)), (1, Vec::new()), "finished and not looked at");
-        let mut seen = unseen.clone();
-        seen.activity = Activity::Idle;
-        assert_eq!(needs.take(Some(&seen)).0, 0);
+        working.activity_since = raised.at - chrono::Duration::seconds(5);
+        assert!(!see(&mut kept, Some(&working)));
+        assert_eq!(unseen(&kept, Some(&working)), 1);
+        let mut unlooked = pane(Activity::Done);
+        unlooked.activity_since = raised.at + chrono::Duration::seconds(5);
+        assert!(!see(&mut kept, Some(&unlooked)), "finished and not looked at");
+        let mut looked = unlooked.clone();
+        looked.activity = Activity::Idle;
+        assert!(see(&mut kept, Some(&looked)));
+        assert_eq!(unseen(&kept, Some(&looked)), 0);
+        assert_eq!(kept.len(), 1, "seen, it stays in the lair until closed");
     }
 
     #[test]
     fn a_conversation_looked_at_before_the_need_does_not_close_it() {
-        let mut needs = Needs::default();
-        let raised = Utc::now();
-        assert!(needs.raise(need("pick one"), Instant::now(), raised).is_ok());
+        let raised = need("pick one");
+        let mut kept = vec![raised.clone()];
         let mut earlier = pane(Activity::Idle);
-        earlier.activity_since = raised - chrono::Duration::seconds(30);
-        assert_eq!(needs.take(Some(&earlier)).0, 1);
-        assert_eq!(needs.take(None).0, 0, "with no Henchman, nobody holds it open");
+        earlier.activity_since = raised.at - chrono::Duration::seconds(30);
+        assert!(!see(&mut kept, Some(&earlier)));
+        assert_eq!(unseen(&kept, Some(&earlier)), 1);
+        assert_eq!(unseen(&kept, None), 0, "with no Henchman, nobody holds the dock");
+        assert!(!kept[0].seen, "but it is not seen either");
     }
 
     #[test]
     fn the_same_need_is_not_raised_twice_and_a_flood_is_cut_off() {
         let mut needs = Needs::default();
         let now = Instant::now();
-        assert!(needs.raise(need("Merge #34?"), now, Utc::now()).is_ok());
-        assert!(needs.raise(need("merge   #34?"), now, Utc::now()).is_err(), "the same words");
+        assert!(needs.raise(need("Merge #34?"), now).is_ok());
+        assert!(needs.raise(need("merge   #34?"), now).is_err(), "the same words");
         for n in 1..PER_HOUR {
-            assert!(needs.raise(need(&format!("thing {n}")), now, Utc::now()).is_ok());
+            assert!(needs.raise(need(&format!("thing {n}")), now).is_ok());
         }
-        assert!(needs.raise(need("one more"), now, Utc::now()).is_err());
+        assert!(needs.raise(need("one more"), now).is_err());
     }
 }

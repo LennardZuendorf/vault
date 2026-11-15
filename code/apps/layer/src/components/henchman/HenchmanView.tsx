@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../../lib/api";
-import { isHenchman, lair, lairCounts } from "../../lib/lair";
+import { isHenchman } from "../../lib/lair";
 import { useStore } from "../../store";
 import { PaneView } from "../AcpPane";
 import { PaneExited, useRestart } from "../Restart";
@@ -89,24 +89,12 @@ export function HenchmanView() {
   );
 }
 
-/** The title and the lair's counts, above the conversation (HEN-5). */
+/** The title above the conversation: when the Henchman woke. */
 function Hello({ at }: { at: Date | null }) {
-  const tasks = useStore((s) => s.tasks);
-  const panes = useStore((s) => s.panes);
-  const prs = useStore((s) => s.prs);
-  const counts = useMemo(() => lairCounts(lair(tasks, panes, prs)), [tasks, panes, prs]);
   const time = at?.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return (
     <div className="hench-hello">
       <h1 className="hench-title">{time ? `The lair at ${time}` : "The lair"}</h1>
-      <div className="hench-status">
-        {counts.line.split(" · ").map((part, i) => (
-          <span key={part} className={i === 1 && counts.needsYou > 0 ? "hench-warn" : undefined}>
-            {i > 0 && " · "}
-            {part}
-          </span>
-        ))}
-      </div>
     </div>
   );
 }

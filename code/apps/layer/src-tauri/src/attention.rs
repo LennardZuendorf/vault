@@ -171,7 +171,7 @@ pub fn spawn(app: AppHandle) -> std::io::Result<()> {
                 // While a Henchman runs, the agents it hears of reach you
                 // through it, and only when it needs you (HEN-13).
                 let (count, news) = watch.pass(&henchman_quiet(&state, &panes), Instant::now());
-                let (needs, raised) = henchman_needs(&state, &panes);
+                let (needs, raised) = henchman_needs(&app, &state, &panes);
                 // Kept whatever the switch and wherever you are looking
                 // (MSG-2): the switch is about interrupting you.
                 messages::record_all(&app, record(&news, |id| task_name(&state, id)));

@@ -327,6 +327,8 @@ pub fn run() {
             commands::henchman_order_add,
             commands::henchman_order_remove,
             commands::henchman_leave_alone,
+            commands::henchman_lair,
+            commands::henchman_need_done,
             commands::running_processes,
             commands::stop_process,
             commands::pty_write,

@@ -32,3 +32,33 @@ export interface HenchmanOrders {
   orders: StandingOrder[];
   left_alone: LeftAlone[];
 }
+
+/** Something the Henchman needs the user for (HEN-13). `Need` in `commands/henchman_need.rs`. */
+export interface HenchmanNeed {
+  id: string;
+  at: string;
+  /** The Henchman's pane. */
+  paneId: string;
+  /** The task it is about, which Open opens. */
+  taskId: string | null;
+  /** Its ticket key, or its name. */
+  key: string | null;
+  text: string;
+  /** The user has looked at the Henchman's conversation since: off the dock, still listed. */
+  seen: boolean;
+}
+
+/** One thing the Henchman did for the user (HEN-14). `Did` in `commands/henchman_lair.rs`. */
+export interface HenchmanDid {
+  at: string;
+  taskId: string | null;
+  key: string | null;
+  what: string;
+}
+
+/** What the lair keeps across a restart (HEN-14). `Lair` in `commands/henchman_lair.rs`. */
+export interface HenchmanLair {
+  needs: HenchmanNeed[];
+  /** Newest first. */
+  did: HenchmanDid[];
+}

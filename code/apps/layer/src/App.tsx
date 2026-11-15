@@ -26,7 +26,8 @@ import { UsageView } from "./components/UsageView";
 import { api } from "./lib/api";
 import { CHAT_TASK_ID, needsYou, repoTrouble, reviewCounts, taskTotals } from "./lib/derive";
 import { goTo } from "./lib/goto";
-import { isHenchman, lairNeeds } from "./lib/lair";
+import { useLair } from "./lib/henchman-lair";
+import { isHenchman, waitingCount } from "./lib/lair";
 import { pressKeys } from "./lib/press";
 import { specProgress, useSpecs } from "./lib/specs";
 import type { TaskView } from "./lib/types";
@@ -53,8 +54,9 @@ function TopBar() {
   const chatting = useStore((s) =>
     s.panes.some((p) => p.task_id === CHAT_TASK_ID && p.running && !isHenchman(p)),
   );
-  // The tasks and chats in the lair's Needs you (HEN-1), and whether the Henchman works.
-  const needed = useStore((s) => lairNeeds(s.tasks, s.panes, s.prs));
+  // What is in the lair's Needs you (HEN-1, HEN-5), and whether the Henchman works.
+  const raised = useLair((s) => s.lair?.needs.length ?? 0);
+  const needed = useStore((s) => waitingCount(s.tasks, s.panes, s.prs)) + raised;
   const scheming = useStore((s) =>
     s.panes.some((p) => isHenchman(p) && p.running && p.activity === "working"),
   );
@@ -80,7 +82,7 @@ function TopBar() {
       id: "henchman",
       label: "Henchman",
       count: needed || undefined,
-      title: `${needed} task${needed === 1 ? "" : "s"} or chat${needed === 1 ? "" : "s"} in the lair's Needs you`,
+      title: `${needed} thing${needed === 1 ? "" : "s"} in the lair's Needs you`,
       news: true,
       live: scheming,
     },

@@ -1,8 +1,9 @@
 /**
- * The Henchman's standing orders (HEN-7, HEN-8) for the mock harness: two
- * orders and a chat left alone in a world with tasks, none in the empty one.
+ * The Henchman's standing orders (HEN-7, HEN-8) and its lair (HEN-13,
+ * HEN-14) for the mock harness: two orders, a chat left alone, two needs
+ * and what it did, in a world with tasks; none of it in the empty one.
  */
-import type { HenchmanOrders } from "../lib/types-henchman";
+import type { HenchmanLair, HenchmanOrders } from "../lib/types-henchman";
 
 type Args = Record<string, unknown>;
 
@@ -26,7 +27,52 @@ export function henchmanAnswers(seeded: boolean) {
       }
     : { orders: [], left_alone: [] };
   const now = () => structuredClone(state);
+  const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+  const pane = "henchman";
+  const lair: HenchmanLair = seeded
+    ? {
+        needs: [
+          {
+            id: "n1",
+            at: ago(48),
+            paneId: pane,
+            taskId: "t-audit",
+            key: "ACME-130",
+            text: "Run `aws sso login --profile acme-ci`: the CI sign-in expired, so its checks can't run.",
+            seen: true,
+          },
+          {
+            id: "n2",
+            at: ago(12),
+            paneId: pane,
+            taskId: "t-login",
+            key: "ACME-123",
+            text: "OK to post its reply to the high-severity review comment on #34? It disagrees with the reviewer.",
+            seen: false,
+          },
+        ],
+        did: [
+          ["t-login", "ACME-123", 6, "put its agent on it: answer the 2 review comments on #34"],
+          ["t-release", "ACME-141", 21, "told its agent: Go on with step 3 of your plan."],
+          ["t-audit", "ACME-130", 33, "restarted its agent, which had exited"],
+          [null, null, 40, "kept your order: Yes to running the tests and the linter."],
+          ["t-login", "ACME-123", 55, "started its agent, as you asked: Fix the failing lint."],
+          ["t-release", "ACME-141", 70, "told its agent: Yes, keep the notes."],
+          ["t-audit", "ACME-130", 95, "picked its agent up: Go on where you were."],
+        ].map(([taskId, key, min, what]) => ({
+          taskId: taskId as string | null,
+          key: key as string | null,
+          at: ago(min as number),
+          what: what as string,
+        })),
+      }
+    : { needs: [], did: [] };
   return {
+    henchman_lair: () => structuredClone(lair),
+    henchman_need_done: (a: Args) => {
+      lair.needs = lair.needs.filter((n) => n.id !== a.id);
+      return structuredClone(lair);
+    },
     henchman_orders: now,
     henchman_order_add: (a: Args) => {
       const text = String(a.text).trim();

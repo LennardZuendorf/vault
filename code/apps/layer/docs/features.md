@@ -3536,8 +3536,8 @@ had to be opened to see whether its agent was waiting, its checks were
 red or nothing had happened for days, and every chat had to be opened to
 be asked anything. The Henchman is that place: a tab of its own, first in
 the top bar, with one standing conversation over all of Layer on the left
-and the lair beside it, a column that sorts every task and chat by what it
-needs. It briefs you, reads what any agent or chat last said, passes your
+and the lair beside it, a column with only what needs you, what the
+Henchman did for you and what is at work. It briefs you, reads what any agent or chat last said, passes your
 words on and starts chats. It drives too: told whenever an agent stops,
 it answers what you've told it to answer from now on, tells agents with
 plan left to go on, and picks up the ones Layer's quit or a crash
@@ -3551,7 +3551,7 @@ that has started; starting tickets, finishing and reaching it from
 Slack come later.
 
 - **HEN-1** The Henchman MUST be its own view, the first tab in the top
-  bar, named Henchman. Its count is the tasks and chats in Needs you
+  bar, named Henchman. Its count is what the lair's Needs you lists
   (HEN-5), with the live dot while any is there. The view is remembered
   as the others are.
 - **HEN-2** There MUST be one Henchman: a chat over ACP (§20) in a room
@@ -3594,31 +3594,44 @@ Slack come later.
   agent that exited by itself (HEN-10), `task_work` puts a task's
   agent to work (HEN-11), and `need_you` reaches the user (HEN-13). None
   of them changes shared state, so none needs `confirm`.
-- **HEN-5** The lair MUST sort every task into one group, by the first
-  that fits, and say why on its row:
-  - **Needs you**, ranked: an agent asks ("its agent asks"); an agent is
-    out of budget; an agent finished and you haven't looked ("its agent
-    finished: your turn"); changes requested on an open PR while no agent
-    works on it; a failed check on an open PR while no agent works on it.
-    A chat that asks is in Needs you too.
-  - **To finish**: every PR merged (`taskReview` is merged). Its row's
-    button is Finish, which opens Finish task (TASK-18).
-  - **Moving**: an agent works on it ("its agent is working"), or a PR is
-    open ("approved", "in review").
-  - **Not started**: no agents, no PRs, and nothing changed, committed or
-    left uncommitted.
-  - **Quiet**: everything else.
+- **HEN-5** The lair MUST show, beside the conversation, only what the
+  user can act on, in parts set apart by space, not lines:
+  - **Needs you**: what only the user can do. The Henchman's needs
+    (HEN-13), newest first, each with its task's key, when it was raised
+    and what it needs, with Open (the task in Work, when it names one)
+    and Done, which closes it. Then a task whose agent asks ("its agent
+    asks") or is out of budget, and a chat that asks, each opening the
+    agent that waits; then a task whose every PR merged ("merged: finish
+    the task"), with Finish (TASK-18). While no Henchman runs, a task
+    whose agent finished, or with changes requested or a failed check
+    while no agent works, is listed too: nobody else handles them. The
+    first has its action as the primary button; the rest show theirs on
+    hover, in the time's place. With none: "Nothing needs you."
+  - **Done for you**: what the Henchman did (HEN-14).
+  - **At work**: each agent in a turn, by its task's key or "Chat", its
+    topic and how long, which opens it; then the running processes
+    (HEN-6). Shown only when there is any.
 
-  Needs you and To finish are open; Moving, Not started, Quiet, Chats,
-  Running and Standing orders (HEN-7) are folded to their counts and open
-  on a click. A task's row
-  opens the task in Work; a chat's opens it in Chat. Above the
-  conversation a line counts them: "20 open · 3 need you · 1 to finish ·
-  5 moving · 2 not started · 9 quiet". The same rule sorts
-  `work_overview`, so what the Henchman says and what the lair shows
-  agree. Its PR facts are the last ones read for each task (the PR
-  sweep, PR-8); a task never read is read once when asked.
-- **HEN-6** The lair's Running group MUST list the processes Layer's
+  At its foot, "N others in Work" opens Work, and "N standing orders"
+  opens them in a dialog (HEN-7, HEN-8). Above the conversation the
+  title says when the Henchman woke ("The lair at 10:30"). Every task
+  still sorts into one group, by the first that fits, for Needs you
+  here and for `work_overview`, so the lair and the Henchman's brief
+  agree:
+  - **needs_you**, ranked: an agent asks; an agent is out of budget; an
+    agent finished and you haven't looked; changes requested on an open
+    PR while no agent works on it; a failed check on an open PR while no
+    agent works on it.
+  - **to_finish**: every PR merged (`taskReview` is merged).
+  - **moving**: an agent works on it, or a PR is open ("approved", "in
+    review").
+  - **not_started**: no agents, no PRs, and nothing changed, committed
+    or left uncommitted.
+  - **quiet**: everything else.
+
+  Its PR facts are the last ones read for each task (the PR sweep,
+  PR-8); a task never read is read once when asked.
+- **HEN-6** The lair's At work MUST list the processes Layer's
   agents, chats and terminals started and that still run: a dev server, a
   watcher, a build. A process counts when a shell in a pane started it
   and it has run for 5 seconds, or when it listens on a TCP port; of a
@@ -3630,12 +3643,13 @@ Slack come later.
   the panes' shells are never listed. The list is read when the tab
   opens, when a pane's activity changes, and every 10 seconds while the
   tab is shown and the window is active: processes start and stop
-  without telling anyone.
+  without telling anyone. Stop shows on hover, in the time's place.
 - **HEN-7** The Henchman MUST keep standing orders: what the user told it
   to answer the same way from now on, in their words ("yes to running the
   tests"). It keeps one with `order_add` only on the user's word, never on
-  an agent's, a ticket's or a page's; the lair's Standing orders group
-  lists each with Remove, and takes a new one typed into its field.
+  an agent's, a ticket's or a page's; the standing orders' dialog, from
+  the lair's foot, lists each with Remove, and takes a new one typed
+  into its field.
   Orders are kept in the config, at most 40 of at most 500 characters
   each; one said twice is kept once. An order lets the Henchman agree to
   something outward (a PR marked ready, a post in Slack, a comment in
@@ -3645,7 +3659,7 @@ Slack come later.
   that as an order too.
 - **HEN-8** The user MUST be able to tell the Henchman to leave a task or
   a chat alone (`leave_alone`): it then hears nothing of that task's
-  agents, or that chat, until handed back. The Standing orders group
+  agents, or that chat, until handed back. The standing orders' dialog
   lists each, by its ticket key or name, with Drive it, which hands it
   back. A chat is known by its room, so it stays left alone across
   restarts. A chat that answers a Slack thread (§24) is never heard: its
@@ -3738,15 +3752,33 @@ Slack come later.
   banner, "The Henchman needs you" with the task's key, when "Agents
   waiting on you" is on and the window is away, which opens its tab; and
   one on the dock count until the user has looked at its conversation
-  after the turn that raised it. The same words within 12 hours are refused, and so is a
-  seventh in an hour. Stopped, it holds nothing: the agents ping again.
+  after the turn that raised it. Each is also a row in the lair's Needs
+  you (HEN-5) until the user closes it with Done, or its task is gone
+  (finished or removed); at most 20 are kept, the oldest going first.
+  The same words within 12 hours are refused, and so is a seventh in an
+  hour. Stopped, it holds nothing on the dock: the agents ping again.
+- **HEN-14** The lair MUST list what the Henchman did for the user,
+  under "Done for you": one line each, newest first, with the time, the
+  task's key (which opens it) and what it did, in plain words ("told its
+  agent: Go on with step 3.", "started its agent, as you asked: …",
+  "restarted its agent, which had exited", "kept your order: …"). A
+  line is written when the Henchman's call succeeds, for each of its
+  tools that changes something (`pane_tell`, `pane_restart`,
+  `task_work`, `chat_start`, `order_add`, `order_remove`,
+  `leave_alone`), for `start_work`, and for any tool it calls with
+  `confirm: true`; reading writes none. Five are shown and the rest
+  behind "N more"; 100 are kept. The needs (HEN-13) and these lines are
+  kept in `henchman.json` beside the config, so Layer quit and opened
+  again shows the same lair; a file that cannot be read is kept beside
+  it as `henchman.json.unreadable`, and the lair starts empty.
 
 Code: `commands/henchman.rs` (the room, its context, `spawn_henchman`),
 `commands/henchman_tools.rs` (HEN-4, `pane_restart`),
 `commands/henchman_orders.rs` and `config/henchman.rs` (HEN-7, HEN-8),
 `commands/henchman_feed.rs` (HEN-9, HEN-10, HEN-12),
 `commands/henchman_work.rs` (HEN-11), `commands/henchman_watch.rs`
-(HEN-12), `commands/henchman_need.rs` and `attention.rs` (HEN-13), `commands/processes.rs` and
+(HEN-12), `commands/henchman_need.rs` and `attention.rs` (HEN-13),
+`commands/henchman_lair.rs` (HEN-14), `commands/processes.rs` and
 `pty/pids.rs` (HEN-6), `components/henchman/`, `lib/lair.ts` (HEN-5).
 
 Known gaps:

@@ -126,8 +126,8 @@ fn listed() -> Vec<Value> {
         ),
         tool(
             "need_you",
-            "Reach the user (HEN-13): a banner, and a count on the dock until they open your \
-             conversation. While you run, the agents you hear of don't ping them; you do, and \
+            "Reach the user (HEN-13): a banner, a row in the lair until they close it, and a \
+             count on the dock until they open your conversation. While you run, the agents you hear of don't ping them; you do, and \
              only for what really needs them: a secret, access or an account only they have, a \
              product or scope decision the ticket leaves open, a step others see that you may \
              not take, a risk to production or data, an agent stuck, a pull request that can \
@@ -225,7 +225,7 @@ pub async fn henchman_call(app: &AppHandle, name: &str, args: Value, caller: Opt
         }
         "need_you" => {
             let caller = caller.ok_or_else(|| Error::Other("need_you is the Henchman's".into()))?;
-            super::henchman_need::need_you(&state, caller, required(&args, "text")?, arg(&args, "task"))
+            super::henchman_need::need_you(app, &state, caller, required(&args, "text")?, arg(&args, "task"))
         }
         "order_add" => {
             let order = super::henchman_orders::add(app, &state, required(&args, "text")?)?;

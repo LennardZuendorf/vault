@@ -5,10 +5,12 @@ import { themeTerminals } from "./components/Terminal";
 import { api } from "./lib/api";
 import { CHAT_TASK_ID } from "./lib/derive";
 import { goTo } from "./lib/goto";
+import { useLair } from "./lib/henchman-lair";
 import { useOrders } from "./lib/henchman-orders";
 import { useSpecs } from "./lib/specs";
 import { useTheme } from "./lib/theme";
 import type { SpecPart, Target } from "./lib/types";
+import type { HenchmanLair } from "./lib/types-henchman";
 import { startWorkspaceSync, useSession } from "./lib/workspace-sync";
 import { exitIsNews, useStore } from "./store";
 
@@ -548,6 +550,18 @@ export function Watchers() {
         .catch(() => {});
     refresh();
     const p = listen("henchman:orders", refresh);
+    return () => {
+      void p.then((un) => un());
+    };
+  }, []);
+
+  // What the Henchman needs and did (HEN-14): each change carries the lair.
+  useEffect(() => {
+    void useLair
+      .getState()
+      .refresh()
+      .catch(() => {});
+    const p = listen<HenchmanLair>("henchman:lair", (e) => useLair.getState().set(e.payload));
     return () => {
       void p.then((un) => un());
     };
