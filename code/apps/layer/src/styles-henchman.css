@@ -148,3 +148,20 @@
   color: var(--faint);
   font-size: var(--type-ui-small-size);
 }
+/* An order is the user's sentence: shown whole up to three lines. */
+.lair-order .lt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: normal;
+  cursor: text;
+  user-select: text;
+}
+.lair-order > .ui-button {
+  grid-row: 1;
+  align-self: start;
+}
+.lair-add {
+  width: 100%;
+  margin-top: 6px;
+}

@@ -155,6 +155,7 @@ mod tests {
             acp: true,
             session: None,
             on_loop: None,
+            mid_turn: false,
         };
         let config = ConfigStore::for_tests(
             dir.join("config.json"),

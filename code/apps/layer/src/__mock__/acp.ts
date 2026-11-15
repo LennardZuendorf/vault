@@ -114,6 +114,38 @@ export function seedHenchman(pane: string) {
     kind: "agent",
     text: "**2 need you.** ACME-123's agent asks to write `api/src/auth/login.ts`. ACME-130's agent finished: your turn.\n\n**Chats.** \"Why is staging slow\" asks you something.\n\n**Running.** A dev server for ACME-123 on :5173, up for 2 hours.\n\n**Not started.** ACME-140, the highest on Mine. ACME-141: nothing for you. Its SHA-256 check is fine.",
   });
+  // What Layer sends it as agents stop (HEN-9, HEN-10), folded (ACP-19).
+  push(c, {
+    kind: "user",
+    text: [
+      "[villain-layer · stopped] ACME-130 · Claude Code and ACME-131 · Claude Code stopped.",
+      "",
+      "- ACME-130 · Claude Code (pane p-130)",
+      "  said: Step 2 of 4 done. Shall I run the linter too?",
+      "- ACME-131 · Claude Code (pane p-131) — put back after Layer quit in the middle of its turn",
+      "  said: Writing the migration…",
+      "",
+      "Your standing orders:",
+      "- [o1] Yes to running the tests and the linter, in any task.",
+      "",
+      "For each: if it asks something an order answers, answer it with pane_tell as the order says…",
+    ].join("\n"),
+    queued: false,
+    dropped: false,
+  });
+  push(c, {
+    kind: "tool",
+    id: "t-tell",
+    title: "pane_tell",
+    tool: "other",
+    status: "completed",
+    content: [],
+    locations: [],
+  });
+  push(c, {
+    kind: "agent",
+    text: "ACME-130: said yes, run the linter (o1).\n\nACME-131: said go on where it was.",
+  });
 }
 
 /** A conversation already under way, for the busy world's ACP pane. */

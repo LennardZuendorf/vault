@@ -15,12 +15,14 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 
 mod browser;
+mod henchman;
 mod integrations;
 mod phone;
 mod project;
 pub mod shared;
 mod ui;
 pub use browser::{BrowserConfig, SavedSignIn, SavedTabs};
+pub use henchman::{HenchmanConfig, StandingOrder};
 pub use integrations::{
     AthenaTable, FlowStatus, GithubConfig, GrafanaConfig, JiraConfig, LogSource, ModelChoice, SlackBotConfig,
     SlackConfig, SlackThread, StartTo, TicketFlow,
@@ -205,6 +207,10 @@ pub struct SavedPane {
     /// The loop it was on, to put back on it (LOOP-11).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_loop: Option<SavedLoop>,
+    /// In the middle of a turn when the app quit: put back, the Henchman
+    /// hears of it and tells it to go on (HEN-10).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mid_turn: bool,
 }
 
 /// A loop as kept with its pane between launches (LOOP-11).
@@ -279,6 +285,9 @@ pub struct AppConfig {
     /// there (§25).
     #[serde(default)]
     pub shared: Shared,
+    /// The Henchman's standing orders and whom it leaves alone (§28).
+    #[serde(default)]
+    pub henchman: HenchmanConfig,
 }
 
 impl AppConfig {

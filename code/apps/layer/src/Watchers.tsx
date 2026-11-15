@@ -5,6 +5,7 @@ import { themeTerminals } from "./components/Terminal";
 import { api } from "./lib/api";
 import { CHAT_TASK_ID } from "./lib/derive";
 import { goTo } from "./lib/goto";
+import { useOrders } from "./lib/henchman-orders";
 import { useSpecs } from "./lib/specs";
 import { useTheme } from "./lib/theme";
 import type { SpecPart, Target } from "./lib/types";
@@ -533,6 +534,20 @@ export function Watchers() {
         .catch(() => {});
     refresh();
     const p = listen("messages:changed", refresh);
+    return () => {
+      void p.then((un) => un());
+    };
+  }, []);
+
+  // The Henchman's standing orders: its tools change them as well as the lair.
+  useEffect(() => {
+    const refresh = () =>
+      void useOrders
+        .getState()
+        .refresh()
+        .catch(() => {});
+    refresh();
+    const p = listen("henchman:orders", refresh);
     return () => {
       void p.then((un) => un());
     };

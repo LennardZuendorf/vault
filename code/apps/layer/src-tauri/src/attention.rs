@@ -154,6 +154,7 @@ pub fn spawn(app: AppHandle) -> std::io::Result<()> {
             let mut watch = Watch::default();
             let mut badge: Option<usize> = None;
             let mut awake = Awake::default();
+            let mut henchman = crate::commands::HenchmanFeed::default();
             loop {
                 std::thread::sleep(TICK);
                 let state = app.state::<AppState>();
@@ -163,6 +164,9 @@ pub fn spawn(app: AppHandle) -> std::io::Result<()> {
                     .config
                     .with(|c| (c.ui.notify_waiting_agents, c.ui.keep_awake, c.phone.tailscale || c.phone.home));
                 let panes = state.ptys.attention();
+                // Whatever the switch: the Henchman drives (HEN-9), it is not
+                // interrupting you.
+                henchman.pass(&state, &panes);
                 awake.hold(awake::wanted(keep_awake, phone, &panes));
                 let (count, news) = watch.pass(&panes, Instant::now());
                 // Kept whatever the switch and wherever you are looking

@@ -131,6 +131,8 @@ mod finish_tool;
 mod github;
 mod grafana;
 mod henchman;
+mod henchman_feed;
+mod henchman_orders;
 mod henchman_tools;
 mod jira;
 mod landed;
@@ -180,6 +182,8 @@ pub use finish_tool::*;
 pub use github::*;
 pub use grafana::*;
 pub use henchman::*;
+pub use henchman_feed::*;
+pub use henchman_orders::*;
 pub use henchman_tools::*;
 pub use jira::*;
 pub(crate) use landed::{advance, branch_landed, landed};
@@ -399,6 +403,7 @@ mod tests {
             acp: false,
             session: None,
             on_loop: None,
+            mid_turn: false,
         }
     }
 

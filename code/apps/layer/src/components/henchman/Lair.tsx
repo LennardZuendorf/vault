@@ -1,15 +1,17 @@
 import { useMemo, useState } from "react";
 import { paneName, paneState } from "../../lib/derive";
 import { goTo } from "../../lib/goto";
+import { useOrders } from "../../lib/henchman-orders";
 import { LAIR_GROUPS, lair, type LairGroup, type LairRow } from "../../lib/lair";
 import { read, write } from "../../lib/persist";
 import type { PaneInfo, TaskView } from "../../lib/types";
 import { useStore } from "../../store";
 import { FinishTask } from "../FinishTask";
 import { ChevronIcon } from "../icons";
+import { Orders } from "./Orders";
 import { Running } from "./Running";
 
-type Fold = LairGroup | "chats" | "running";
+type Fold = LairGroup | "chats" | "running" | "orders";
 
 /**
  * The lair (HEN-5): every task by what it needs, current without being
@@ -25,6 +27,9 @@ export function LairColumn() {
   const [opened, setOpened] = useState(() => read<Partial<Record<Fold, boolean>>>("lairOpen", {}));
   const [finishing, setFinishing] = useState<TaskView | null>(null);
   const [processes, setProcesses] = useState(0);
+  const standing = useOrders((s) =>
+    s.orders ? s.orders.orders.length + s.orders.left_alone.length : 0,
+  );
 
   const isOpen = (id: Fold, byDefault: boolean) => opened[id] ?? byDefault;
   const toggle = (id: Fold, byDefault: boolean) => {
@@ -87,6 +92,15 @@ export function LairColumn() {
           onToggle={() => toggle("running", false)}
         />
         <Running shown={isOpen("running", false)} onCount={setProcesses} />
+      </section>
+      <section>
+        <Head
+          label="Standing orders"
+          n={standing}
+          open={isOpen("orders", false)}
+          onToggle={() => toggle("orders", false)}
+        />
+        <Orders shown={isOpen("orders", false)} />
       </section>
       {finishing && <FinishTask task={finishing} onClose={() => setFinishing(null)} />}
     </aside>

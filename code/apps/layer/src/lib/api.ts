@@ -74,7 +74,7 @@ import type {
   S3Found,
 } from "./types";
 import type { EpicView, Filed, StartedSubTask } from "./types-epic";
-import type { Process } from "./types-henchman";
+import type { HenchmanOrders, Process } from "./types-henchman";
 import type { PlanLimits } from "./types-limits";
 import type {
   Elsewhere,
@@ -183,6 +183,13 @@ export const api = {
   runningProcesses: () => invoke<Process[]>("running_processes"),
   /** Stop one, and its children; the list after. */
   stopProcess: (pid: number) => invoke<Process[]>("stop_process", { pid }),
+  /** The Henchman's standing orders, and what it leaves alone (HEN-7, HEN-8). */
+  henchmanOrders: () => invoke<HenchmanOrders>("henchman_orders"),
+  addHenchmanOrder: (text: string) => invoke<HenchmanOrders>("henchman_order_add", { text }),
+  removeHenchmanOrder: (id: string) => invoke<HenchmanOrders>("henchman_order_remove", { id }),
+  /** By the key the list gives: a task's id, or a chat's room. */
+  henchmanLeaveAlone: (key: string, alone: boolean) =>
+    invoke<HenchmanOrders>("henchman_leave_alone", { key, alone }),
   ptyWrite: (paneId: string, data: string) => invoke<void>("pty_write", { paneId, data }),
   ptyResize: (paneId: string, rows: number, cols: number) =>
     invoke<void>("pty_resize", { paneId, rows, cols }),

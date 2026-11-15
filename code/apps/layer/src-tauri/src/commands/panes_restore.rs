@@ -38,6 +38,7 @@ pub(crate) fn remember_pane(app: &AppHandle, state: &AppState, pane: &PaneInfo) 
         acp: pane.acp,
         session: None,
         on_loop: None,
+        mid_turn: false,
     };
     let live: HashSet<String> = state.ptys.list(None).into_iter().map(|p| p.id).collect();
     let keep = saved_pane_limit(state.ptys.limit());
@@ -243,6 +244,10 @@ pub fn restore_panes(app: &AppHandle) {
             Back::Opened(p) => {
                 if let Some(kept) = &pane.on_loop {
                     super::loops::resume_loop(app, &state, &p, kept);
+                }
+                // The Henchman hears of it and tells it to go on (HEN-10).
+                if pane.mid_turn {
+                    super::henchman_feed::interrupted(&p.id);
                 }
                 forget(&pane.id)
             }
@@ -498,6 +503,7 @@ mod tests {
             acp: false,
             session: None,
             on_loop: None,
+            mid_turn: false,
         }
     }
 

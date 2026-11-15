@@ -321,6 +321,10 @@ pub fn run() {
             commands::resumable_agents,
             commands::spawn_chat,
             commands::spawn_henchman,
+            commands::henchman_orders,
+            commands::henchman_order_add,
+            commands::henchman_order_remove,
+            commands::henchman_leave_alone,
             commands::running_processes,
             commands::stop_process,
             commands::pty_write,
@@ -494,6 +498,10 @@ pub fn run() {
                 let closing = std::thread::spawn(move || {
                     browser.state::<AppState>().browser.shutdown(std::time::Duration::from_secs(3));
                 });
+                // While they still say so: which agents were mid-turn, so
+                // the Henchman can tell them to go on once they are back
+                // (HEN-10).
+                commands::mark_mid_turn(&state);
                 state.loops.stop_all();
                 state.ptys.shutdown(std::time::Duration::from_secs(5));
                 state.loops.kill_checks();

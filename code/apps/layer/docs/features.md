@@ -1344,6 +1344,10 @@ never hold credentials themselves.
 | `pane_read` | the Henchman's: what an agent or chat last said (HEN-4) | |
 | `pane_tell` | the Henchman's: one message to a running agent or chat (HEN-4) | |
 | `chat_start` | the Henchman's: a new chat in Chat, with its first message (HEN-4) | |
+| `pane_restart` | the Henchman's: restart an agent or chat that exited by itself (HEN-10) | |
+| `order_add` | the Henchman's: keep a standing order, on the user's word (HEN-7) | |
+| `order_remove` | the Henchman's: drop a standing order (HEN-7) | |
+| `leave_alone` | the Henchman's: hear nothing of a task or chat until handed back (HEN-8) | |
 | `browser_navigate` | open a page in the task's browser tab (BRW-3), and get its outline | |
 | `browser_back` | back one page | |
 | `browser_snapshot` | the page as an outline, each element it can act on numbered | |
@@ -3529,9 +3533,12 @@ be asked anything. The Henchman is that place: a tab of its own, first in
 the top bar, with one standing conversation over all of Layer on the left
 and the lair beside it, a column that sorts every task and chat by what it
 needs. It briefs you, reads what any agent or chat last said, passes your
-words on and starts chats. It writes no code. This is step 1 of the
-design in `docs/orchestrator.md` (Brief and talk); acting on tasks,
-driving tickets and reaching it from Slack come later.
+words on and starts chats. It drives too: told whenever an agent stops,
+it answers what you've told it to answer from now on, tells agents with
+plan left to go on, and picks up the ones Layer's quit or a crash
+interrupted. It writes no code. This is steps 1 and 3 of the design in
+`docs/orchestrator.md` (Brief and talk; Drive); acting on tasks and
+reaching it from Slack come later.
 
 - **HEN-1** The Henchman MUST be its own view, the first tab in the top
   bar, named Henchman. Its count is the tasks and chats in Needs you
@@ -3562,9 +3569,13 @@ driving tickets and reaching it from Slack come later.
   question it asks; in a terminal, its recent output, only with "Let
   agents read terminal output" on (MCP-4). `pane_tell` sends one message
   to a running agent or chat, typed into its terminal or sent as a prompt
-  over ACP, and refuses a shell, a pane that has exited and the Henchman
-  itself. `chat_start` opens a new chat in Chat over ACP, with its first
-  message. None of them changes shared state, so none needs `confirm`.
+  over ACP, and refuses a shell, a pane that has exited, a terminal at a
+  permission question (typed into one, a message picks an answer) and
+  the Henchman itself. `chat_start` opens a new chat in Chat over ACP,
+  with its first message. `order_add`, `order_remove` and `leave_alone`
+  keep its standing orders (HEN-7, HEN-8), and `pane_restart` restarts an
+  agent that exited by itself (HEN-10). None of them changes shared
+  state, so none needs `confirm`.
 - **HEN-5** The lair MUST sort every task into one group, by the first
   that fits, and say why on its row:
   - **Needs you**, ranked: an agent asks ("its agent asks"); an agent is
@@ -3580,8 +3591,9 @@ driving tickets and reaching it from Slack come later.
     left uncommitted.
   - **Quiet**: everything else.
 
-  Needs you and To finish are open; Moving, Not started, Quiet, Chats and
-  Running are folded to their counts and open on a click. A task's row
+  Needs you and To finish are open; Moving, Not started, Quiet, Chats,
+  Running and Standing orders (HEN-7) are folded to their counts and open
+  on a click. A task's row
   opens the task in Work; a chat's opens it in Chat. Above the
   conversation a line counts them: "20 open · 3 need you · 1 to finish ·
   5 moving · 2 not started · 9 quiet". The same rule sorts
@@ -3601,14 +3613,64 @@ driving tickets and reaching it from Slack come later.
   opens, when a pane's activity changes, and every 10 seconds while the
   tab is shown and the window is active: processes start and stop
   without telling anyone.
+- **HEN-7** The Henchman MUST keep standing orders: what the user told it
+  to answer the same way from now on, in their words ("yes to running the
+  tests"). It keeps one with `order_add` only on the user's word, never on
+  an agent's, a ticket's or a page's; the lair's Standing orders group
+  lists each with Remove, and takes a new one typed into its field.
+  Orders are kept in the config, at most 40 of at most 500 characters
+  each; one said twice is kept once. An order lets the Henchman agree to
+  something outward (a PR marked ready, a post in Slack, a comment in
+  Jira) only where it says exactly that. A permission question is never
+  answered by an order: only the user answers those.
+- **HEN-8** The user MUST be able to tell the Henchman to leave a task or
+  a chat alone (`leave_alone`): it then hears nothing of that task's
+  agents, or that chat, until handed back. The Standing orders group
+  lists each, by its ticket key or name, with Drive it, which hands it
+  back. A chat is known by its room, so it stays left alone across
+  restarts. A chat that answers a Slack thread (§24) is never heard: its
+  thread is who it answers to.
+- **HEN-9** The Henchman MUST be told when an agent or chat finishes a
+  turn: running, done, at no permission question and with no notice
+  (out of budget), the user not yet having looked at it. What finishes
+  while it works waits, and goes as one message once its turn ends, the
+  newest 12 by name and "and N more" for the rest. Each item names the
+  task's key or the chat, the pane, what it last said over ACP (or that
+  `pane_read` shows a terminal's), its open question, and the error its
+  turn ended on, if any; then every standing order with its id; then
+  what to do: answer what an order answers, say "go on" to one that
+  stopped with steps of its own plan left (at most three times in a
+  row), report the rest in one line each, and leave finished work to
+  the user. The message's first line names what stopped, since that is
+  all the conversation shows of it (ACP-19). What had finished before
+  the Henchman was woken is in its brief, not told again; with no
+  Henchman running nothing is kept.
+- **HEN-10** The Henchman MUST pick up what was interrupted. An agent in
+  the middle of a turn (working, or at a permission question) when the
+  app quits is marked so in its saved pane; put back at the next launch
+  (PANE-7), it is in the next message as put back mid-turn, and the
+  Henchman tells it to go on. Waiting more than 10 minutes for a
+  Henchman to be woken, it is forgotten. An agent whose process ends
+  without being stopped, closed or restarted (and for a terminal, not
+  with exit code 0, which is `/exit`) is in it as exited by itself; the
+  Henchman restarts it with `pane_restart`, as Restart does (PANE-14),
+  and tells the new pane to go on. One it restarted that exits again
+  within 10 minutes is refused and left for the user. A turn that ended
+  on an error a retry fixes (overloaded, a rate limit, a lost
+  connection) is told to go on too. The Henchman itself, put back
+  mid-turn, is told to go on with its own work.
 
 Code: `commands/henchman.rs` (the room, its context, `spawn_henchman`),
-`commands/henchman_tools.rs` (HEN-4), `commands/processes.rs` and
+`commands/henchman_tools.rs` (HEN-4, `pane_restart`),
+`commands/henchman_orders.rs` and `config/henchman.rs` (HEN-7, HEN-8),
+`commands/henchman_feed.rs` (HEN-9, HEN-10), `commands/processes.rs` and
 `pty/pids.rs` (HEN-6), `components/henchman/`, `lib/lair.ts` (HEN-5).
 
 Known gaps:
-- It is told nothing as it happens: it knows what changed only when it
-  calls `work_overview` again (step 3 of the design).
+- Only a quit the app sees marks agents mid-turn: after a crash or a
+  forced quit, they are put back without the Henchman hearing.
+- A terminal agent's turn that ended on an error is not told apart from
+  one that finished: the Henchman reads it with `pane_read`.
 - It acts on nothing itself yet: starting work, opening PRs and finishing
   stay in their own views (step 2).
 - A PR row is as old as the last sweep, up to 15 minutes for a task the

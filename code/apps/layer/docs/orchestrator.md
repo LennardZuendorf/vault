@@ -196,4 +196,8 @@ Step 1 only listed, and the agents kept asking the same questions. So:
 - **Permission prompts:** Claude Code starts in its auto mode (PANE-18),
   for task agents and chats as for the Henchman, so the prompts it would
   otherwise repeat mostly never come.
+- **Interrupted:** agents mid-turn when Layer quit are told to go on once
+  they are back; one whose process ended by itself is restarted on its
+  conversation and told to go on, once; a turn that ended on an error a
+  retry fixes is told to go on (HEN-10).
 

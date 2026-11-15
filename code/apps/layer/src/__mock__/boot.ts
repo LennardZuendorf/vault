@@ -51,6 +51,7 @@ import type {
 import type { Process } from "../lib/types-henchman";
 import { acpAnswers, seedAcp, seedHenchman } from "./acp";
 import { epicAnswers, seedEpic } from "./epic";
+import { henchmanAnswers } from "./henchman";
 import { limitAnswers } from "./limits";
 import { loopAnswers, seedLoop } from "./loop";
 import { profileAnswers } from "./profiles";
@@ -636,6 +637,8 @@ const answer: Record<string, Answer> = {
   ...runAnswers(world.tasks.length > 0),
   // Plan limits (§27).
   ...limitAnswers(world.tasks.length > 0),
+  // The Henchman's standing orders (§28).
+  ...henchmanAnswers(world.tasks.length > 0),
   ...profileAnswers(),
   spawn_agent: (a) => {
     const p = newPane(a, "agent", a.taskId as string);

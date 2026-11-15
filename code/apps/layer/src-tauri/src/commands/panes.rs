@@ -789,7 +789,7 @@ pub async fn restart_pane(app: AppHandle, pane_id: String) -> Result<PaneInfo> {
     super::blocking(app, move |state| restart(&handle, state, &pane_id)).await
 }
 
-fn restart(app: &AppHandle, state: &AppState, id: &str) -> Result<PaneInfo> {
+pub(crate) fn restart(app: &AppHandle, state: &AppState, id: &str) -> Result<PaneInfo> {
     let old = state.ptys.info(id)?;
     // Over ACP the conversation is picked up by its id, whatever the CLI
     // (ACP-9).
