@@ -6,7 +6,8 @@
 //! its own plan left to go on, restart one that fell over, and put a task's
 //! agent on what its pull request needs. Once Layer has started, it is told
 //! to look at everything. Run from the attention pass (`attention.rs`),
-//! which already looks at every pane.
+//! which already looks at every pane, and keeps quiet about the ones heard
+//! here (`henchman_need.rs`).
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -133,20 +134,38 @@ pub struct HenchmanFeed {
     prs: Vec<PrNews>,
 }
 
-impl HenchmanFeed {
-    pub fn pass(&mut self, state: &AppState, panes: &[(PaneInfo, bool)]) {
-        let henchman = panes.iter().map(|(p, _)| p).find(|p| p.running && is_henchman(state, p));
+/// Whose turns the Henchman hears of while it runs: every agent and chat
+/// but itself and those the user left alone. Attention keeps quiet about the
+/// same ones (HEN-13).
+pub(crate) struct Heard {
+    on: bool,
+    alone: Vec<String>,
+    threads: HashSet<String>,
+}
+
+impl Heard {
+    pub(crate) fn new(state: &AppState, henchman: bool) -> Self {
         let (alone, threads) = state.config.with(|c| {
             let threads: HashSet<String> = c.slack_threads.iter().map(|t| t.room.clone()).collect();
             (c.henchman.left_alone.clone(), threads)
         });
-        let heard = |p: &PaneInfo| {
-            henchman.is_some()
-                && !is_henchman(state, p)
-                && !alone.iter().any(|k| k == key_of(p))
-                // A Slack thread's chat answers to its thread (§24).
-                && !threads.contains(&p.cwd)
-        };
+        Heard { on: henchman, alone, threads }
+    }
+
+    pub(crate) fn hears(&self, state: &AppState, p: &PaneInfo) -> bool {
+        self.on
+            && !is_henchman(state, p)
+            && !self.alone.iter().any(|k| k == key_of(p))
+            // A Slack thread's chat answers to its thread (§24).
+            && !self.threads.contains(&p.cwd)
+    }
+}
+
+impl HenchmanFeed {
+    pub fn pass(&mut self, state: &AppState, panes: &[(PaneInfo, bool)]) {
+        let henchman = panes.iter().map(|(p, _)| p).find(|p| p.running && is_henchman(state, p));
+        let ears = Heard::new(state, henchman.is_some());
+        let heard = |p: &PaneInfo| ears.hears(state, p);
         let back = take_interrupted(henchman.is_some());
         let exited = self.newly_exited(panes, heard);
         let finished = self.newly_finished(panes.iter().map(|(p, _)| p), heard);
@@ -166,7 +185,7 @@ impl HenchmanFeed {
             self.prs.clear();
             return;
         };
-        for c in changed.into_iter().filter(|c| !alone.contains(&c.task_id)) {
+        for c in changed.into_iter().filter(|c| !ears.alone.contains(&c.task_id)) {
             let task = state.config.task(&c.task_id).ok();
             let name = task.map(|t| t.issue_key.unwrap_or(t.name)).unwrap_or_else(|| "a task".into());
             let news = PrNews { task_id: c.task_id, name, repo: c.repo, number: c.number, what: c.what };
@@ -384,23 +403,33 @@ fn orders_and_what_to_do(m: &mut String, orders: &[StandingOrder], each: &str) {
     m.push_str(WHAT_TO_DO);
 }
 
-/// Act first, then say: the user asked for a Henchman that does what it may
-/// without being asked each time (HEN-12).
+/// Decide, then say little (HEN-13): the user found a Henchman that passed
+/// on every question and every detail as much work to watch as the agents.
 const WHAT_TO_DO: &str = concat!(
     "- It asks something an order answers: answer it with pane_tell, as the order says.\n",
+    "- It asks something the ticket, its pull request, the code, my earlier words or plain ",
+    "sense settle (whether to save notes, which of two close numbers, whether to carry on): ",
+    "decide, and tell it with pane_tell. Never pass such a question on to me.\n",
     "- It asks nothing and stopped with steps of its own plan left: tell it \"go on\". Put back ",
     "after Layer quit, or its turn ended on an error a retry fixes (overloaded, a rate limit, a ",
-    "lost connection): tell it to go on where it was. Three times in a row at most; then ask me.\n",
-    "- It exited by itself: restart it with pane_restart, then tell it to go on; if it exits ",
-    "again, leave it and tell me.\n",
+    "lost connection): tell it to go on where it was. Three times in a row at most; then it is ",
+    "stuck.\n",
+    "- It exited by itself: restart it with pane_restart, then tell it to go on. If it exits ",
+    "again, it is stuck.\n",
     "- Its pull request's checks failed, or it has comments to answer, changes asked for or a ",
     "conflict: put the task's agent on it with task_work, saying what to fix, unless its agent ",
-    "works already.\n",
-    "- A pull request can merge or was merged: tell me.\n",
-    "Then one line here for each thing you did (\"ACME-12: said go on\", \"ACME-14: its agent is ",
-    "on 2 review comments\"), and one line for each thing only I can answer. Don't ask me whether ",
-    "to do what you may do yourself. Merging, marking ready, finishing and anything others see ",
-    "stay mine unless an order says so. Finished work is mine to look at: say it's done."
+    "works already. A check that fails for a cause outside the task (the CI environment down, ",
+    "a weekend outage, a rule waiting for reviews) needs nothing: no agent, no word.\n",
+    "- Its agent says the work is done, and the only failing checks have such a cause: tell it ",
+    "to mark its pull request ready. A progress comment it drafted for its own ticket: tell it ",
+    "to post it.\n",
+    "- A pull request can merge: need_you, once. One that merged needs nothing now.\n",
+    "Call need_you only for what needs me: a secret, access or an account only I have; a ",
+    "product or scope decision the ticket leaves open; a step others see that you may not ",
+    "take; a risk to production or data; an agent stuck; a pull request that can merge. Once ",
+    "per thing, never again for the same. What waits for reviewers, other people or a release ",
+    "is not news. Then reply here with one short line per thing you did, or nothing. Merging, ",
+    "finishing tasks, Slack and anything else others see stay mine unless an order says so."
 );
 
 /// The bracket's word: what they have in common.
@@ -685,6 +714,8 @@ mod tests {
         assert!(m.starts_with("[villain-layer · started] Layer started"));
         let at = |s: &str| m.find(s).unwrap_or_else(|| panic!("{s} missing from:\n{m}"));
         assert!(at("[o1]") < at("Call work_overview") && at("Call work_overview") < at("task_work"));
-        assert!(m.contains("Don't ask me whether to do what you may do yourself"));
+        assert!(m.contains("Never pass such a question on to me"));
+        assert!(at("need_you") > at("task_work"), "it reaches me only for what needs me");
+        assert!(m.contains("a weekend outage"), "a failure with a cause outside the task is not news");
     }
 }

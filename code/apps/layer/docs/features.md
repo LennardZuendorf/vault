@@ -535,6 +535,8 @@ shows as a banner above the terminals.
 - **STATE-4** Every view MUST agree: the sidebar, the task's pane bar, All
   agents, Chat and the "N need you" count use `paneState` / `needsYou` in
   `lib/derive.ts`, and the dock count uses the same rule in `attention.rs`.
+  While the Henchman runs, the dock and banners leave out the agents it
+  hears of and count what it needs you for instead (HEN-13).
 - **STATE-5** A state change MUST reach the UI as an event (`pty:activity`)
   as it happens, not at the next poll.
 - **STATE-6** A usage-limit notice MUST NOT fire on prose that merely
@@ -1261,7 +1263,8 @@ Center; this keeps what the app told you, newest first.
 
 - **MSG-1** The message center MUST keep every piece of news: an agent
   asking, finished or exited on its own (with a trust prompt or a usage
-  limit), a new review request, a new ticket, a ticket the work moved, a
+  limit; while the Henchman runs, those it hears of are its to tell,
+  HEN-13), what the Henchman needs you for, a new review request, a new ticket, a ticket the work moved, a
   pull request approved, sent back, commented on or merged, a notice from
   the app, and every failure shown in the top bar's status (WIN-2). Feedback
   on something you just did ("Copied …", a failure shown where you did it)
@@ -1349,6 +1352,7 @@ never hold credentials themselves.
 | `order_add` | the Henchman's: keep a standing order, on the user's word (HEN-7) | |
 | `order_remove` | the Henchman's: drop a standing order (HEN-7) | |
 | `leave_alone` | the Henchman's: hear nothing of a task or chat until handed back (HEN-8) | |
+| `need_you` | the Henchman's: reach the user, a banner and a count on the dock, for what really needs them (HEN-13) | |
 | `browser_navigate` | open a page in the task's browser tab (BRW-3), and get its outline | |
 | `browser_back` | back one page | |
 | `browser_snapshot` | the page as an outline, each element it can act on numbered | |
@@ -3539,8 +3543,9 @@ it answers what you've told it to answer from now on, tells agents with
 plan left to go on, and picks up the ones Layer's quit or a crash
 interrupted. It works on its own: told when a task's pull request fails
 a check, gets comments or changes asked for, or conflicts, it puts the
-task's agent on it, and says what it did rather than asking. It writes
-no code. This is steps 1 and 3 of the design in `docs/orchestrator.md`
+task's agent on it, and says what it did rather than asking. It decides
+what is light itself, and while it runs it is the only one that pings
+you, and only when something really needs you. It writes no code. This is steps 1 and 3 of the design in `docs/orchestrator.md`
 (Brief and talk; Drive), and the part of step 2 (Act) inside a task
 that has started; starting tickets, finishing and reaching it from
 Slack come later.
@@ -3563,10 +3568,11 @@ Slack come later.
 - **HEN-3** Woken, it MUST be asked to do what it may itself first (put
   tasks' agents on what their pull requests need, HEN-11; say go on to
   agents with plan left; restart ones that exited by themselves), then
-  for a brief: what it did, one line each; what needs you, ranked, each
-  by its key and what it waits for; what is stuck; what can be finished;
-  everything else as one line. It reads all of it with one
-  `work_overview`.
+  for a brief: what it did, in one line; what needs you, at most five,
+  the most pressing first, each by its key and what it waits for, or
+  "Nothing needs you."; everything else as one line. What waits for
+  reviewers, other people or a release is left out. It reads all of it
+  with one `work_overview`.
 - **HEN-4** Its tools MUST be listed for, and answered to, the Henchman's
   own pane only, known by its room as a chat is (CHAT-3); any other
   caller is refused. `work_overview` gives every task as the lair sorts
@@ -3582,9 +3588,9 @@ Slack come later.
   the Henchman itself. `chat_start` opens a new chat in Chat over ACP,
   with its first message. `order_add`, `order_remove` and `leave_alone`
   keep its standing orders (HEN-7, HEN-8), `pane_restart` restarts an
-  agent that exited by itself (HEN-10), and `task_work` puts a task's
-  agent to work (HEN-11). None of them changes shared state, so none
-  needs `confirm`.
+  agent that exited by itself (HEN-10), `task_work` puts a task's
+  agent to work (HEN-11), and `need_you` reaches the user (HEN-13). None
+  of them changes shared state, so none needs `confirm`.
 - **HEN-5** The lair MUST sort every task into one group, by the first
   that fits, and say why on its row:
   - **Needs you**, ranked: an agent asks ("its agent asks"); an agent is
@@ -3630,8 +3636,10 @@ Slack come later.
   Orders are kept in the config, at most 40 of at most 500 characters
   each; one said twice is kept once. An order lets the Henchman agree to
   something outward (a PR marked ready, a post in Slack, a comment in
-  Jira) only where it says exactly that. A permission question is never
-  answered by an order: only the user answers those.
+  Jira) only where it says exactly that; the two of HEN-11 need none. A
+  permission question is never answered by an order: only the user
+  answers those. Told something is normal and not to be raised, it keeps
+  that as an order too.
 - **HEN-8** The user MUST be able to tell the Henchman to leave a task or
   a chat alone (`leave_alone`): it then hears nothing of that task's
   agents, or that chat, until handed back. The Standing orders group
@@ -3648,12 +3656,18 @@ Slack come later.
   `pane_read` shows a terminal's), its open question, and the error its
   turn ended on, if any; then the pull requests that changed (HEN-12);
   then every standing order with its id; then what to do: answer what an
-  order answers, say "go on" to one that stopped with steps of its own
-  plan left (at most three times in a row), put a task's agent on what
-  its pull request needs with `task_work`, say what it did in one line
-  each and the rest in one line each, never ask whether to do what it
-  may do itself, and leave merging, marking ready, finishing, anything
-  others see and finished work to the user. The message's first line
+  order answers, and what the ticket, its pull request, the code, the
+  user's earlier words or plain sense settle, never passing such a
+  question on; say "go on" to one that stopped with steps of its own
+  plan left (at most three times in a row, then it is stuck); put a
+  task's agent on what its pull request needs with `task_work`, but not
+  on a check that fails for a cause outside the task (the CI environment
+  down, a weekend outage, a rule waiting for reviews); have an agent done
+  with its work mark its pull request ready and post its drafted
+  progress comment (HEN-11); call `need_you` only for what needs the
+  user (HEN-13); reply with one short line per thing it did, or nothing;
+  and leave merging, finishing, Slack and anything else others see to
+  the user. The message's first line
   names what stopped or the pull request that changed, since that is
   all the conversation shows of it (ACP-19). What had finished before
   the Henchman was woken is in its brief, not told again; with no
@@ -3685,8 +3699,12 @@ Slack come later.
   when it finishes) or asks the user, for a task left alone (HEN-8), and
   for a task with no agent and no open pull request: starting a ticket
   is the user's. Past 8 agents started or picked up in an hour, it is
-  refused until the user says more. Marking ready, merging, Slack and
-  Jira stay the user's unless a standing order says so (HEN-7).
+  refused until the user says more. Two outward steps it may have a
+  task's agent take without asking: mark the task's own pull request
+  ready once the agent says its work is done and the only failing checks
+  have a cause outside the task, and post the progress comment the agent
+  drafted on its own ticket. Merging, Slack and anything else others see
+  stay the user's unless a standing order says so (HEN-7).
 - **HEN-12** The Henchman MUST be told when a task's pull request
   changes, while it runs: a check that failed, more comments to answer,
   changes asked for, a conflict with its base, that it can merge (ready,
@@ -3703,13 +3721,27 @@ Slack come later.
   not told. Put back at launch, the Henchman is told once, 20 seconds
   later, that Layer started, to call `work_overview` and do the same for
   every task and chat.
+- **HEN-13** While the Henchman runs, it MUST be the only one that pings
+  the user about the agents it hears of (HEN-8, HEN-9): their finished
+  turns and exits make no banner, no message and no count on the dock.
+  A permission question, a usage limit and a trust prompt still do: only
+  the user answers those. The Henchman reaches the user with `need_you`,
+  only for what really needs them: a secret, access or an account only
+  they have; a product or scope decision the ticket leaves open; a step
+  others see that it may not take; a risk to production or data; an
+  agent stuck; a pull request that can merge. Each makes a message; a
+  banner, "The Henchman needs you" with the task's key, when "Agents
+  waiting on you" is on and the window is away, which opens its tab; and
+  one on the dock count until the user has looked at its conversation
+  after the turn that raised it. The same words within 12 hours are refused, and so is a
+  seventh in an hour. Stopped, it holds nothing: the agents ping again.
 
 Code: `commands/henchman.rs` (the room, its context, `spawn_henchman`),
 `commands/henchman_tools.rs` (HEN-4, `pane_restart`),
 `commands/henchman_orders.rs` and `config/henchman.rs` (HEN-7, HEN-8),
 `commands/henchman_feed.rs` (HEN-9, HEN-10, HEN-12),
 `commands/henchman_work.rs` (HEN-11), `commands/henchman_watch.rs`
-(HEN-12), `commands/processes.rs` and
+(HEN-12), `commands/henchman_need.rs` and `attention.rs` (HEN-13), `commands/processes.rs` and
 `pty/pids.rs` (HEN-6), `components/henchman/`, `lib/lair.ts` (HEN-5).
 
 Known gaps:
@@ -3727,6 +3759,11 @@ Known gaps:
   beside it.
 - A process started by a command run outside a shell (an agent's own tool
   call, over ACP) is listed only while it listens on a port.
+- What is light, what has a cause outside the task and what really needs
+  the user is the Henchman's judgement, from its instructions: Layer only
+  holds it to `need_you` and caps how often.
+- A need stays on the dock until the Henchman's conversation is looked
+  at, not until it is answered.
 
 ---
 

@@ -216,3 +216,19 @@ work and asked whether to open chats for them. So:
   conflicts, can merge or merged. With the window away, Layer itself
   reads the PRs while the Henchman runs (HEN-12).
 
+Tried, it was still like watching someone: nine-item "needs you" lists,
+agents' small questions passed on, CI failures on a weekend and the
+review-queue rule reported as problems, the same Slack review requests
+again and again, and a ping for every agent's turn. So (HEN-13):
+
+- **Decides light things:** what the ticket, the PR, the code, your
+  earlier words or plain sense settle, it answers itself. A check failing
+  for a cause outside the task is not news. What waits for reviewers,
+  others or a release is left out.
+- **Two outward steps alone:** an agent done with its work marks its own
+  PR ready when only such failures are left, and posts the progress
+  comment it drafted on its own ticket. Merging and Slack stay yours.
+- **One voice:** while it runs, agents it hears of don't ping you. It
+  does, with `need_you`, only for what really needs you; the dock counts
+  those until you open its tab. Briefs name five things at most.
+

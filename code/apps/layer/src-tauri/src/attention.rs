@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 
 use crate::awake::{self, Awake};
-use crate::commands::{banner, AppState, CHAT_TASK_ID};
+use crate::commands::{banner, henchman_needs, henchman_quiet, AppState, Need, CHAT_TASK_ID};
 use crate::messages::{self, Kind, Level, New};
 use crate::pty::{Activity, PaneInfo, PaneKind};
 use crate::target::Target;
@@ -168,25 +168,30 @@ pub fn spawn(app: AppHandle) -> std::io::Result<()> {
                 // interrupting you.
                 henchman.pass(&state, &panes);
                 awake.hold(awake::wanted(keep_awake, phone, &panes));
-                let (count, news) = watch.pass(&panes, Instant::now());
+                // While a Henchman runs, the agents it hears of reach you
+                // through it, and only when it needs you (HEN-13).
+                let (count, news) = watch.pass(&henchman_quiet(&state, &panes), Instant::now());
+                let (needs, raised) = henchman_needs(&state, &panes);
                 // Kept whatever the switch and wherever you are looking
                 // (MSG-2): the switch is about interrupting you.
                 messages::record_all(&app, record(&news, |id| task_name(&state, id)));
+                messages::record_all(&app, raised.iter().map(Need::record).collect());
 
                 let Some(window) = app.get_webview_window("main") else {
                     continue;
                 };
-                let shown = if on { count } else { 0 };
+                let shown = if on { count + needs } else { 0 };
                 if badge != Some(shown) {
                     // Unsupported on Windows, and nothing to be done about it.
                     let _ = window.set_badge_count((shown > 0).then_some(shown as i64));
                     badge = Some(shown);
                 }
 
-                if !on || news.is_empty() || window.is_focused().unwrap_or(false) {
+                if !on || window.is_focused().unwrap_or(false) {
                     continue;
                 }
-                for (title, body, target) in describe(&news, |id| task_name(&state, id)) {
+                let banners = describe(&news, |id| task_name(&state, id));
+                for (title, body, target) in banners.into_iter().chain(raised.iter().map(Need::banner)) {
                     let _ = banner(&app, title, body, target);
                 }
             }
