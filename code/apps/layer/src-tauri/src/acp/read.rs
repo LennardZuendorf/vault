@@ -6,6 +6,7 @@
 use serde_json::Value;
 
 use super::entry::ToolContent;
+use super::Image;
 
 /// The most of one tool's text output, or one side of a diff, that is kept.
 /// A read of a large file comes back whole, and the window is sent each
@@ -63,6 +64,12 @@ pub(super) fn user_words(text: &str) -> String {
     } else {
         out
     }
+}
+
+/// An image content block, as the user's entry keeps it (ACP-16).
+pub(super) fn image(block: Option<&Value>) -> Option<Image> {
+    let block = block.filter(|b| b.get("type").and_then(Value::as_str) == Some("image"))?;
+    Some(Image { mime_type: str_at(block, "mimeType")?, data: str_at(block, "data")? })
 }
 
 /// The text of a content block: text as it is, anything else named.

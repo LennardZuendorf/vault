@@ -26,7 +26,7 @@ pub mod version;
 use serde::{Deserialize, Serialize};
 
 pub use conn::Conn;
-pub use entry::{Body, Changes, Choice, Command, Setting, Usage};
+pub use entry::{said, Body, Changes, Choice, Command, Setting, Usage};
 #[cfg(test)]
 pub use entry::{Entry, SettingOption};
 pub use process::start;
@@ -42,8 +42,9 @@ pub struct Mcp {
 }
 
 /// An image pasted into a prompt (ACP-16), as the protocol's `image` content
-/// block carries it: base64, with its media type.
-#[derive(Debug, Clone, Deserialize)]
+/// block carries it: base64, with its media type. The conversation keeps it
+/// with what the user said, to show it there.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Image {
     pub mime_type: String,

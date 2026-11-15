@@ -38,7 +38,7 @@ impl Conn {
             let mut q = Queued { text: text.to_string(), images, entry: None };
             // Into the conversation now only if it is open: one being picked
             // up is still replaying (`State::queue`).
-            q.entry = st.ready.then(|| st.convo.user(&q.shown(), st.busy));
+            q.entry = st.ready.then(|| st.convo.user(&q.text, q.images.clone(), st.busy));
             st.queue.push_back(q);
             self.next_prompt(st, fx);
             Ok(())

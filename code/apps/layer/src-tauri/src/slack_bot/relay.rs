@@ -41,7 +41,9 @@ pub fn turn<'a>(entries: impl IntoIterator<Item = &'a Body>) -> Turn {
     let mut t = Turn::default();
     for body in entries {
         match body {
-            Body::User { text, dropped: false, .. } if !text.starts_with(FROM_SLACK) => t.typed.push(text.clone()),
+            Body::User { text, images, dropped: false, .. } if !text.starts_with(FROM_SLACK) => {
+                t.typed.push(acp::said(text, images.len()))
+            }
             Body::Agent { text } if !text.trim().is_empty() => t.reply = Some(text.clone()),
             Body::Note { text, error: true } => t.failed.push(text.clone()),
             _ => {}
@@ -274,7 +276,7 @@ mod tests {
     use super::*;
 
     fn user(text: &str) -> Body {
-        Body::User { text: text.into(), queued: false, dropped: false }
+        Body::User { text: text.into(), images: vec![], queued: false, dropped: false }
     }
 
     fn agent(text: &str) -> Body {
@@ -306,7 +308,7 @@ mod tests {
     #[test]
     fn a_turn_with_nothing_to_say_posts_nothing_and_a_failure_says_so() {
         assert!(posts(&turn(&[user("[Slack] go"), Body::Plan { steps: vec![] }])).is_empty());
-        let dropped = Body::User { text: "never sent".into(), queued: false, dropped: true };
+        let dropped = Body::User { text: "never sent".into(), images: vec![], queued: false, dropped: true };
         assert!(turn(&[dropped]).typed.is_empty());
         let failed =
             turn(&[Body::Note { text: "Stopped: the reply reached the model's length limit.".into(), error: true }]);

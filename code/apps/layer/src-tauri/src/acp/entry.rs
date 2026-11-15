@@ -3,6 +3,8 @@
 
 use serde::Serialize;
 
+use super::Image;
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Body {
@@ -10,6 +12,10 @@ pub enum Body {
     /// end (ACP-4); `dropped` when Stop ended that turn and it was never sent.
     User {
         text: String,
+        /// Pasted into it, or replayed with it (ACP-16), shown as they were
+        /// sent. Each goes to the window once more only when the entry
+        /// changes, which after it is sent it does not.
+        images: Vec<Image>,
         queued: bool,
         dropped: bool,
     },
@@ -128,4 +134,15 @@ pub struct Changes {
     /// True when `entries` is everything kept, to replace what the window has.
     pub reset: bool,
     pub entries: Vec<Entry>,
+}
+
+/// What the user said, with each image named: for everything that reads the
+/// conversation as text, the scrollback's copy and Slack (ACP-16).
+pub fn said(text: &str, images: usize) -> String {
+    let named = vec!["[image]"; images].join(" ");
+    match (text.trim().is_empty(), named.is_empty()) {
+        (_, true) => text.to_string(),
+        (true, false) => named,
+        (false, false) => format!("{text}\n{named}"),
+    }
 }

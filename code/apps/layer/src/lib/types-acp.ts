@@ -15,11 +15,18 @@ export interface AcpChoice {
   kind: string;
 }
 
+/** A picture the user sent (ACP-16), as the protocol carries it. */
+export interface AcpImage {
+  mimeType: string;
+  /** Base64. */
+  data: string;
+}
+
 /** One entry of the conversation. `index` stays the same as older ones go. */
 export type AcpEntry = { index: number; rev: number } &
   /** `queued` while it waits for the turn before it; `dropped` if Stop ended that turn first. */
   (
-    | { kind: "user"; text: string; queued: boolean; dropped: boolean }
+    | { kind: "user"; text: string; images: AcpImage[]; queued: boolean; dropped: boolean }
     | { kind: "agent"; text: string }
     | { kind: "thought"; text: string }
     | {

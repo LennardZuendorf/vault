@@ -648,7 +648,7 @@ mod tests {
     fn a_turn_is_what_the_agent_said_since_the_last_prompt_with_its_open_question() {
         let bodies = vec![
             Body::Agent { text: "old".into() },
-            Body::User { text: "go".into(), queued: false, dropped: false },
+            Body::User { text: "go".into(), images: vec![], queued: false, dropped: false },
             Body::Agent { text: "first".into() },
             Body::Agent { text: "second".into() },
             Body::Question { title: "Write a.rs?".into(), options: Vec::new(), answer: None },

@@ -323,6 +323,38 @@ details.acp-tool > summary::-webkit-details-marker {
   object-fit: cover;
   border-radius: var(--radius-md);
 }
+/* What was sent: big enough to tell one screenshot from another. */
+.acp-user .acp-images {
+  justify-content: flex-end;
+  padding: 0 0 6px;
+}
+.acp-user .acp-images:last-child {
+  padding-bottom: 0;
+}
+.acp-sent-image {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+.acp-sent-image img {
+  display: block;
+  max-height: 160px;
+  max-width: min(320px, 100%);
+  border-radius: var(--radius-md);
+  /* A light screenshot had no edge on day's light bubble. */
+  outline: 1px solid var(--line);
+  outline-offset: -1px;
+}
+.acp-image-view.modal {
+  max-width: min(1100px, 92vw);
+}
+.acp-image-view img {
+  display: block;
+  max-width: 100%;
+  margin: 0 auto;
+}
 .acp-image-remove {
   position: absolute;
   top: -6px;

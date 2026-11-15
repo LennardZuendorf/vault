@@ -6,8 +6,9 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use super::entry::{Body, Changes, Choice, Command, Entry, Setting, SettingOption, Step, Usage};
-use super::read::{block_text, str_at, tool_content, topic, user_words, value_text};
+use super::entry::{said, Body, Changes, Choice, Command, Entry, Setting, SettingOption, Step, Usage};
+use super::read::{block_text, image, str_at, tool_content, topic, user_words, value_text};
+use super::Image;
 
 /// The most entries a pane keeps. The oldest go first; the text copy in the
 /// scrollback has its own, separate limit.
@@ -142,11 +143,11 @@ impl Conversation {
     // -------------------------------------------------------- what happens
 
     /// The user's prompt, sent now or waiting its turn.
-    pub fn user(&mut self, text: &str, queued: bool) -> usize {
+    pub fn user(&mut self, text: &str, images: Vec<Image>, queued: bool) -> usize {
         self.plan = None;
-        let quoted: Vec<String> = text.lines().map(|l| format!("› {l}")).collect();
+        let quoted: Vec<String> = said(text, images.len()).lines().map(|l| format!("› {l}")).collect();
         self.line(&quoted.join("\n"));
-        self.push(Body::User { text: text.to_string(), queued, dropped: false })
+        self.push(Body::User { text: text.to_string(), images, queued, dropped: false })
     }
 
     /// A prompt that was waiting is sent, or will never be.
@@ -296,8 +297,19 @@ impl Conversation {
                     self.push(Body::Thought { text });
                 }
             }
-            // A loaded conversation replays what the user said (ACP-9).
+            // A loaded conversation replays what the user said (ACP-9),
+            // pictures too (ACP-16).
             "user_message_chunk" => {
+                if let Some(image) = image(update.get("content")) {
+                    if let Some(Body::User { images, .. }) = self.last_mut() {
+                        images.push(image);
+                        self.touch_last();
+                        self.line("› [image]");
+                    } else {
+                        self.user("", vec![image], false);
+                    }
+                    return applied;
+                }
                 let text = user_words(&block_text(update.get("content")));
                 if text.trim().is_empty() {
                     return applied;
@@ -306,7 +318,7 @@ impl Conversation {
                     t.push_str(&text);
                     self.touch_last();
                 } else {
-                    self.user(&text, false);
+                    self.user(&text, Vec::new(), false);
                 }
             }
             "tool_call" | "tool_call_update" => self.tool(update),
@@ -480,7 +492,7 @@ mod tests {
     #[test]
     fn a_streamed_reply_is_one_entry_and_one_paragraph_of_text() {
         let mut c = Conversation::default();
-        c.user("hello", false);
+        c.user("hello", vec![], false);
         c.apply(&chunk("agent_message_chunk", "Hi "));
         c.apply(&chunk("agent_message_chunk", "there."));
         c.turn_ended("end_turn");
@@ -526,11 +538,11 @@ mod tests {
     #[test]
     fn the_window_is_sent_only_what_changed_since_it_last_looked() {
         let mut c = Conversation::default();
-        c.user("one", false);
+        c.user("one", vec![], false);
         c.apply(&chunk("agent_message_chunk", "a"));
         let seen = c.rev();
         c.apply(&chunk("agent_message_chunk", "b"));
-        c.user("two", false);
+        c.user("two", vec![], false);
         let changes = c.changes(Some(seen));
         assert!(!changes.reset);
         let got: Vec<usize> = changes.entries.iter().map(|e| e.index).collect();
@@ -588,15 +600,35 @@ mod tests {
         c.apply(&chunk("agent_message_chunk", "Hi!"));
         let all = c.changes(None).entries;
         assert_eq!(all.len(), 2, "{all:?}");
-        assert_eq!(all[0].body, Body::User { text: "Say hi in one word.".into(), queued: false, dropped: false });
+        assert_eq!(
+            all[0].body,
+            Body::User { text: "Say hi in one word.".into(), images: vec![], queued: false, dropped: false }
+        );
         assert!(!c.take_text().contains("command"));
         // A message replayed in pieces is still one, spaces and all.
         c.apply(&chunk("user_message_chunk", "Now say "));
         c.apply(&chunk("user_message_chunk", "bye."));
         assert_eq!(
             c.changes(None).entries[2].body,
-            Body::User { text: "Now say bye.".into(), queued: false, dropped: false }
+            Body::User { text: "Now say bye.".into(), images: vec![], queued: false, dropped: false }
         );
+    }
+
+    #[test]
+    fn a_replayed_picture_is_shown_with_the_words_it_was_sent_with() {
+        let mut c = Conversation::default();
+        let png = json!({ "type": "image", "mimeType": "image/png", "data": "iVBORw0KGgo=" });
+        c.apply(&json!({ "sessionUpdate": "user_message_chunk", "content": png }));
+        c.apply(&chunk("user_message_chunk", "What is wrong here?"));
+        c.apply(&chunk("agent_message_chunk", "The button."));
+        c.apply(&json!({ "sessionUpdate": "user_message_chunk", "content": png }));
+        let all = c.changes(None).entries;
+        let image = Image { mime_type: "image/png".into(), data: "iVBORw0KGgo=".into() };
+        let user =
+            |text: &str| Body::User { text: text.into(), images: vec![image.clone()], queued: false, dropped: false };
+        assert_eq!(all[0].body, user("What is wrong here?"));
+        assert_eq!(all[2].body, user(""), "a picture alone is a message too");
+        assert_eq!(c.take_text().matches("› [image]").count(), 2, "the text copy names each");
     }
 
     #[test]

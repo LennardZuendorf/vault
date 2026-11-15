@@ -84,7 +84,7 @@ impl State {
     /// still there to copy.
     pub(super) fn drop_queue(&mut self) {
         for q in std::mem::take(&mut self.queue) {
-            let entry = q.entry.unwrap_or_else(|| self.convo.user(&q.shown(), false));
+            let entry = q.entry.unwrap_or_else(|| self.convo.user(&q.text, q.images, false));
             self.convo.dequeue(entry, true);
         }
     }
@@ -97,19 +97,6 @@ pub(super) struct Queued {
     pub(super) text: String,
     pub(super) images: Vec<Image>,
     pub(super) entry: Option<usize>,
-}
-
-impl Queued {
-    /// What the conversation shows of it: its text, and each image named as
-    /// a replay names one (`read::block_text`), so the two read alike.
-    pub(super) fn shown(&self) -> String {
-        let images = vec!["[image]"; self.images.len()].join(" ");
-        match (self.text.trim().is_empty(), images.is_empty()) {
-            (_, true) => self.text.clone(),
-            (true, false) => images,
-            (false, false) => format!("{}\n{images}", self.text),
-        }
-    }
 }
 
 /// What handling something decided, done once the lock is let go.
@@ -334,7 +321,7 @@ impl Conn {
             match q.entry {
                 Some(entry) => st.convo.dequeue(entry, false),
                 None => {
-                    st.convo.user(&q.shown(), false);
+                    st.convo.user(&q.text, q.images.clone(), false);
                 }
             }
             self.send_prompt(st, fx, &q);
@@ -794,7 +781,9 @@ mod tests {
         assert_eq!(prompt[0], json!({ "type": "image", "mimeType": "image/png", "data": "iVBORw0KGgo=" }));
         assert_eq!(prompt[1], json!({ "type": "text", "text": "What is wrong here?" }));
         let shown = c.view(None).changes.entries.remove(0).body;
-        assert_eq!(shown, Body::User { text: "What is wrong here?\n[image]".into(), queued: false, dropped: false });
+        let user =
+            Body::User { text: "What is wrong here?".into(), images: vec![png()], queued: false, dropped: false };
+        assert_eq!(shown, user, "the picture is shown, not named");
     }
 
     #[test]
@@ -804,7 +793,7 @@ mod tests {
         let prompt = &sent(&rx)[0]["params"]["prompt"];
         assert_eq!(prompt.as_array().map(Vec::len), Some(2), "no empty text block: {prompt}");
         let shown = c.view(None).changes.entries.remove(0).body;
-        assert_eq!(shown, Body::User { text: "[image] [image]".into(), queued: false, dropped: false });
+        assert!(matches!(shown, Body::User { text, images, .. } if text.trim().is_empty() && images.len() == 2));
     }
 
     #[test]

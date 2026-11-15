@@ -2407,8 +2407,11 @@ count and banner treats it like any other.
   of themselves, still paste as text. A type the models do not read (a
   TIFF) is sent as a PNG. An agent that does not take images
   (`promptCapabilities.image`) is said to, and the prompt is refused
-  rather than sent without them. The conversation names each image
-  `[image]`, as a replay does.
+  rather than sent without them. The conversation shows each image sent,
+  small, with the words it went with, and one clicked whole in a dialog; a
+  replay (ACP-9) shows the images it carries the same way. Only what reads
+  the conversation as text (the scrollback's copy, Slack) names each
+  `[image]`.
 - **ACP-17** Settings → Agents MUST show, for each agent in the table
   above, where it is on the PATH and, under it, how it stands as a
   conversation: its ACP program's version (its `--version`, given 5

@@ -642,7 +642,7 @@ mod tests {
 
     #[test]
     fn a_turn_that_ended_on_an_error_says_which_and_a_new_prompt_clears_it() {
-        let user = |text: &str| Body::User { text: text.into(), queued: false, dropped: false };
+        let user = |text: &str| Body::User { text: text.into(), images: vec![], queued: false, dropped: false };
         let err = Body::Note { text: "API Error: Overloaded".into(), error: true };
         assert_eq!(failed_on([&user("go"), &err]).as_deref(), Some("API Error: Overloaded"));
         assert_eq!(failed_on([&user("go"), &err, &user("go on")]), None);

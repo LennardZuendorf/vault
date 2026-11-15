@@ -5,7 +5,7 @@
  * through every kind of entry; nothing like a real agent's timing.
  */
 import { emit } from "@tauri-apps/api/event";
-import type { AcpEntry, AcpSetting, AcpView } from "../lib/types";
+import type { AcpEntry, AcpImage, AcpSetting, AcpView } from "../lib/types";
 
 type Body = AcpEntry extends infer E
   ? E extends AcpEntry
@@ -98,6 +98,7 @@ export function seedHenchman(pane: string) {
   push(c, {
     kind: "user",
     text: "Call work_overview, then brief me in a few lines: what needs me, ranked, each by its key and what it waits for; what is stuck; what can be finished. Everything else in one line.",
+    images: [],
     queued: false,
     dropped: false,
   });
@@ -130,6 +131,7 @@ export function seedHenchman(pane: string) {
       "",
       "For each: if it asks something an order answers, answer it with pane_tell as the order says…",
     ].join("\n"),
+    images: [],
     queued: false,
     dropped: false,
   });
@@ -148,12 +150,30 @@ export function seedHenchman(pane: string) {
   });
 }
 
+/** A screenshot the user sent with their words (ACP-16): a login form saying "Too many tries". */
+const loginShot: AcpImage = {
+  mimeType: "image/svg+xml",
+  data: btoa(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="300">` +
+      `<rect width="480" height="300" fill="#f4f4f5"/>` +
+      `<rect x="120" y="40" width="240" height="220" rx="10" fill="#fff" stroke="#d4d4d8"/>` +
+      `<text x="140" y="80" font-family="sans-serif" font-size="18" font-weight="700" fill="#18181b">Sign in</text>` +
+      `<rect x="140" y="100" width="200" height="30" rx="5" fill="#fafafa" stroke="#d4d4d8"/>` +
+      `<rect x="140" y="140" width="200" height="30" rx="5" fill="#fafafa" stroke="#d4d4d8"/>` +
+      `<rect x="140" y="184" width="200" height="32" rx="5" fill="#4f46e5"/>` +
+      `<text x="240" y="205" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#fff">Sign in</text>` +
+      `<text x="140" y="240" font-family="sans-serif" font-size="12" fill="#dc2626">Too many tries. Wait a minute.</text>` +
+      `</svg>`,
+  ),
+};
+
 /** A conversation already under way, for the busy world's ACP pane. */
 export function seedAcp(pane: string) {
   const c = convo(pane);
   push(c, {
     kind: "user",
-    text: "Add rate limiting to POST /login: 5 tries a minute per IP.",
+    text: "Add rate limiting to POST /login: 5 tries a minute per IP. It should say this:",
+    images: [loginShot],
     queued: false,
     dropped: false,
   });
@@ -273,11 +293,9 @@ export const acpAnswers: Record<string, (a: Record<string, unknown>) => unknown>
   acp_prompt: (a) => {
     const pane = a.paneId as string;
     const c = convo(pane);
-    const images = (a.images as unknown[] | undefined)?.length ?? 0;
-    const text = [a.text as string, Array(images).fill("[image]").join(" ")]
-      .filter(Boolean)
-      .join("\n");
-    push(c, { kind: "user", text, queued: c.busy, dropped: false });
+    const images = (a.images as AcpImage[] | undefined) ?? [];
+    const text = a.text as string;
+    push(c, { kind: "user", text, images, queued: c.busy, dropped: false });
     if (c.busy) {
       tell(pane);
       return null;
