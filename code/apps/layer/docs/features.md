@@ -2415,12 +2415,18 @@ count and banner treats it like any other.
   not on Mine). A word is a key only when its project is one Layer knows,
   from a task's ticket or a ticket it has read, so `SHA-256` and `UTF-8`
   stay words. A key in code or already in a link is left as it is.
+- **ACP-19** What Layer itself types into a conversation (a message that
+  starts `[villain-layer …]`: what finished for the Henchman, a word from
+  it, a repository added to the task) MUST be shown apart from the user's
+  words, muted and folded to its first line with its tag ("Layer ·
+  finished"), and open on a click. The Henchman is sent one each time
+  agents stop (HEN-9), and its conversation was nothing but those.
 
 Code: `acp/` (`conn.rs` the protocol, `user.rs`, `conversation.rs`,
 `entry.rs`, `read.rs`, `process.rs`, `version.rs` for ACP-17), `pty/acp.rs`,
 `commands/acp_panes.rs`, `agents.rs` (`AcpCommand`), `AcpPane.tsx`,
 `lib/acpUpdates.ts`, `lib/types-acp.ts`, `AgentSettings.tsx`, `lib/issue-keys.ts` and
-`IssueKeyLink.tsx` (ACP-18). A real agent is checked with
+`IssueKeyLink.tsx` (ACP-18), `lib/acpEntries.ts` (`layerSaid`, ACP-19). A real agent is checked with
 `VILLAIN_ACP_AGENT="opencode acp" cargo test --lib real_agent -- --ignored`.
 
 Known gaps:

@@ -40,3 +40,31 @@ function firstAt(list: readonly AcpEntry[], index: number): number {
   }
   return lo;
 }
+
+/** What Layer itself said in a conversation, split for folding (ACP-19). */
+export interface LayerSaid {
+  /** The bracket's words after "villain-layer", if any: "finished", "from the Henchman". */
+  tag: string;
+  /** The rest of its first line. */
+  first: string;
+  /** Everything after the first line; empty when there is none. */
+  rest: string;
+}
+
+/**
+ * A message Layer typed for the user (`[villain-layer · …] …`), or null for
+ * the user's own words. The Henchman is sent one each time agents finish a
+ * turn, with every standing order in it, and its conversation was nothing
+ * but those.
+ */
+export function layerSaid(text: string): LayerSaid | null {
+  const m = /^\[villain-layer(?: · ([^\]]*))?\] ?/.exec(text);
+  if (!m) return null;
+  const body = text.slice(m[0].length);
+  const nl = body.indexOf("\n");
+  return {
+    tag: m[1] ?? "",
+    first: nl < 0 ? body : body.slice(0, nl),
+    rest: nl < 0 ? "" : body.slice(nl + 1).trim(),
+  };
+}

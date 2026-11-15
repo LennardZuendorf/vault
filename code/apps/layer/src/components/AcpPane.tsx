@@ -8,6 +8,7 @@ import {
   type ClipboardEvent,
   type ReactNode,
 } from "react";
+import { layerSaid } from "../lib/acpEntries";
 import { heldConversation, holdConversation, pruneConversations } from "../lib/acpPool";
 import { onAcpUpdate } from "../lib/acpUpdates";
 import { api } from "../lib/api";
@@ -349,7 +350,25 @@ const Entry = memo(
     onAnswer: (entry: number, option: string) => void;
   }) {
     switch (entry.kind) {
-      case "user":
+      case "user": {
+        // Layer's own notes, folded to their first line (ACP-19).
+        const layer = layerSaid(entry.text);
+        if (layer) {
+          const head = (
+            <>
+              <span className="acp-layer-tag">{layer.tag ? `Layer · ${layer.tag}` : "Layer"}</span>
+              {layer.first}
+            </>
+          );
+          return layer.rest ? (
+            <details className="acp-layer">
+              <summary>{head}</summary>
+              <div>{layer.rest}</div>
+            </details>
+          ) : (
+            <div className="acp-layer">{head}</div>
+          );
+        }
         return (
           <div className={`acp-user${entry.dropped ? " dropped" : ""}`}>
             <div className="acp-user-text">{entry.text}</div>
@@ -357,6 +376,7 @@ const Entry = memo(
             {entry.dropped && <div className="muted">Not sent: the turn before it was stopped</div>}
           </div>
         );
+      }
       case "agent":
         return (
           <div className="acp-agent">

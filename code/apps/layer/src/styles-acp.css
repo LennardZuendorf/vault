@@ -110,6 +110,32 @@
   padding: 4px 0 0 14px;
   line-height: 1.5;
 }
+/* What Layer typed into a conversation, not the user (ACP-19). */
+.acp-layer {
+  color: var(--muted);
+  font-size: calc(var(--acp-text) * 0.93);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+details.acp-layer {
+  white-space: normal;
+}
+.acp-layer summary {
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acp-layer > div {
+  white-space: pre-wrap;
+  padding: 4px 0 0 14px;
+  line-height: 1.5;
+}
+.acp-layer-tag {
+  margin-right: 8px;
+  font-weight: 600;
+}
 .acp-label {
   font-size: calc(var(--acp-text) * 0.89);
   font-weight: 600;
