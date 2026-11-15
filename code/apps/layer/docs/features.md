@@ -3528,7 +3528,9 @@ driving tickets and reaching it from Slack come later.
   and what it never does: write code, edit files, merge, or answer anyone
   in Jira, GitHub or Slack without asking. It is not listed in Chat and
   does not count as a chat that is working; its banners and messages
-  open its tab. It is restored at launch like any chat (PANE-7).
+  open its tab. It is restored at launch like any chat (PANE-7). It
+  opens in auto mode where its agent has one, restored too, so reading
+  Layer through its tools asks nothing first.
 - **HEN-3** Woken, it MUST be asked for a brief: what needs you, ranked,
   each by its key and what it waits for; what is stuck; what can be
   finished; everything else as one line. It reads all of it with one

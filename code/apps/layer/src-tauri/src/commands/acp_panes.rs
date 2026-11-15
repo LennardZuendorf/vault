@@ -80,7 +80,11 @@ pub(crate) fn start(app: &AppHandle, state: &AppState, def: &agents::AgentDef, s
         title_activity: None,
         title_topic: None,
     };
-    let presets = crate::slack_bot::presets_for(&state.config.read(), &opts.cwd);
+    let presets = if super::henchman::is_room(state, std::path::Path::new(&opts.cwd)) {
+        super::henchman::presets()
+    } else {
+        crate::slack_bot::presets_for(&state.config.read(), &opts.cwd)
+    };
     state.ptys.spawn_acp(app, opts, acp::Launch { mcp, pick, prompt, presets, on_session: Some(on_session) })
 }
 

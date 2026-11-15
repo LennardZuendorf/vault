@@ -21,6 +21,15 @@ const BRIEF: &str = "Call work_overview, then brief me in a few lines: what need
                      each by its key and what it waits for; what is stuck; what can be finished. \
                      Everything else in one line.";
 
+/// How its conversation is set when it opens, restored ones too (HEN-2):
+/// in auto mode, where the agent has one. Every brief begins with
+/// `work_overview`, and in the agent's own mode each of its tools asked
+/// first, a click before every answer. None of them changes anything the
+/// user did not ask for in the chat.
+pub(crate) fn presets() -> Vec<(String, String)> {
+    vec![("mode".to_string(), "auto".to_string())]
+}
+
 /// Whether `dir` is the Henchman's room. By path under the worktree root,
 /// not by creating it: this is asked of every chat pane.
 pub(crate) fn is_room(state: &AppState, dir: &Path) -> bool {
@@ -115,4 +124,14 @@ pub(crate) fn write_context(state: &AppState, dir: &Path) -> Result<()> {
     std::fs::write(dir.join("CLAUDE.md"), &md)?;
     std::fs::write(dir.join("AGENTS.md"), &md)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_henchman_opens_in_auto_mode() {
+        assert_eq!(presets(), [("mode".to_string(), "auto".to_string())]);
+    }
 }
