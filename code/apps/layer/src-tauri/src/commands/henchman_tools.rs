@@ -59,8 +59,9 @@ fn listed() -> Vec<Value> {
             "work_overview",
             "How all of Layer stands, in one call. Every task in the lair's groups: needs_you \
              (ranked: an agent asks, is out of budget, or finished; changes asked for or checks \
-             failed while no agent works), to_finish (every PR merged), moving (an agent works, \
-             or a PR is open), not_started and quiet. Each with why, its ticket, agents and their \
+             failed while no agent works), to_finish (every PR merged, and an epic's sub-tasks' \
+             too), moving (an agent works, a PR is open, or an epic's sub-tasks are), not_started \
+             and quiet. Each with why, its ticket, agents and their \
              states, and pull requests (verdict, failed checks, replies owed). Then the open \
              chats, each with its state and what it last said; then the processes the panes \
              started that still run, with their ports.",
@@ -265,8 +266,11 @@ struct Facts {
     working: bool,
     changes_requested: bool,
     checks_failed: bool,
-    /// Some PR open or merged, and every one of them merged.
+    /// Some PR open or merged, and every one of them merged; for an epic,
+    /// every sub-task's too.
     merged: bool,
+    /// An epic with a sub-task whose pull requests have not all merged.
+    sub_tasks_open: bool,
     open: usize,
     approved: bool,
     agents: bool,
@@ -282,12 +286,22 @@ fn is_open(r: &CheckoutPr) -> bool {
     r.pr.as_ref().is_some_and(|p| p.state == "open")
 }
 
-fn facts(agents: &[PaneInfo], rows: &[CheckoutPr], changed: u32) -> Facts {
+/// `sub_tasks` is whether each of an epic's sub-tasks has merged; empty for
+/// any other task.
+fn facts(agents: &[PaneInfo], rows: &[CheckoutPr], changed: u32, sub_tasks: &[bool]) -> Facts {
     let live: Vec<&PaneInfo> = agents.iter().filter(|p| p.kind == PaneKind::Agent && p.running).collect();
     let budget = |p: &&PaneInfo| p.notice.as_deref() == Some("usage_limit");
     let open: Vec<&CheckoutPr> = rows.iter().filter(|r| is_open(r)).collect();
     let landed: Vec<&CheckoutPr> =
         rows.iter().filter(|r| r.pr.as_ref().is_some_and(|p| p.state == "open" || p.merged)).collect();
+    let sub_tasks_open = sub_tasks.iter().any(|merged| !merged);
+    // An epic's own pull request merging said "finish the task" while its
+    // sub-tasks were still in review: it is merged once they all are.
+    let merged = if sub_tasks.is_empty() {
+        !landed.is_empty() && landed.iter().all(|r| r.pr.as_ref().is_some_and(|p| p.merged))
+    } else {
+        open.is_empty() && !sub_tasks_open
+    };
     Facts {
         asking: live.iter().any(|p| p.activity == Activity::Asking && !budget(p)),
         out_of_budget: live.iter().any(budget),
@@ -295,7 +309,8 @@ fn facts(agents: &[PaneInfo], rows: &[CheckoutPr], changed: u32) -> Facts {
         working: live.iter().any(|p| p.activity == Activity::Working),
         changes_requested: open.iter().any(|r| r.verdict == "changes_requested"),
         checks_failed: open.iter().any(|r| r.checks.iter().any(|c| failed(c.conclusion.as_deref()))),
-        merged: !landed.is_empty() && landed.iter().all(|r| r.pr.as_ref().is_some_and(|p| p.merged)),
+        merged,
+        sub_tasks_open,
         open: open.len(),
         approved: !open.is_empty() && open.iter().all(|r| r.verdict == "approved"),
         agents: !live.is_empty(),
@@ -330,6 +345,9 @@ fn sort(f: &Facts) -> (Group, u8, &'static str) {
     }
     if f.open > 0 {
         return (Group::Moving, 0, if f.approved { "approved" } else { "in review" });
+    }
+    if f.sub_tasks_open {
+        return (Group::Moving, 0, "its sub-tasks are not all merged");
     }
     if !f.agents && !f.prs && f.changed == 0 {
         return (Group::NotStarted, 0, "not started");
@@ -425,12 +443,17 @@ async fn overview(app: &AppHandle) -> Result<Value> {
     let processes = super::blocking(app.clone(), super::processes::list).await.unwrap_or_default();
     let standing = super::henchman_orders::orders(&state);
 
+    let rows_of = |id: &str| prs.get(id).map(Vec::as_slice).unwrap_or_default();
+    let sub_tasks = |epic: &Task| -> Vec<bool> {
+        let of_it = |t: &&Task| epic.epic && t.sub_task.as_ref().is_some_and(|s| s.epic == epic.id);
+        tasks.iter().filter(of_it).map(|t| facts(&[], rows_of(&t.id), 0, &[]).merged).collect()
+    };
     let mut rows: Vec<(Group, u8, Value)> = tasks
         .iter()
         .map(|task| {
             let agents: Vec<PaneInfo> = panes.iter().filter(|p| p.task_id == task.id).cloned().collect();
-            let pr_rows = prs.get(&task.id).map(Vec::as_slice).unwrap_or_default();
-            let (group, rank, why) = sort(&facts(&agents, pr_rows, changed(&state, &task.id)));
+            let pr_rows = rows_of(&task.id);
+            let (group, rank, why) = sort(&facts(&agents, pr_rows, changed(&state, &task.id), &sub_tasks(task)));
             let row = json!({
                 "task_id": task.id,
                 "key": task.issue_key,
@@ -599,6 +622,13 @@ mod tests {
     fn every_pr_merged_is_to_finish() {
         let f = Facts { merged: true, prs: true, ..Facts::default() };
         assert_eq!(sort(&f).0, Group::ToFinish);
+    }
+
+    #[test]
+    fn an_epic_is_to_finish_only_once_every_sub_task_has_merged() {
+        assert_eq!(sort(&facts(&[], &[], 0, &[true, false])), (Group::Moving, 0, "its sub-tasks are not all merged"));
+        assert_eq!(sort(&facts(&[], &[], 0, &[true, true])).0, Group::ToFinish);
+        assert_eq!(sort(&facts(&[], &[], 0, &[])).0, Group::NotStarted);
     }
 
     #[test]

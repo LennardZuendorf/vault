@@ -20,8 +20,10 @@ export interface Facts {
   working: boolean;
   changesRequested: boolean;
   checksFailed: boolean;
-  /** Some PR open or merged, and every one of them merged. */
+  /** Some PR open or merged, and every one of them merged; for an epic, every sub-task's too. */
   merged: boolean;
+  /** An epic with a sub-task whose pull requests have not all merged. */
+  subTasksOpen: boolean;
   open: number;
   approved: boolean;
   agents: boolean;
@@ -31,11 +33,18 @@ export interface Facts {
 
 const FAILED = new Set(["failure", "timed_out", "action_required", "startup_failure"]);
 
-export function facts(panes: PaneInfo[], rows: CheckoutPr[], changed: number): Facts {
+/** `subTasks` is whether each of an epic's sub-tasks has merged; empty for any other task. */
+export function facts(
+  panes: PaneInfo[],
+  rows: CheckoutPr[],
+  changed: number,
+  subTasks: boolean[] = [],
+): Facts {
   const live = panes.filter((p) => p.kind === "agent" && p.running);
   const budget = (p: PaneInfo) => p.notice === "usage_limit";
   const open = rows.filter((r) => r.pr?.state === "open");
   const landed = rows.filter((r) => r.pr && (r.pr.state === "open" || r.pr.merged));
+  const subTasksOpen = subTasks.some((m) => !m);
   return {
     asking: live.some((p) => p.activity === "asking" && !budget(p)),
     outOfBudget: live.some(budget),
@@ -43,7 +52,13 @@ export function facts(panes: PaneInfo[], rows: CheckoutPr[], changed: number): F
     working: live.some((p) => p.activity === "working"),
     changesRequested: open.some((r) => r.verdict === "changes_requested"),
     checksFailed: open.some((r) => r.checks.some((c) => FAILED.has(c.conclusion ?? ""))),
-    merged: landed.length > 0 && landed.every((r) => r.pr!.merged),
+    // An epic's own pull request merging said "finish the task" while its
+    // sub-tasks were still in review: it is merged once they all are.
+    merged:
+      subTasks.length === 0
+        ? landed.length > 0 && landed.every((r) => r.pr!.merged)
+        : open.length === 0 && !subTasksOpen,
+    subTasksOpen,
     open: open.length,
     approved: open.length > 0 && open.every((r) => r.verdict === "approved"),
     agents: live.length > 0,
@@ -63,6 +78,7 @@ export function sortTask(f: Facts): { group: LairGroup; rank: number; why: strin
   if (f.merged) return { group: "to_finish", rank: 0, why: "merged" };
   if (f.working) return { group: "moving", rank: 0, why: "its agent is working" };
   if (f.open > 0) return { group: "moving", rank: 0, why: f.approved ? "approved" : "in review" };
+  if (f.subTasksOpen) return { group: "moving", rank: 0, why: "its sub-tasks are not all merged" };
   if (!f.agents && !f.prs && f.changed === 0)
     return { group: "not_started", rank: 0, why: "not started" };
   return { group: "quiet", rank: 0, why: f.agents ? "its agent is idle" : "nothing running" };
@@ -96,11 +112,19 @@ export function waiting(
   prs: Record<string, CheckoutPr[]>,
 ): Waiting[] {
   const henchman = panes.some((p) => p.running && isHenchman(p));
+  const subTasks = new Map<string, boolean[]>();
+  for (const t of tasks) {
+    if (!t.sub_task) continue;
+    const epic = t.sub_task.epic;
+    subTasks.set(epic, [...(subTasks.get(epic) ?? []), facts([], prs[t.id] ?? [], 0).merged]);
+  }
   const out: { w: Waiting; rank: number }[] = [];
   for (const task of tasks) {
     const own = panes.filter((p) => p.task_id === task.id);
     const t = taskTotals(task);
-    const s = sortTask(facts(own, prs[task.id] ?? [], t.changed + t.ahead + t.staged + t.dirty));
+    const changed = t.changed + t.ahead + t.staged + t.dirty;
+    const subs = task.epic ? (subTasks.get(task.id) ?? []) : [];
+    const s = sortTask(facts(own, prs[task.id] ?? [], changed, subs));
     const finish = s.group === "to_finish";
     if (!finish && !(s.group === "needs_you" && (!henchman || s.rank <= 1))) continue;
     const live = own.filter((p) => p.kind === "agent" && p.running);

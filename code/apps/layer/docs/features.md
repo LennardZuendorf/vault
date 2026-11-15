@@ -3622,9 +3622,13 @@ Slack come later.
     agent finished and you haven't looked; changes requested on an open
     PR while no agent works on it; a failed check on an open PR while no
     agent works on it.
-  - **to_finish**: every PR merged (`taskReview` is merged).
+  - **to_finish**: every PR merged (`taskReview` is merged). An epic
+    (EPIC-1) is to finish only once each of its sub-tasks has merged too,
+    and any PR of its own. Before, its own PR merging listed it with
+    Finish while its sub-tasks were still in review.
   - **moving**: an agent works on it, or a PR is open ("approved", "in
-    review").
+    review"), or an epic's sub-tasks are not all merged ("its sub-tasks
+    are not all merged").
   - **not_started**: no agents, no PRs, and nothing changed, committed
     or left uncommitted.
   - **quiet**: everything else.

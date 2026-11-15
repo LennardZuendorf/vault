@@ -63,8 +63,8 @@ function task(id: string, changed = 0): TaskView {
   } as unknown as TaskView;
 }
 
-const why = (panes: PaneInfo[], rows: CheckoutPr[] = [], changed = 0) =>
-  sortTask(facts(panes, rows, changed));
+const why = (panes: PaneInfo[], rows: CheckoutPr[] = [], changed = 0, subTasks: boolean[] = []) =>
+  sortTask(facts(panes, rows, changed, subTasks));
 
 describe("the lair's groups (HEN-5)", () => {
   test("an agent that asks comes before everything a pull request says", () => {
@@ -104,6 +104,17 @@ describe("the lair's groups (HEN-5)", () => {
     expect(why([], [pr({ merged: true }), pr()]).group).toBe("moving");
   });
 
+  test("an epic is to finish only once every sub-task has merged, whatever its own PR says", () => {
+    const own = [pr({ merged: true })];
+    expect(why([], own, 0, [true, false])).toEqual({
+      group: "moving",
+      rank: 0,
+      why: "its sub-tasks are not all merged",
+    });
+    expect(why([], own, 0, [true, true]).group).toBe("to_finish");
+    expect(why([], [], 0, [true]).group).toBe("to_finish");
+  });
+
   test("a task with no agent, no PR and no change is not started; with changes it is quiet", () => {
     expect(why([]).group).toBe("not_started");
     expect(why([], [], 2)).toEqual({ group: "quiet", rank: 0, why: "nothing running" });
@@ -139,6 +150,14 @@ describe("the lair's Needs you (HEN-5)", () => {
     const w = waiting(tasks, panes, prs);
     expect(w[0].pane?.id).toBe("p2");
     expect(w[3]).toMatchObject({ finish: true, why: "merged: finish the task" });
+  });
+
+  test("an epic waits for its sub-tasks: no Finish while one is still in review", () => {
+    const epic = { ...task("e"), epic: true } as TaskView;
+    const sub = { ...task("s"), sub_task: { epic: "e", title: "Sub" } } as TaskView;
+    const merged = { e: [pr({ merged: true })], s: [pr({ merged: true })] };
+    expect(waiting([epic, sub], [], { ...merged, s: [pr()] }).map((x) => x.id)).toEqual([]);
+    expect(waiting([epic, sub], [], merged).map((x) => x.id)).toEqual(["e", "s"]);
   });
 
   test("the Henchman is not one of its own chats", () => {
