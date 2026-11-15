@@ -2,7 +2,7 @@
 //! (PANE-7).
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -160,10 +160,20 @@ const _: () = assert!(RESTORE_LIMIT < crate::pty::PANE_LIMIT);
 /// Agents first because a shell has no conversation to lose: in the order the
 /// panes were opened, a restart with 12 agents and 2 shells left out the two
 /// newest, one of them a chat with a day's work in it.
-pub(crate) fn panes_to_restore(saved: Vec<SavedPane>, limit: usize) -> Vec<SavedPane> {
+///
+/// What `first` picks comes before every other agent: the Henchman (HEN-2).
+/// Opened late, it was the thirteenth agent at a quit and waited, its tab
+/// offered only Wake, and every restart began it a new conversation.
+pub(crate) fn panes_to_restore(
+    saved: Vec<SavedPane>,
+    limit: usize,
+    first: impl Fn(&SavedPane) -> bool,
+) -> Vec<SavedPane> {
     let mut seen = HashSet::new();
-    let (agents, shells): (Vec<SavedPane>, Vec<SavedPane>) =
+    let (mut agents, shells): (Vec<SavedPane>, Vec<SavedPane>) =
         saved.into_iter().filter(|p| !p.waiting && seen.insert(p.id.clone())).partition(|p| p.kind != "shell");
+    // Stable: the rest keep the order they were opened in.
+    agents.sort_by_key(|p| !first(p));
     agents.into_iter().chain(shells).take(limit).collect()
 }
 
@@ -192,7 +202,10 @@ pub fn restore_panes(app: &AppHandle) {
         return;
     }
 
-    let saved = panes_to_restore(state.config.read().saved_panes, RESTORE_LIMIT);
+    let henchman = |p: &SavedPane| {
+        p.task_id == CHAT_TASK_ID && p.cwd.as_deref().is_some_and(|c| super::henchman::is_room(&state, Path::new(c)))
+    };
+    let saved = panes_to_restore(state.config.read().saved_panes, RESTORE_LIMIT, henchman);
     // What does not come back now waits rather than being forgotten. It was
     // forgotten here, and the notice said only "Restored 12 of 14 panes":
     // nothing in the app could bring the other two back.
@@ -523,17 +536,28 @@ mod tests {
 
     #[test]
     fn agents_come_back_before_shells_so_a_conversation_is_never_what_waits() {
-        let back = panes_to_restore(the_restart_that_lost_a_chat(), RESTORE_LIMIT);
+        let back = panes_to_restore(the_restart_that_lost_a_chat(), RESTORE_LIMIT, |_| false);
         assert_eq!(back.len(), RESTORE_LIMIT);
         assert!(back.iter().any(|p| p.id == "the-chat"), "the chat comes back");
         assert!(back.iter().all(|p| p.kind == "agent"), "the shells are the ones that wait");
     }
 
     #[test]
+    fn the_henchman_comes_back_first_however_many_agents_were_open() {
+        let mut saved = the_restart_that_lost_a_chat();
+        saved.push(pane("agent-late", "t1", "agent"));
+        saved.push(pane("henchman", CHAT_TASK_ID, "agent"));
+        let back = panes_to_restore(saved, RESTORE_LIMIT, |p| p.id == "henchman");
+        assert_eq!(back.len(), RESTORE_LIMIT);
+        assert_eq!(back[0].id, "henchman", "it is opened before the rest");
+        assert_eq!(back[1].id, "agent-0", "the rest keep their order");
+    }
+
+    #[test]
     fn a_pane_over_the_restore_limit_waits_instead_of_being_forgotten() {
         let mut saved = the_restart_that_lost_a_chat();
         saved.extend((0..3).map(|i| pane(&format!("late-{i}"), "t2", "agent")));
-        let back = panes_to_restore(saved.clone(), RESTORE_LIMIT);
+        let back = panes_to_restore(saved.clone(), RESTORE_LIMIT, |_| false);
         let putting_back: HashSet<String> = back.iter().map(|p| p.id.clone()).collect();
 
         assert_eq!(wait_for_the_rest(&mut saved, &putting_back), 5);
@@ -547,7 +571,7 @@ mod tests {
     fn a_waiting_pane_is_left_for_the_user_not_reopened_by_a_later_launch() {
         let mut waiting = pane("w", "t1", "agent");
         waiting.waiting = true;
-        let back = panes_to_restore(vec![waiting, pane("open", "t1", "shell")], RESTORE_LIMIT);
+        let back = panes_to_restore(vec![waiting, pane("open", "t1", "shell")], RESTORE_LIMIT, |_| false);
         assert_eq!(back.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["open"]);
     }
 

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../../lib/api";
 import { isHenchman } from "../../lib/lair";
+import type { WaitingPane } from "../../lib/types";
 import { useStore } from "../../store";
 import { PaneView } from "../AcpPane";
 import { PaneExited, useRestart } from "../Restart";
@@ -23,19 +24,31 @@ export function HenchmanView() {
   // The one running, else the last: an exited one says so and offers Resume.
   const pane = panes.find((p) => p.running) ?? panes[panes.length - 1];
   const agent = agents.find((a) => a.installed && a.acp);
+  const asleep = useStore(useShallow((s) => s.waiting.filter(isWaitingHenchman)));
 
   async function wake() {
-    if (!agent || waking) return;
+    // One not put back at launch (PANE-7) comes back with its conversation.
+    // Forgotten and replaced, it began a new one at every restart that left
+    // it waiting.
+    const left = useStore.getState().waiting.filter(isWaitingHenchman);
+    const back = left[left.length - 1];
+    if (waking || (!back && !agent)) return;
     setWaking(true);
     failure.clear();
     try {
-      // One not put back at launch (PANE-7) is replaced, not kept waiting
-      // where nothing shows it.
-      const left = useStore
-        .getState()
-        .waiting.filter((w) => w.cwd && isHenchman({ task_id: w.task_id, cwd: w.cwd }));
-      await Promise.all(left.map((w) => api.forgetWaitingPane(w.id).catch(() => {})));
-      await api.spawnHenchman(agent.id);
+      const forget = (ids: string[]) =>
+        Promise.all(ids.map((id) => api.forgetWaitingPane(id).catch(() => {})));
+      await forget(left.filter((w) => w !== back).map((w) => w.id));
+      if (back) {
+        // One that cannot come back is let go, so the next click wakes a
+        // new one instead of failing again.
+        await api.reopenWaitingPane(back.id).catch(async (e: unknown) => {
+          await forget([back.id]);
+          throw e;
+        });
+      } else if (agent) {
+        await api.spawnHenchman(agent.id);
+      }
       await Promise.all([refreshPanes(), useStore.getState().refreshWaiting()]);
     } catch (e) {
       failure.fail(e);
@@ -71,14 +84,16 @@ export function HenchmanView() {
             </p>
             <button
               className="ui-button ui-button-primary"
-              disabled={!agent || waking}
+              disabled={(!agent && asleep.length === 0) || waking}
               onClick={() => void wake()}
             >
               {waking
                 ? "Waking…"
-                : agent
-                  ? `Wake the Henchman with ${agent.name}`
-                  : "No agent that talks over ACP"}
+                : asleep.length > 0
+                  ? "Wake the Henchman where it left off"
+                  : agent
+                    ? `Wake the Henchman with ${agent.name}`
+                    : "No agent that talks over ACP"}
             </button>
             <ErrorMessage>{failure.error}</ErrorMessage>
           </div>
@@ -87,6 +102,11 @@ export function HenchmanView() {
       <LairColumn />
     </div>
   );
+}
+
+/** A Henchman not put back at launch (PANE-7), waiting to be reopened. */
+function isWaitingHenchman(w: WaitingPane): boolean {
+  return w.cwd !== null && isHenchman({ task_id: w.task_id, cwd: w.cwd });
 }
 
 /** The title above the conversation: when the Henchman woke. */

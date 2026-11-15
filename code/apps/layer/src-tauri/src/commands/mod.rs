@@ -423,7 +423,7 @@ mod tests {
             saved("2", "t", "shell", "/w"),
             saved("2", "t", "shell", "/w"),
         ];
-        assert_eq!(panes_to_restore(doubled, RESTORE_LIMIT).len(), 2);
+        assert_eq!(panes_to_restore(doubled, RESTORE_LIMIT, |_| false).len(), 2);
     }
 
     #[test]
@@ -433,7 +433,7 @@ mod tests {
         // of them away at every launch.
         let shells =
             vec![saved("1", "t", "shell", "/w"), saved("2", "t", "shell", "/w"), saved("3", "t", "shell", "/w")];
-        assert_eq!(panes_to_restore(shells, RESTORE_LIMIT).len(), 3);
+        assert_eq!(panes_to_restore(shells, RESTORE_LIMIT, |_| false).len(), 3);
     }
 
     #[test]
@@ -442,14 +442,14 @@ mod tests {
         // take the machine down, so it holds even when every entry is distinct.
         let many: Vec<SavedPane> =
             (0..500).map(|i| saved(&i.to_string(), &format!("task{i}"), "shell", &format!("/w{i}"))).collect();
-        assert_eq!(panes_to_restore(many, RESTORE_LIMIT).len(), RESTORE_LIMIT);
+        assert_eq!(panes_to_restore(many, RESTORE_LIMIT, |_| false).len(), RESTORE_LIMIT);
     }
 
     #[test]
     fn panes_in_different_places_are_all_kept() {
         let distinct =
             vec![saved("1", "t", "agent", "/a"), saved("2", "t", "agent", "/b"), saved("3", "chat", "agent", "/c")];
-        assert_eq!(panes_to_restore(distinct, RESTORE_LIMIT).len(), 3);
+        assert_eq!(panes_to_restore(distinct, RESTORE_LIMIT, |_| false).len(), 3);
     }
 
     /// The fan-out matches its answers back to checkouts by position, so an
@@ -524,7 +524,7 @@ mod tests {
         // Nothing else may be dropped: the message the user sees says
         // "duplicates dropped", and it has to be true.
         let many: Vec<SavedPane> = (0..RESTORE_LIMIT).map(|i| saved(&i.to_string(), "t", "shell", "/same")).collect();
-        assert_eq!(panes_to_restore(many, RESTORE_LIMIT).len(), RESTORE_LIMIT);
+        assert_eq!(panes_to_restore(many, RESTORE_LIMIT, |_| false).len(), RESTORE_LIMIT);
     }
 
     /// The clone a task was cut from is cloned again, as happened to seven

@@ -3567,7 +3567,12 @@ Slack come later.
   and what it never does: write code, edit files, merge, or answer anyone
   in Jira, GitHub or Slack without asking. It is not listed in Chat and
   does not count as a chat that is working; its banners and messages
-  open its tab. It is restored at launch like any chat (PANE-7). It
+  open its tab. It is restored at launch like any chat (PANE-7), and
+  before every other agent, so the restore limit never leaves it
+  waiting. One that waits all the same is woken from its tab where it
+  left off, in its own conversation. Before, it came back in the order
+  it was opened: with twelve agents open at a quit it waited, and Wake
+  forgot it and began a new conversation. It
   opens in auto mode where its agent has one, restored too, so reading
   Layer through its tools asks nothing first. Its conversation opens
   with Claude Code settings in `session/new`'s `_meta` (and load,
