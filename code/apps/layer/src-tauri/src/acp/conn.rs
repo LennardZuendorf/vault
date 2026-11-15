@@ -73,6 +73,8 @@ pub(super) struct State {
     pub(super) queue: VecDeque<Queued>,
     /// What to set once the conversation is open (`Launch::presets`).
     pub(super) presets: VecDeque<(String, String)>,
+    /// What goes with opening the conversation (`Launch::meta`).
+    pub(super) meta: Option<Value>,
     /// What its finished turns used, where it says (RUN-4).
     pub(super) tokens: Option<crate::runs::Tokens>,
 }
@@ -163,6 +165,7 @@ impl Conn {
                 exited: false,
                 queue,
                 presets: launch.presets.into(),
+                meta: launch.meta,
                 tokens: None,
             }),
             pane: OnceLock::new(),
@@ -279,11 +282,15 @@ impl Conn {
     fn open_as(&self, st: &mut State, fx: &mut Effects, opening: Opening) {
         let servers = self.servers(st);
         let cwd = st.cwd.clone();
-        let (method, params) = match &opening {
+        let (method, mut params) = match &opening {
             Opening::New => ("session/new", json!({ "cwd": cwd, "mcpServers": servers })),
             Opening::Load(id) => ("session/load", json!({ "sessionId": id, "cwd": cwd, "mcpServers": servers })),
             Opening::Resume(id) => ("session/resume", json!({ "sessionId": id, "cwd": cwd, "mcpServers": servers })),
         };
+        // On a load or resume too: the agent starts its process again for it.
+        if let (Some(meta), Some(p)) = (&st.meta, params.as_object_mut()) {
+            p.insert("_meta".into(), meta.clone());
+        }
         self.request(st, fx, method, params, Waiting::Open(opening));
     }
 
@@ -644,6 +651,7 @@ mod tests {
             pick,
             prompt: prompt.map(str::to_string),
             presets: Vec::new(),
+            meta: None,
             on_session: None,
         }
     }
@@ -694,6 +702,26 @@ mod tests {
         assert_eq!(server["headers"][0]["value"], "Bearer tok");
         assert_eq!(server["headers"][1], json!({ "name": "X-Villain-Pane", "value": "pane-1" }));
         assert_eq!(new["params"]["cwd"], "/work");
+    }
+
+    #[test]
+    fn the_launchs_meta_goes_with_opening_the_conversation_new_or_picked_up() {
+        let meta = json!({ "claudeCode": { "options": { "settings": { "autoMode": { "allow": ["$defaults"] } } } } });
+        for (pick, method) in [(Pick::New, "session/new"), (Pick::Id("s-0".into()), "session/load")] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let mut l = launch(pick, None);
+            l.meta = Some(meta.clone());
+            let c = Conn::new(l, "/work", "pane-1", tx);
+            c.begin(Box::new(FakePane(Default::default())));
+            let init = sent(&rx).remove(0);
+            reply(&c, &init["id"], serde_json::from_str(CAPS).unwrap());
+            let open = sent(&rx).remove(0);
+            assert_eq!(open["method"], method);
+            assert_eq!(open["params"]["_meta"], meta);
+        }
+        let (c, rx, _) = conn(Pick::New, None);
+        reply(&c, &sent(&rx).remove(0)["id"], serde_json::from_str(CAPS).unwrap());
+        assert!(sent(&rx)[0]["params"].get("_meta").is_none(), "nothing for an agent with none");
     }
 
     #[test]

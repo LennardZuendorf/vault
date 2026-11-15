@@ -182,21 +182,39 @@ pub(crate) fn write_context(state: &AppState, dir: &Path) -> Result<()> {
     }
     std::fs::write(dir.join("CLAUDE.md"), &md)?;
     std::fs::write(dir.join("AGENTS.md"), &md)?;
-    std::fs::create_dir_all(dir.join(".claude"))?;
-    std::fs::write(dir.join(".claude").join("settings.json"), serde_json::to_vec_pretty(&settings())?)?;
+    // Where its settings were, which auto mode never read (`session_meta`).
+    let _ = std::fs::remove_file(dir.join(".claude").join("settings.json"));
     Ok(())
 }
 
-/// Its Claude Code settings, in its room (HEN-2): its own tools allowed.
-/// In auto mode a classifier judges each tool call, and it refused
-/// `task_work` on a task the user had just asked to start. None of them
-/// changes shared state (HEN-4); the user's word is the check they need.
-fn settings() -> serde_json::Value {
-    let allow: Vec<String> = super::henchman_tools::names()
-        .into_iter()
-        .map(|name| format!("mcp__{}__{name}", crate::mcp::SERVER_NAME))
-        .collect();
-    serde_json::json!({ "permissions": { "allow": allow } })
+/// Its Claude Code settings (HEN-2), given with opening its conversation
+/// (`_meta.claudeCode.options.settings`, read as `--settings` is): its own
+/// tools allowed, and auto mode's classifier told what they are. In auto
+/// mode the classifier judges each call, and it refused `task_work` on a
+/// task the user had just asked to start ("Destructive or Unwanted
+/// Actions"), though the room's `.claude/settings.json` allowed it: Claude
+/// Code takes no classifier rules from a folder's own settings, which the
+/// folder's repository could write. None of these tools changes shared
+/// state (HEN-4); the user's word is the check they need.
+pub(crate) fn session_meta() -> serde_json::Value {
+    let names = super::henchman_tools::names();
+    let rule = format!(
+        "Layer's Henchman: this session is the Henchman, which keeps the user's coding agents \
+         in Layer going. Its calls to the {server} MCP server's own tools ({list}) are its \
+         job, not Destructive or Unwanted Actions: they read Layer's state, or give work, a \
+         message or a restart to one of the user's own agents inside the user's own task, \
+         or raise something with the user. task_work with a task's work (fix checks, answer \
+         review comments, open a draft pull request) is wanted whenever the user asked for \
+         the task or the work, or the task's pull request needs it; that agent's own actions \
+         are checked where it runs.",
+        server = crate::mcp::SERVER_NAME,
+        list = names.join(", "),
+    );
+    let allow: Vec<String> = names.iter().map(|name| format!("mcp__{}__{name}", crate::mcp::SERVER_NAME)).collect();
+    serde_json::json!({ "claudeCode": { "options": { "settings": {
+        "permissions": { "allow": allow },
+        "autoMode": { "allow": ["$defaults", rule] },
+    } } } })
 }
 
 #[cfg(test)]
@@ -209,12 +227,32 @@ mod tests {
     }
 
     #[test]
-    fn the_henchmans_own_tools_are_allowed_so_auto_mode_never_refuses_them() {
-        let allow = settings()["permissions"]["allow"].clone();
-        let allow: Vec<&str> = allow.as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect();
-        assert!(allow.contains(&"mcp__villain-layer__task_work"));
-        assert!(allow.contains(&"mcp__villain-layer__need_you"));
+    fn the_henchmans_own_tools_are_allowed_where_auto_mode_reads_it_and_only_those() {
+        let settings = session_meta()["claudeCode"]["options"]["settings"].clone();
+        let strings = |v: &serde_json::Value| -> Vec<String> {
+            v.as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect()
+        };
+        let allow = strings(&settings["permissions"]["allow"]);
+        assert!(allow.contains(&"mcp__villain-layer__task_work".to_string()));
+        assert!(allow.contains(&"mcp__villain-layer__need_you".to_string()));
         let own = |name: &str| name.strip_prefix("mcp__villain-layer__").is_some_and(super::super::henchman_owns);
         assert!(allow.iter().all(|name| own(name)), "only its own: {allow:?}");
+        // The classifier keeps its own rules, and is told what these tools are.
+        let rules = strings(&settings["autoMode"]["allow"]);
+        assert_eq!(rules[0], "$defaults");
+        assert!(rules[1].contains("task_work") && !rules[1].contains("start_work"), "{}", rules[1]);
+    }
+
+    #[test]
+    fn its_room_keeps_no_settings_file_that_auto_mode_would_not_read() {
+        let root = std::env::temp_dir().join(format!("vl-henchman-{}", uuid::Uuid::new_v4()));
+        let state = super::super::repos::tests::state(&root, Default::default());
+        let room = root.join("room");
+        std::fs::create_dir_all(room.join(".claude")).unwrap();
+        std::fs::write(room.join(".claude").join("settings.json"), "{}").unwrap();
+        write_context(&state, &room).unwrap();
+        assert!(room.join("CLAUDE.md").exists());
+        assert!(!room.join(".claude").join("settings.json").exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

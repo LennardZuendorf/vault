@@ -2339,7 +2339,9 @@ count and banner treats it like any other.
   (and load, resume) as an `http` server, with the bearer token and
   `X-Villain-Pane` as headers: over the agent's stdin, never on a command
   line or in a file (MCP-2). Nothing is written for the CLI to load: no
-  hooks, no plugin, no settings. An agent that takes no MCP server over
+  hooks, no plugin, no settings; what a launch gives its agent (the
+  Henchman's settings, HEN-2) goes in the same request's `_meta`,
+  which an agent that does not know it ignores. An agent that takes no MCP server over
   HTTP starts without the app's tools, and the pane says so.
 - **ACP-4** Text MUST reach an ACP agent whole, however long: the opening
   prompt, a handoff, review comments, conflicts, a line from the phone.
@@ -3564,10 +3566,15 @@ Slack come later.
   does not count as a chat that is working; its banners and messages
   open its tab. It is restored at launch like any chat (PANE-7). It
   opens in auto mode where its agent has one, restored too, so reading
-  Layer through its tools asks nothing first. Its room's
-  `.claude/settings.json`, written with its context, allows its own
-  tools (HEN-4), so auto mode's classifier never refuses one; other
-  tools are judged as before.
+  Layer through its tools asks nothing first. Its conversation opens
+  with Claude Code settings in `session/new`'s `_meta` (and load,
+  resume), which Claude Code takes as it takes `--settings`: they allow
+  its own tools (HEN-4) and tell auto mode's classifier what they are,
+  so it does not refuse one; other tools are judged as before. Before,
+  they were in its room's `.claude/settings.json`, where Claude Code
+  takes no classifier rules (a repository could write them), and
+  `task_work` on a task the user had just asked to start was refused as
+  unwanted. Its room keeps no such file.
 - **HEN-3** Woken, it MUST be asked to do what it may itself first (put
   tasks' agents on what their pull requests need, HEN-11; say go on to
   agents with plan left; restart ones that exited by themselves), then

@@ -679,6 +679,7 @@ done
             pick: crate::acp::Pick::New,
             prompt: Some("start".into()),
             presets: Vec::new(),
+            meta: None,
             on_session: None,
         };
         let pane = host.ptys.spawn_acp(app.handle(), opts, launch).unwrap().id;
@@ -821,6 +822,7 @@ done
             pick: crate::acp::Pick::New,
             prompt: None,
             presets: Vec::new(),
+            meta: None,
             on_session: None,
         };
         let pane = host.ptys.spawn_acp(app.handle(), opts, launch).unwrap().id;

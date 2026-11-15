@@ -76,6 +76,10 @@ pub struct Launch {
     /// (BOT-12), a model (BOT-17). Each is made where the agent offers that
     /// value, and left as the agent has it where it does not.
     pub presets: Vec<(String, String)>,
+    /// `_meta` for opening the conversation: what only the agent that knows
+    /// it reads, and every other ignores. The Henchman's Claude Code settings
+    /// (HEN-2).
+    pub meta: Option<serde_json::Value>,
     pub on_session: Option<OnSession>,
 }
 

@@ -140,6 +140,7 @@ mod tests {
             pick: crate::acp::Pick::New,
             prompt: Some("ping".into()),
             presets: Vec::new(),
+            meta: None,
             on_session: None,
         };
         let pane = ptys.spawn_acp(app.handle(), opts, launch).unwrap();

@@ -146,7 +146,8 @@ mod tests {
         }
         let dir = std::env::temp_dir().to_string_lossy().to_string();
         let args = vec!["-c".to_string(), "head -n 1; exit 3".to_string()];
-        let launch = Launch { mcp: None, pick: Pick::New, prompt: None, presets: Vec::new(), on_session: None };
+        let launch =
+            Launch { mcp: None, pick: Pick::New, prompt: None, presets: Vec::new(), meta: None, on_session: None };
         let started = start("/bin/sh", &args, &dir, &[], launch, "pane-2").unwrap();
         let conn: Arc<Conn> = started.conn.clone();
         let (tx, rx) = std::sync::mpsc::channel();

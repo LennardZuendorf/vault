@@ -269,6 +269,7 @@ cat > /dev/null
             pick: acp::Pick::New,
             prompt: Some("ping".into()),
             presets: Vec::new(),
+            meta: None,
             on_session: None,
         };
         let pane = ptys.spawn_acp(app.handle(), opts, launch).unwrap();
@@ -319,6 +320,7 @@ cat > /dev/null
             pick: acp::Pick::New,
             prompt: Some("ping".into()),
             presets: Vec::new(),
+            meta: None,
             on_session: None,
         };
         let pane = ptys.spawn_acp(app.handle(), opts, launch).unwrap();
@@ -373,8 +375,14 @@ cat > /dev/null
                 title_activity: None,
                 title_topic: None,
             };
-            let launch =
-                acp::Launch { mcp: None, pick, prompt: Some(prompt.into()), presets: Vec::new(), on_session: None };
+            let launch = acp::Launch {
+                mcp: None,
+                pick,
+                prompt: Some(prompt.into()),
+                presets: Vec::new(),
+                meta: None,
+                on_session: None,
+            };
             ptys.spawn_acp(app.handle(), opts, launch).unwrap()
         };
         let done = |id: &str| {

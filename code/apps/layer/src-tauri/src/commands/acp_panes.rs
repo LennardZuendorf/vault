@@ -83,7 +83,8 @@ pub(crate) fn start(app: &AppHandle, state: &AppState, def: &agents::AgentDef, s
     // Asked before the config is read: `is_room` reads it too.
     let henchman = super::henchman::is_room(state, std::path::Path::new(&opts.cwd));
     let presets = launch_presets(&state.config.read(), &opts.cwd, henchman);
-    state.ptys.spawn_acp(app, opts, acp::Launch { mcp, pick, prompt, presets, on_session: Some(on_session) })
+    let meta = henchman.then(super::henchman::session_meta);
+    state.ptys.spawn_acp(app, opts, acp::Launch { mcp, pick, prompt, presets, meta, on_session: Some(on_session) })
 }
 
 /// What an agent opening in `cwd` is set to before its first prompt, as
