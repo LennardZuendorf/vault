@@ -14,6 +14,7 @@ import { api } from "../lib/api";
 import { pastedImages, readImage, type PastedImage } from "../lib/pastedImage";
 import type { AcpEntry, AcpToolContent, AcpView, PaneInfo } from "../lib/types";
 import { useStore } from "../store";
+import { useKeyProjects } from "./IssueKeyLink";
 import { Markdown } from "./Markdown";
 import { TerminalPane } from "./Terminal";
 import { ErrorMessage, useFailure } from "./ui";
@@ -68,6 +69,7 @@ function AcpPane({
   const failure = useFailure();
   const fail = failure.fail;
   const textSize = useStore((s) => s.settings?.ui.conversation_font_size ?? 14);
+  const keys = useKeyProjects();
   const shown = visible && appActive;
 
   // Started from what the pane held when last on screen (`acpPool.ts`), so
@@ -205,7 +207,7 @@ function AcpPane({
             </div>
           )}
           {entries.map((e) => (
-            <Entry key={e.index} entry={e} onAnswer={answer} />
+            <Entry key={e.index} entry={e} keys={keys} onAnswer={answer} />
           ))}
           {busy && (
             <div className="acp-working">
@@ -337,9 +339,12 @@ function kilo(n: number): string {
 const Entry = memo(
   function Entry({
     entry,
+    keys,
     onAnswer,
   }: {
     entry: AcpEntry;
+    /** The projects whose ticket keys are links (ACP-18). */
+    keys: string;
     onAnswer: (entry: number, option: string) => void;
   }) {
     switch (entry.kind) {
@@ -354,7 +359,7 @@ const Entry = memo(
       case "agent":
         return (
           <div className="acp-agent">
-            <Markdown text={entry.text} />
+            <Markdown text={entry.text} keys={keys} />
           </div>
         );
       case "thought":
@@ -409,7 +414,7 @@ const Entry = memo(
         return <div className={`acp-note${entry.error ? " error" : ""}`}>{entry.text}</div>;
     }
   },
-  (a, b) => a.entry === b.entry,
+  (a, b) => a.entry === b.entry && a.keys === b.keys,
 );
 
 const STATUS_MARK: Record<string, string> = {

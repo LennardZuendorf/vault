@@ -2398,11 +2398,18 @@ count and banner treats it like any other.
   one whose ACP program is missing names it. Each is read as the tab
   opens and on "Check again". It is advice: no version is refused (ACP-1
   still offers any one on the PATH).
+- **ACP-18** A ticket's key in what an agent says (`ACME-123`) MUST be a
+  link: to its task in Work when a task has that ticket, else to the
+  ticket in Tickets, where its work can start (TKT-12 finds one that is
+  not on Mine). A word is a key only when its project is one Layer knows,
+  from a task's ticket or a ticket it has read, so `SHA-256` and `UTF-8`
+  stay words. A key in code or already in a link is left as it is.
 
 Code: `acp/` (`conn.rs` the protocol, `user.rs`, `conversation.rs`,
 `entry.rs`, `read.rs`, `process.rs`, `version.rs` for ACP-17), `pty/acp.rs`,
 `commands/acp_panes.rs`, `agents.rs` (`AcpCommand`), `AcpPane.tsx`,
-`lib/acpUpdates.ts`, `lib/types-acp.ts`, `AgentSettings.tsx`. A real agent is checked with
+`lib/acpUpdates.ts`, `lib/types-acp.ts`, `AgentSettings.tsx`, `lib/issue-keys.ts` and
+`IssueKeyLink.tsx` (ACP-18). A real agent is checked with
 `VILLAIN_ACP_AGENT="opencode acp" cargo test --lib real_agent -- --ignored`.
 
 Known gaps:

@@ -112,7 +112,7 @@ export function seedHenchman(pane: string) {
   });
   push(c, {
     kind: "agent",
-    text: "**2 need you.** ACME-123's agent asks to write `api/src/auth/login.ts`. ACME-130's agent finished: your turn.\n\n**Chats.** \"Why is staging slow\" asks you something.\n\n**Running.** A dev server for ACME-123 on :5173, up for 2 hours.\n\nACME-141: nothing for you.",
+    text: "**2 need you.** ACME-123's agent asks to write `api/src/auth/login.ts`. ACME-130's agent finished: your turn.\n\n**Chats.** \"Why is staging slow\" asks you something.\n\n**Running.** A dev server for ACME-123 on :5173, up for 2 hours.\n\n**Not started.** ACME-140, the highest on Mine. ACME-141: nothing for you. Its SHA-256 check is fine.",
   });
 }
 
