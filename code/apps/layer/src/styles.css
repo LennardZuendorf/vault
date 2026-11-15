@@ -498,7 +498,7 @@ body.dragging * {
   text-align: center;
   padding: 40px;
 }
-/* An empty state's headline: the one place in the window Grenze appears (28px and up). */
+/* An empty state's headline: with the Henchman's title, the only places in the window Grenze appears (28px and up). */
 .empty h2 {
   font-family: var(--font-display);
   font-size: var(--type-wordmark-size);

@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect } from "react";
 import { useStore } from "../store";
 import { api } from "./api";
+import { isHenchman } from "./lair";
 import { route } from "./target";
 
 /**
@@ -26,6 +27,11 @@ export function goTo(target: string, opts: { raise?: boolean } = {}) {
         if (step.pane) s.showPane(step.pane);
         break;
       case "chat":
+        // The Henchman is a chat with a tab of its own (HEN-2): its banners open it there.
+        if (step.pane && s.panes.some((p) => p.id === step.pane && isHenchman(p))) {
+          s.setView("henchman");
+          break;
+        }
         s.setView("chat");
         if (step.pane) s.showPane(step.pane);
         break;

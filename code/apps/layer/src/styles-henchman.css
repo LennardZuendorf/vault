@@ -1,0 +1,150 @@
+/* The Henchman's tab (§28): its conversation, and the lair beside it. */
+.hench {
+  display: flex;
+  overflow: hidden;
+}
+.hench-talk {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.hench-talk .pane-stack {
+  flex: 1;
+}
+.hench-talk .acp {
+  background: transparent;
+}
+.hench-talk .acp-col {
+  max-width: 760px;
+}
+.hench-hello {
+  padding: 18px 0 6px;
+}
+.hench-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--type-wordmark-size);
+  font-weight: var(--type-wordmark-weight);
+  line-height: var(--type-wordmark-leading);
+  color: var(--fg);
+}
+.hench-status {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: var(--type-ui-small-size);
+}
+.hench-warn {
+  color: var(--status-warn-ink);
+}
+.hench-empty {
+  flex: 1;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 14px;
+  padding: 18px;
+}
+.hench-empty p {
+  margin: 0;
+  max-width: 520px;
+  line-height: 1.55;
+}
+
+/* The lair: a narrow column that keeps itself current. */
+.lair {
+  flex: none;
+  width: 340px;
+  padding: 18px 12px;
+  background: var(--surface);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  overflow-y: auto;
+}
+.lair section + section {
+  margin-top: 8px;
+}
+.lair-head {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: var(--type-ui-small-size);
+}
+.lair-head .n {
+  color: var(--muted);
+}
+.lair-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 10px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+}
+.lair-row:hover {
+  background: var(--hover);
+}
+.lair-row .lt {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.lair-row .key {
+  margin-right: 8px;
+  font-family: var(--font-mono);
+  font-size: var(--type-ui-small-size);
+  color: var(--faint);
+}
+.lair-row .lw {
+  grid-column: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--type-ui-small-size);
+  color: var(--muted);
+}
+.lair-row .lw-warn {
+  color: var(--status-warn-ink);
+}
+.lair-row .lw-danger {
+  color: var(--status-danger-ink);
+}
+.lair-row > .ui-button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+.lair-proc .lt {
+  font-family: var(--font-mono);
+  font-size: var(--type-ui-small-size);
+  cursor: text;
+  user-select: text;
+}
+/* Flex, so a long owner is cut with an ellipsis rather than dropped whole. */
+.lair-proc .lw {
+  display: flex;
+  white-space: pre;
+}
+.lair-proc .lw .ui-link {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: inherit;
+  font-weight: 400;
+}
+.lair-none {
+  padding: 4px 8px 6px 25px;
+  color: var(--faint);
+  font-size: var(--type-ui-small-size);
+}

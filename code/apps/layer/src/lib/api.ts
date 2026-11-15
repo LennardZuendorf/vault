@@ -74,6 +74,7 @@ import type {
   S3Found,
 } from "./types";
 import type { EpicView, Filed, StartedSubTask } from "./types-epic";
+import type { Process } from "./types-henchman";
 import type { PlanLimits } from "./types-limits";
 import type {
   Elsewhere,
@@ -176,6 +177,12 @@ export const api = {
     invoke<Resumable[]>("resumable_agents", { taskId, checkoutId: checkoutId ?? null }),
   spawnChat: (agentId: string, prompt?: string | null, acp = false) =>
     invoke<PaneInfo>("spawn_chat", { agentId, prompt: prompt ?? null, acp }),
+  /** Wake the Henchman (HEN-2); the running one when it already runs. */
+  spawnHenchman: (agentId: string) => invoke<PaneInfo>("spawn_henchman", { agentId }),
+  /** Processes the panes started that still run (HEN-6). */
+  runningProcesses: () => invoke<Process[]>("running_processes"),
+  /** Stop one, and its children; the list after. */
+  stopProcess: (pid: number) => invoke<Process[]>("stop_process", { pid }),
   ptyWrite: (paneId: string, data: string) => invoke<void>("pty_write", { paneId, data }),
   ptyResize: (paneId: string, rows: number, cols: number) =>
     invoke<void>("pty_resize", { paneId, rows, cols }),

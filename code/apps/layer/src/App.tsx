@@ -5,6 +5,7 @@ import { ChatView } from "./components/ChatView";
 import { DiffView } from "./components/DiffView";
 import { EpicMain, EpicOpening } from "./components/EpicView";
 import { FrameStatus } from "./components/FrameStatus";
+import { HenchmanView } from "./components/henchman/HenchmanView";
 import { CupIcon, GearIcon } from "./components/icons";
 import { MessageCenter } from "./components/MessageCenter";
 import { PhoneBadge } from "./components/PhoneSettings";
@@ -25,6 +26,7 @@ import { UsageView } from "./components/UsageView";
 import { api } from "./lib/api";
 import { CHAT_TASK_ID, needsYou, repoTrouble, reviewCounts, taskTotals } from "./lib/derive";
 import { goTo } from "./lib/goto";
+import { isHenchman, lair, lairCounts } from "./lib/lair";
 import { pressKeys } from "./lib/press";
 import { specProgress, useSpecs } from "./lib/specs";
 import type { TaskView } from "./lib/types";
@@ -48,7 +50,14 @@ function TopBar() {
   const running = useStore((s) =>
     s.panes.some((p) => p.kind === "agent" && p.running && p.task_id !== CHAT_TASK_ID),
   );
-  const chatting = useStore((s) => s.panes.some((p) => p.task_id === CHAT_TASK_ID && p.running));
+  const chatting = useStore((s) =>
+    s.panes.some((p) => p.task_id === CHAT_TASK_ID && p.running && !isHenchman(p)),
+  );
+  // The tasks and chats in the lair's Needs you (HEN-1), and whether the Henchman works.
+  const needed = useStore((s) => lairCounts(lair(s.tasks, s.panes, s.prs)).needsYou);
+  const scheming = useStore((s) =>
+    s.panes.some((p) => isHenchman(p) && p.running && p.activity === "working"),
+  );
   // The dock icon's number, with a place in the window that says what it is.
   const waiting = useStore((s) => s.panes.filter(needsYou).length);
   const repoTroubles = useStore(
@@ -67,6 +76,14 @@ function TopBar() {
     news?: boolean;
     live?: boolean;
   }[] = [
+    {
+      id: "henchman",
+      label: "Henchman",
+      count: needed || undefined,
+      title: `${needed} task${needed === 1 ? "" : "s"} or chat${needed === 1 ? "" : "s"} in the lair's Needs you`,
+      news: true,
+      live: scheming,
+    },
     {
       id: "work",
       label: "Work",
@@ -447,6 +464,7 @@ function Shell() {
           </div>
         )}
 
+        {view === "henchman" && <HenchmanView />}
         {view === "tickets" && <TicketsView />}
         {view === "reviews" && <ReviewsView />}
         {view === "chat" && <ChatView />}

@@ -10,6 +10,7 @@ import "./styles-runs.css";
 import "./styles-profiles.css";
 import "./styles-observability.css";
 import "./styles-settings.css";
+import "./styles-henchman.css";
 import App from "./App";
 import { Splash } from "./components/Splash";
 import { fontsReady } from "./lib/terminal";

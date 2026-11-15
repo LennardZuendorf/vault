@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { CHAT_TASK_ID } from "../lib/derive";
 import { goTo } from "../lib/goto";
+import { isHenchman } from "../lib/lair";
 import type { Pins } from "../lib/pins";
 import { menuKeys, pressKeys } from "../lib/press";
 import type { WaitingPane } from "../lib/types";
@@ -15,7 +16,10 @@ const NONE: WaitingPane[] = [];
 function useWaiting(taskId: string): WaitingPane[] {
   const all = useStore((s) => s.waiting);
   return useMemo(() => {
-    const mine = all.filter((w) => w.task_id === taskId);
+    // The Henchman's tab wakes a new one in its place (HEN-2).
+    const mine = all.filter(
+      (w) => w.task_id === taskId && !(w.cwd && isHenchman({ task_id: w.task_id, cwd: w.cwd })),
+    );
     return mine.length ? mine : NONE;
   }, [all, taskId]);
 }

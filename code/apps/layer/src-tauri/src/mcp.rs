@@ -232,6 +232,7 @@ async fn dispatch(app: &AppHandle, method: &str, params: Value, caller: Option<&
                     .chain(commands::pr_images_tools())
                     .chain(commands::finish_tools())
                     .chain(commands::epic_tools())
+                    .chain(commands::henchman_tools(app, caller))
                     .chain(commands::tracker_tools(uses)),
             );
             Ok(json!({ "tools": all }))
@@ -723,6 +724,7 @@ async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) ->
         n if commands::pr_images_owns(n) => commands::pr_images_call(&state, args).await,
         n if commands::finish_owns(n) => commands::finish_call(app, args, caller).await,
         n if commands::epic_owns(n) => commands::epic_call(app, n, args, caller).await,
+        n if commands::henchman_owns(n) => commands::henchman_call(app, n, args, caller).await,
 
         "slack_delete" => {
             let links: Vec<String> = args

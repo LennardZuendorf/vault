@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
+  type ReactNode,
 } from "react";
 import { heldConversation, holdConversation, pruneConversations } from "../lib/acpPool";
 import { onAcpUpdate } from "../lib/acpUpdates";
@@ -27,12 +28,18 @@ import { ErrorMessage, useFailure } from "./ui";
 export const PaneView = memo(function PaneView({
   pane,
   visible,
+  head,
+  ask,
 }: {
   pane: PaneInfo;
   visible: boolean;
+  /** Above the conversation, scrolled with it: the Henchman's title and counts (HEN-5). */
+  head?: ReactNode;
+  /** The message box's hint while it takes a message. */
+  ask?: string;
 }) {
   return pane.acp ? (
-    <AcpPane pane={pane} visible={visible} />
+    <AcpPane pane={pane} visible={visible} head={head} ask={ask} />
   ) : (
     <TerminalPane pane={pane} visible={visible} />
   );
@@ -44,7 +51,17 @@ export const PaneView = memo(function PaneView({
  * questions as buttons (ACP-5). Told of changes while on screen and caught up
  * when it comes back (ACP-7), as a terminal is.
  */
-function AcpPane({ pane, visible }: { pane: PaneInfo; visible: boolean }) {
+function AcpPane({
+  pane,
+  visible,
+  head,
+  ask,
+}: {
+  pane: PaneInfo;
+  visible: boolean;
+  head?: ReactNode;
+  ask?: string;
+}) {
   const appActive = useStore((s) => s.appActive);
   // What is sent, answered or set here fails under the message box, just
   // above it for a question answered in the log (NOTE-6).
@@ -180,6 +197,7 @@ function AcpPane({ pane, visible }: { pane: PaneInfo; visible: boolean }) {
         }}
       >
         <div className="acp-col">
+          {head}
           {entries.length === 0 && (
             <div className="acp-empty">
               <div className="acp-empty-title">{pane.title}</div>
@@ -241,7 +259,7 @@ function AcpPane({ pane, visible }: { pane: PaneInfo; visible: boolean }) {
                   ? "The agent has exited."
                   : busy
                     ? "Sent when this turn ends…"
-                    : "Message the agent · Enter to send, Shift-Enter for a new line"
+                    : (ask ?? "Message the agent · Enter to send, Shift-Enter for a new line")
               }
               onChange={(e) => setDraft(e.target.value)}
               onPaste={paste}

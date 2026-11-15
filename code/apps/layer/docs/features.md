@@ -1330,6 +1330,10 @@ never hold credentials themselves.
 | `epic_subtasks` | an epic's sub-tasks: ticket, task, steps ticked, what each waits for, its agents (EPIC-12); the tickets under it that are none yet (EPIC-14) | |
 | `subtask_start` | start a sub-task's agent on its spec, and move its ticket (EPIC-8) | yes |
 | `subtask_tell` | send one message to a sub-task's running agents (EPIC-12) | |
+| `work_overview` | the Henchman's: every task sorted by what it needs, the open chats, the running processes (HEN-4) | |
+| `pane_read` | the Henchman's: what an agent or chat last said (HEN-4) | |
+| `pane_tell` | the Henchman's: one message to a running agent or chat (HEN-4) | |
+| `chat_start` | the Henchman's: a new chat in Chat, with its first message (HEN-4) | |
 | `browser_navigate` | open a page in the task's browser tab (BRW-3), and get its outline | |
 | `browser_back` | back one page | |
 | `browser_snapshot` | the page as an outline, each element it can act on numbered | |
@@ -3491,6 +3495,100 @@ Known gaps:
   all, and a change to it shows as no OpenAI row.
 - Several Claude accounts (`CLAUDE_CONFIG_DIR`) share one row: the last
   to reply wins.
+
+## 28. Henchman
+
+With twenty tickets open, no one place said how things stood: each task
+had to be opened to see whether its agent was waiting, its checks were
+red or nothing had happened for days, and every chat had to be opened to
+be asked anything. The Henchman is that place: a tab of its own, first in
+the top bar, with one standing conversation over all of Layer on the left
+and the lair beside it, a column that sorts every task and chat by what it
+needs. It briefs you, reads what any agent or chat last said, passes your
+words on and starts chats. It writes no code. This is step 1 of the
+design in `docs/orchestrator.md` (Brief and talk); acting on tasks,
+driving tickets and reaching it from Slack come later.
+
+- **HEN-1** The Henchman MUST be its own view, the first tab in the top
+  bar, named Henchman. Its count is the tasks and chats in Needs you
+  (HEN-5), with the live dot while any is there. The view is remembered
+  as the others are.
+- **HEN-2** There MUST be one Henchman: a chat over ACP (§20) in a room
+  of its own, `<worktree root>/_chat/henchman`, so it keeps its history
+  across restarts (CHAT-1) and holds no worktrees. It is woken from its
+  tab with any agent that speaks ACP; waking it while it runs gives back
+  the one running. Its context file says who it is, what its tools do,
+  and what it never does: write code, edit files, merge, or answer anyone
+  in Jira, GitHub or Slack without asking. It is not listed in Chat and
+  does not count as a chat that is working; its banners and messages
+  open its tab. It is restored at launch like any chat (PANE-7).
+- **HEN-3** Woken, it MUST be asked for a brief: what needs you, ranked,
+  each by its key and what it waits for; what is stuck; what can be
+  finished; everything else as one line. It reads all of it with one
+  `work_overview`.
+- **HEN-4** Its tools MUST be listed for, and answered to, the Henchman's
+  own pane only, known by its room as a chat is (CHAT-3); any other
+  caller is refused. `work_overview` gives every task as the lair sorts
+  it (HEN-5), its ticket, agents and their states, and PRs with verdicts,
+  checks and replies owed; then the open chats with each one's state and
+  what it last said; then the running processes (HEN-6). `pane_read`
+  gives what an agent or chat last said: over ACP, its last turn and any
+  question it asks; in a terminal, its recent output, only with "Let
+  agents read terminal output" on (MCP-4). `pane_tell` sends one message
+  to a running agent or chat, typed into its terminal or sent as a prompt
+  over ACP, and refuses a shell, a pane that has exited and the Henchman
+  itself. `chat_start` opens a new chat in Chat over ACP, with its first
+  message. None of them changes shared state, so none needs `confirm`.
+- **HEN-5** The lair MUST sort every task into one group, by the first
+  that fits, and say why on its row:
+  - **Needs you**, ranked: an agent asks ("its agent asks"); an agent is
+    out of budget; an agent finished and you haven't looked ("its agent
+    finished: your turn"); changes requested on an open PR while no agent
+    works on it; a failed check on an open PR while no agent works on it.
+    A chat that asks is in Needs you too.
+  - **To finish**: every PR merged (`taskReview` is merged). Its row's
+    button is Finish, which opens Finish task (TASK-18).
+  - **Moving**: an agent works on it ("its agent is working"), or a PR is
+    open ("approved", "in review").
+  - **Not started**: no agents, no PRs, and nothing changed, committed or
+    left uncommitted.
+  - **Quiet**: everything else.
+
+  Needs you and To finish are open; Moving, Not started, Quiet, Chats and
+  Running are folded to their counts and open on a click. A task's row
+  opens the task in Work; a chat's opens it in Chat. Above the
+  conversation a line counts them: "20 open · 3 need you · 1 to finish ·
+  5 moving · 2 not started · 9 quiet". The same rule sorts
+  `work_overview`, so what the Henchman says and what the lair shows
+  agree. Its PR facts are the last ones read for each task (the PR
+  sweep, PR-8); a task never read is read once when asked.
+- **HEN-6** The lair's Running group MUST list the processes Layer's
+  agents, chats and terminals started and that still run: a dev server, a
+  watcher, a build. A process counts when a shell in a pane started it
+  and it has run for 5 seconds, or when it listens on a TCP port; of a
+  process and its children only the top one is listed. Each row names
+  the program and its arguments, who started it (the task's key or the
+  chat), how long it has run and the ports it listens on, and has Stop,
+  which ends it and its children (SIGTERM, then SIGKILL 2 seconds later)
+  after checking it is still the same process. The agent's own CLI and
+  the panes' shells are never listed. The list is read when the tab
+  opens, when a pane's activity changes, and every 10 seconds while the
+  tab is shown and the window is active: processes start and stop
+  without telling anyone.
+
+Code: `commands/henchman.rs` (the room, its context, `spawn_henchman`),
+`commands/henchman_tools.rs` (HEN-4), `commands/processes.rs` and
+`pty/pids.rs` (HEN-6), `components/henchman/`, `lib/lair.ts` (HEN-5).
+
+Known gaps:
+- It is told nothing as it happens: it knows what changed only when it
+  calls `work_overview` again (step 3 of the design).
+- It acts on nothing itself yet: starting work, opening PRs and finishing
+  stay in their own views (step 2).
+- A PR row is as old as the last sweep, up to 15 minutes for a task the
+  sweep counts as settled.
+- A process started by a command run outside a shell (an agent's own tool
+  call, over ACP) is listed only while it listens on a port.
 
 ---
 

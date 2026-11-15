@@ -48,7 +48,8 @@ import type {
   Synced,
   TaskView,
 } from "../lib/types";
-import { acpAnswers, seedAcp } from "./acp";
+import type { Process } from "../lib/types-henchman";
+import { acpAnswers, seedAcp, seedHenchman } from "./acp";
 import { epicAnswers, seedEpic } from "./epic";
 import { limitAnswers } from "./limits";
 import { loopAnswers, seedLoop } from "./loop";
@@ -174,6 +175,38 @@ function newPane(args: Args, kind: PaneInfo["kind"], task: string): PaneInfo {
   world.output[p.id] = kind === "agent" ? `${p.title} starting…\r\n` : "you@mac % ";
   return p;
 }
+
+/** What the panes started that still runs (HEN-6), in the busy world. */
+const processes: Process[] = [
+  {
+    pid: 48211,
+    pane_id: "pane-shell",
+    task_id: "t-login",
+    owner: "ACME-123",
+    command: "node /Users/you/.villain-worktrees/ACME-123/web/node_modules/.bin/vite --port 5173",
+    secs: 7420,
+    ports: [5173],
+  },
+  {
+    pid: 48390,
+    pane_id: "pane-claude",
+    task_id: "t-login",
+    owner: "ACME-123",
+    command: "cargo watch -x test",
+    secs: 1290,
+    ports: [],
+  },
+  {
+    pid: 51022,
+    pane_id: "pane-chat",
+    task_id: "chat",
+    owner: "Which tickets block the release",
+    command: "python3 -m http.server 8000",
+    secs: 95,
+    ports: [8000],
+  },
+];
+const liveProcesses = () => processes.filter((x) => world.panes.some((p) => p.id === x.pane_id));
 
 /**
  * Each task's browser tab (§18). In the busy world, the login task's agent
@@ -616,6 +649,25 @@ const answer: Record<string, Answer> = {
     const p = newPane(a, "agent", "chat");
     p.cwd = `/Users/you/.villain-worktrees/_chat/${p.id.slice(-8)}`;
     return p;
+  },
+  // The Henchman (§28): one, in its own room, asked for a brief.
+  spawn_henchman: (a) => {
+    const room = "/Users/you/.villain-worktrees/_chat/henchman";
+    const running = world.panes.find((x) => x.cwd === room && x.running);
+    if (running) return running;
+    const p = newPane({ ...a, acp: true }, "agent", "chat");
+    p.cwd = room;
+    p.title = "Henchman";
+    p.activity = "done";
+    seedHenchman(p.id);
+    return p;
+  },
+  running_processes: () => liveProcesses(),
+  stop_process: (a) => {
+    const at = processes.findIndex((x) => x.pid === a.pid);
+    if (at < 0) throw new Error("that process has ended, or no pane started it");
+    processes.splice(at, 1);
+    return liveProcesses();
   },
   waiting_panes: () => world.waiting,
   reopen_waiting_pane: (a) => {

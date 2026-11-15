@@ -92,6 +92,30 @@ function reply(pane: string, text: string, done = () => {}) {
   step();
 }
 
+/** The Henchman woken (HEN-3): asked for a brief, it reads the overview and answers. */
+export function seedHenchman(pane: string) {
+  const c = convo(pane);
+  push(c, {
+    kind: "user",
+    text: "Call work_overview, then brief me in a few lines: what needs me, ranked, each by its key and what it waits for; what is stuck; what can be finished. Everything else in one line.",
+    queued: false,
+    dropped: false,
+  });
+  push(c, {
+    kind: "tool",
+    id: "t-overview",
+    title: "work_overview",
+    tool: "other",
+    status: "completed",
+    content: [],
+    locations: [],
+  });
+  push(c, {
+    kind: "agent",
+    text: "**2 need you.** ACME-123's agent asks to write `api/src/auth/login.ts`. ACME-130's agent finished: your turn.\n\n**Chats.** \"Why is staging slow\" asks you something.\n\n**Running.** A dev server for ACME-123 on :5173, up for 2 hours.\n\nACME-141: nothing for you.",
+  });
+}
+
 /** A conversation already under way, for the busy world's ACP pane. */
 export function seedAcp(pane: string) {
   const c = convo(pane);

@@ -441,6 +441,7 @@ const GENERATED_FILES: &[&str] = &[
     "PR_IMAGES.json",
     FIRST_PROMPT,
     crate::loops::CHECKS_FILE,
+    super::henchman_tools::MESSAGE_FILE,
 ];
 
 /// An opening prompt too long to type, for a CLI that takes it typed.
@@ -648,10 +649,12 @@ pub(crate) fn open_chat(
         None => chat_room(state, &uuid::Uuid::new_v4().to_string()[..8])?,
     };
     // Best effort: a context file that cannot be written is not a reason to
-    // refuse to start the agent.
-    let _ = write_chat_context(state, &dir);
+    // refuse to start the agent. The Henchman's room gets its own (HEN-2).
+    let henchman = super::henchman::is_room(state, &dir);
+    let _ = if henchman { super::henchman::write_context(state, &dir) } else { write_chat_context(state, &dir) };
     let _ = crate::mcp::write_config(&dir);
-    let title = format!("{}{}", def.name, if resume != Resume::No { " (resumed)" } else { "" });
+    let name = if henchman { "Henchman" } else { def.name };
+    let title = format!("{name}{}", if resume != Resume::No { " (resumed)" } else { "" });
 
     if acp {
         let cwd = dir.to_string_lossy().to_string();

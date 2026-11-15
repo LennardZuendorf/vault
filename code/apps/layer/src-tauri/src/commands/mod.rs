@@ -26,6 +26,8 @@ pub struct AppState {
     /// Tasks whose pull requests were all closed or merged when last read,
     /// and when: the PR sweep leaves them alone for a while (PR-8).
     pub prs_settled: parking_lot::Mutex<HashMap<String, Instant>>,
+    /// Each task's pull requests as last read, for the Henchman (HEN-5).
+    pub prs_seen: parking_lot::Mutex<HashMap<String, Vec<CheckoutPr>>>,
     /// Reviews and tickets already seen, so a banner is only for what is new.
     pub news: crate::news::Seen,
     /// The message center's log (MSG-1).
@@ -128,6 +130,8 @@ mod epics;
 mod finish_tool;
 mod github;
 mod grafana;
+mod henchman;
+mod henchman_tools;
 mod jira;
 mod landed;
 mod limits;
@@ -142,6 +146,7 @@ mod phone;
 mod pr_images;
 mod pr_task;
 mod pr_template;
+mod processes;
 mod profiles;
 mod projects;
 mod repos;
@@ -174,6 +179,8 @@ pub use epics::*;
 pub use finish_tool::*;
 pub use github::*;
 pub use grafana::*;
+pub use henchman::*;
+pub use henchman_tools::*;
 pub use jira::*;
 pub(crate) use landed::{advance, branch_landed, landed};
 pub use limits::*;
@@ -187,6 +194,7 @@ pub use panes_restore::*;
 pub use phone::*;
 pub use pr_images::*;
 pub use pr_task::*;
+pub use processes::*;
 pub use profiles::*;
 pub use projects::*;
 pub use repos::*;
@@ -576,6 +584,7 @@ mod tests {
             pending_notices: Default::default(),
             status_cache: Default::default(),
             prs_settled: Default::default(),
+            prs_seen: Default::default(),
             news: Default::default(),
             messages: crate::messages::Messages::for_tests(std::env::temp_dir().join("vl-test-messages.json")),
             notes: crate::notes::Notes::load(&root),

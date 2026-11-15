@@ -24,6 +24,7 @@ pub mod acp;
 pub mod feed;
 mod flush;
 mod output;
+mod pids;
 mod screen;
 mod text;
 

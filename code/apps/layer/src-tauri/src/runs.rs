@@ -593,6 +593,7 @@ mod tests {
             pending_notices: Default::default(),
             status_cache: Default::default(),
             prs_settled: Default::default(),
+            prs_seen: Default::default(),
             news: Default::default(),
             messages: crate::messages::Messages::for_tests(root.join("messages.json")),
             notes: crate::notes::Notes::load(root),

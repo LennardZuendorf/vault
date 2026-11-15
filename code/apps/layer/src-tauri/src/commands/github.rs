@@ -50,7 +50,7 @@ pub async fn github_connect(
     Ok(login)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CheckoutPr {
     pub checkout_id: String,
     pub repo: String,
@@ -512,6 +512,7 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
     } else {
         state.prs_settled.lock().remove(task_id);
     }
+    state.prs_seen.lock().insert(task_id.to_string(), rows.clone());
     Ok(rows)
 }
 
