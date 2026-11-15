@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import { copyAndSay } from "../../lib/clipboard";
 import { groupByEpic } from "../../lib/derive";
+import { chatWithEpic, epicChatOffered } from "../../lib/epicState";
 import { readOneOf, write } from "../../lib/persist";
 import {
   groupByStatus,
@@ -185,8 +186,22 @@ export function TicketsView() {
 
   /// Opening it in Jira and taking its link are the same wherever it is shown,
   /// and an epic known only through its children still has both.
-  function epicItems(key: string, summary: string): MenuItem[] {
+  function epicItems(key: string, summary: string, ticket: Ticket | null): MenuItem[] {
+    const { tasks, panes } = useStore.getState();
+    // With no repository to make it an epic in, Start work asks for them (EPIC-11).
+    const noRepos = () =>
+      ticket
+        ? setOpen(ticket)
+        : fail(`No repository is known for ${key} yet: start work on one of its tickets first.`);
     return [
+      ...(epicChatOffered(key, tasks, panes)
+        ? [
+            {
+              label: "Start the epic's chat",
+              onSelect: () => void chatWithEpic({ key, summary }, noRepos),
+            },
+          ]
+        : []),
       {
         label: "New ticket in this epic…",
         onSelect: () => setFiling({ key, summary }),
@@ -223,7 +238,7 @@ export function TicketsView() {
         onSelect: () => (task ? select(task) : setOpen(issue)),
       },
       { label: "Read ticket", onSelect: () => setReading(issue) },
-      ...(isEpicType(types, issue.issue_type) ? epicItems(issue.key, issue.summary) : []),
+      ...(isEpicType(types, issue.issue_type) ? epicItems(issue.key, issue.summary, issue) : []),
       ...linkItems(issue.key, issue.summary),
     ];
   }
@@ -560,7 +575,7 @@ export function TicketsView() {
                     ...(own
                       ? [{ label: taskFor(own.key) ? "Open task" : "Start work…", onSelect: work }]
                       : []),
-                    ...epicItems(epic.key, epic.summary),
+                    ...epicItems(epic.key, epic.summary, own ?? null),
                     ...linkItems(epic.key, epic.summary, true),
                   ],
                 });

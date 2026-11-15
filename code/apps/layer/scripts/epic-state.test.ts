@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { openWaits, subTaskState } from "../src/lib/epicState";
+import { epicChatOffered, openWaits, subTaskState } from "../src/lib/epicState";
 import type { CheckoutPr, SubTaskView } from "../src/lib/types";
 
 const idle = { waiting: false, live: 0 };
@@ -76,5 +76,23 @@ describe("what a sub-task waits for", () => {
     ];
     const waiting = sub("Say it", { waits_for: ["log both sessions", "Retry", "Copy"] });
     expect(openWaits(waiting, all, { t1: [pr(true)], t2: [pr(false)] })).toEqual(["Retry", "Copy"]);
+  });
+});
+
+describe("Start the epic's chat in an epic's menu (EPIC-11)", () => {
+  const epic = { id: "t-1", issue_key: "ACME-300", epic: true };
+
+  test("is offered for a Jira epic with no task here yet", () => {
+    expect(epicChatOffered("ACME-300", [], [])).toBe(true);
+  });
+
+  test("is offered for an epic here until its chat has started", () => {
+    expect(epicChatOffered("ACME-300", [epic], [{ task_id: "t-2", kind: "agent" }])).toBe(true);
+    expect(epicChatOffered("ACME-300", [epic], [{ task_id: "t-1", kind: "shell" }])).toBe(true);
+    expect(epicChatOffered("ACME-300", [epic], [{ task_id: "t-1", kind: "agent" }])).toBe(false);
+  });
+
+  test("is not offered when the ticket's task is no epic", () => {
+    expect(epicChatOffered("ACME-300", [{ ...epic, epic: false }], [])).toBe(false);
   });
 });

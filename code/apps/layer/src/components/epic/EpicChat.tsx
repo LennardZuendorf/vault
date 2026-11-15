@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../../lib/api";
 import { dragGrip, gripMove } from "../../lib/drag";
+import { useEpicViews } from "../../lib/epicState";
 import { read, write } from "../../lib/persist";
 import type { TaskView } from "../../lib/types";
 import { useStore } from "../../store";
@@ -30,6 +31,19 @@ export function EpicChat({ epic }: { epic: TaskView }) {
   // The one running, else the last: an exited one says so and offers Resume.
   const pane = panes.find((p) => p.running) ?? panes[panes.length - 1];
   const agent = agents.find((a) => a.installed && a.acp);
+
+  // Asked for from the epic's menu in Tickets before this page showed
+  // (EPIC-11). Taken from the store, not the render, so that a second run of
+  // this effect does not start a second chat.
+  const key = epic.issue_key;
+  const asked = useEpicViews((s) => !!key && s.chatFor === key);
+  const ready = agents.length > 0;
+  useEffect(() => {
+    if (!asked || !ready || useEpicViews.getState().chatFor !== key) return;
+    useEpicViews.setState({ chatFor: null });
+    if (!pane) void start();
+    // oxlint-disable-next-line react/exhaustive-deps -- once per ask; `pane` and `start` are read as they are then
+  }, [asked, ready, key]);
 
   async function start() {
     if (!agent || starting) return;

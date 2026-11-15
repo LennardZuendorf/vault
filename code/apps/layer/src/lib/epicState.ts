@@ -3,7 +3,7 @@ import { useStore } from "../store";
 import { api, failureText } from "./api";
 import { taskReview, type TaskReview } from "./derive";
 import type { EpicOf } from "./grouping";
-import type { CheckoutPr, EpicView, SubTaskView } from "./types";
+import type { CheckoutPr, EpicView, PaneInfo, SubTaskView, TaskView } from "./types";
 
 /** Where a sub-task stands, in the order EPIC-10 asks the questions. */
 export type SubTaskState =
@@ -68,10 +68,13 @@ export function openWaits(
  */
 export const useEpicViews = create<{
   byEpic: Record<string, EpicView>;
+  /** The ticket of the epic whose chat starts once its page shows (EPIC-11). */
+  chatFor: string | null;
   load: (epicId: string) => Promise<void>;
   put: (epicId: string, view: EpicView) => void;
 }>((set) => ({
   byEpic: {},
+  chatFor: null,
   load: async (epicId) => {
     const view = await api.epicView(epicId);
     set((s) => ({ byEpic: { ...s.byEpic, [epicId]: view } }));
@@ -99,4 +102,41 @@ export async function openJiraEpic(epic: EpicOf, repos: string[]) {
   } catch (e) {
     if (still()) useStore.setState({ opening: { epic, repos, error: failureText(e) } });
   }
+}
+
+/**
+ * Whether the ticket `key`'s menu offers Start the epic's chat (EPIC-11): no
+ * task has it yet, or its task is an epic with no chat. A task on it that is
+ * no epic (EPIC-13) has no chat to start.
+ */
+export function epicChatOffered(
+  key: string,
+  tasks: readonly Pick<TaskView, "id" | "issue_key" | "epic">[],
+  panes: readonly Pick<PaneInfo, "task_id" | "kind">[],
+): boolean {
+  const task = tasks.find((t) => t.issue_key === key);
+  if (!task) return true;
+  return !!task.epic && !panes.some((p) => p.task_id === task.id && p.kind === "agent");
+}
+
+/**
+ * Open the epic on `epic.key` with its chat starting (EPIC-11), from its menu
+ * in Tickets. Its chat column starts it, so its own Start button says
+ * "Starting…" rather than offering a second. A Jira epic that is no epic here
+ * yet is made one first, in the repositories Start work would pick for it;
+ * `noRepos` when there are none to pick.
+ */
+export async function chatWithEpic(epic: EpicOf, noRepos: () => void) {
+  const { tasks, select } = useStore.getState();
+  const made = tasks.find((t) => t.epic && t.issue_key === epic.key);
+  const repos = made
+    ? []
+    : await api.suggestRepos({ issueKey: epic.key, epicKey: epic.key }).then(
+        (s) => s.project_ids,
+        () => [],
+      );
+  if (!made && repos.length === 0) return noRepos();
+  useEpicViews.setState({ chatFor: epic.key });
+  if (made) select(made.id);
+  else await openJiraEpic(epic, repos);
 }

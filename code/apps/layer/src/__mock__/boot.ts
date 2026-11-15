@@ -887,7 +887,11 @@ const answer: Record<string, Answer> = {
     if (a.agentId) newPane(a, "agent", task.id);
     return { ...structuredClone(task), moved: "In Progress" };
   },
-  suggest_repos: () => ({ project_ids: [], reason: null }),
+  // What the last task used, as the app's last resort suggests.
+  suggest_repos: () => ({
+    project_ids: world.tasks[world.tasks.length - 1]?.checkouts.map((c) => c.project_id) ?? [],
+    reason: null,
+  }),
   project_branches: () => ["main", "develop"],
 
   // Repos: health, Sync, Locate, Clean up.

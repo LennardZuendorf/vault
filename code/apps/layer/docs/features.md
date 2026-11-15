@@ -3334,7 +3334,15 @@ paper.
   questions to the user; it writes no code and changes no file. A
   sub-task's agent works in the sub-task, never in the epic's chat. Its
   column's width is dragged at its edge and remembered, as the browser's
-  beside a task's terminals is (BRW-9).
+  beside a task's terminals is (BRW-9). An epic's menu in Tickets (its
+  group's header, and its card) offers Start the epic's chat while it has
+  none: the epic's page opens with its chat starting. A Jira epic that is
+  no epic here yet is made one first, as EPIC-13 makes one (no dialog, no
+  requirements drafted, its ticket not moved), in the repositories Start
+  work would pick for it (TKT-1); with none to pick, Start work opens on
+  it instead. Before, the chat could only be started from the epic's own
+  page, and a Jira epic got there only through Start work's dialog and a
+  spec draft.
 - **EPIC-12** The epic's chat MUST have three tools: `epic_subtasks` (each
   sub-task: its title, ticket, task, repositories, steps ticked of the
   total, what it waits for, and its agents, running and needing you; then
