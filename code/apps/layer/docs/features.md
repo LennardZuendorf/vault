@@ -1345,6 +1345,7 @@ never hold credentials themselves.
 | `pane_tell` | the Henchman's: one message to a running agent or chat (HEN-4) | |
 | `chat_start` | the Henchman's: a new chat in Chat, with its first message (HEN-4) | |
 | `pane_restart` | the Henchman's: restart an agent or chat that exited by itself (HEN-10) | |
+| `task_work` | the Henchman's: put a started task's agent to work inside the task: tell, pick up or start one (HEN-11) | |
 | `order_add` | the Henchman's: keep a standing order, on the user's word (HEN-7) | |
 | `order_remove` | the Henchman's: drop a standing order (HEN-7) | |
 | `leave_alone` | the Henchman's: hear nothing of a task or chat until handed back (HEN-8) | |
@@ -3536,9 +3537,13 @@ needs. It briefs you, reads what any agent or chat last said, passes your
 words on and starts chats. It drives too: told whenever an agent stops,
 it answers what you've told it to answer from now on, tells agents with
 plan left to go on, and picks up the ones Layer's quit or a crash
-interrupted. It writes no code. This is steps 1 and 3 of the design in
-`docs/orchestrator.md` (Brief and talk; Drive); acting on tasks and
-reaching it from Slack come later.
+interrupted. It works on its own: told when a task's pull request fails
+a check, gets comments or changes asked for, or conflicts, it puts the
+task's agent on it, and says what it did rather than asking. It writes
+no code. This is steps 1 and 3 of the design in `docs/orchestrator.md`
+(Brief and talk; Drive), and the part of step 2 (Act) inside a task
+that has started; starting tickets, finishing and reaching it from
+Slack come later.
 
 - **HEN-1** The Henchman MUST be its own view, the first tab in the top
   bar, named Henchman. Its count is the tasks and chats in Needs you
@@ -3555,9 +3560,12 @@ reaching it from Slack come later.
   open its tab. It is restored at launch like any chat (PANE-7). It
   opens in auto mode where its agent has one, restored too, so reading
   Layer through its tools asks nothing first.
-- **HEN-3** Woken, it MUST be asked for a brief: what needs you, ranked,
-  each by its key and what it waits for; what is stuck; what can be
-  finished; everything else as one line. It reads all of it with one
+- **HEN-3** Woken, it MUST be asked to do what it may itself first (put
+  tasks' agents on what their pull requests need, HEN-11; say go on to
+  agents with plan left; restart ones that exited by themselves), then
+  for a brief: what it did, one line each; what needs you, ranked, each
+  by its key and what it waits for; what is stuck; what can be finished;
+  everything else as one line. It reads all of it with one
   `work_overview`.
 - **HEN-4** Its tools MUST be listed for, and answered to, the Henchman's
   own pane only, known by its room as a chat is (CHAT-3); any other
@@ -3573,9 +3581,10 @@ reaching it from Slack come later.
   permission question (typed into one, a message picks an answer) and
   the Henchman itself. `chat_start` opens a new chat in Chat over ACP,
   with its first message. `order_add`, `order_remove` and `leave_alone`
-  keep its standing orders (HEN-7, HEN-8), and `pane_restart` restarts an
-  agent that exited by itself (HEN-10). None of them changes shared
-  state, so none needs `confirm`.
+  keep its standing orders (HEN-7, HEN-8), `pane_restart` restarts an
+  agent that exited by itself (HEN-10), and `task_work` puts a task's
+  agent to work (HEN-11). None of them changes shared state, so none
+  needs `confirm`.
 - **HEN-5** The lair MUST sort every task into one group, by the first
   that fits, and say why on its row:
   - **Needs you**, ranked: an agent asks ("its agent asks"); an agent is
@@ -3637,11 +3646,15 @@ reaching it from Slack come later.
   newest 12 by name and "and N more" for the rest. Each item names the
   task's key or the chat, the pane, what it last said over ACP (or that
   `pane_read` shows a terminal's), its open question, and the error its
-  turn ended on, if any; then every standing order with its id; then
-  what to do: answer what an order answers, say "go on" to one that
-  stopped with steps of its own plan left (at most three times in a
-  row), report the rest in one line each, and leave finished work to
-  the user. The message's first line names what stopped, since that is
+  turn ended on, if any; then the pull requests that changed (HEN-12);
+  then every standing order with its id; then what to do: answer what an
+  order answers, say "go on" to one that stopped with steps of its own
+  plan left (at most three times in a row), put a task's agent on what
+  its pull request needs with `task_work`, say what it did in one line
+  each and the rest in one line each, never ask whether to do what it
+  may do itself, and leave merging, marking ready, finishing, anything
+  others see and finished work to the user. The message's first line
+  names what stopped or the pull request that changed, since that is
   all the conversation shows of it (ACP-19). What had finished before
   the Henchman was woken is in its brief, not told again; with no
   Henchman running nothing is kept.
@@ -3659,11 +3672,44 @@ reaching it from Slack come later.
   on an error a retry fixes (overloaded, a rate limit, a lost
   connection) is told to go on too. The Henchman itself, put back
   mid-turn, is told to go on with its own work.
+- **HEN-11** The Henchman MUST be able to put a task's agent to work
+  inside the task without asking (`task_work`, by the task's id or
+  key): review comments, a failed check, a conflict, changes asked for,
+  the PR's description, what readiness asks. The message goes to the
+  task's newest running agent, marked as from the Henchman; an agent
+  that exited is picked up on its conversation over ACP (as
+  `pane_restart`, refused again within 10 minutes) and told; with none,
+  a new agent starts on the task with the message as its first prompt,
+  the task's last CLI or else the Henchman's, over ACP where it speaks
+  it. It is refused while the task's agent works (the Henchman hears
+  when it finishes) or asks the user, for a task left alone (HEN-8), and
+  for a task with no agent and no open pull request: starting a ticket
+  is the user's. Past 8 agents started or picked up in an hour, it is
+  refused until the user says more. Marking ready, merging, Slack and
+  Jira stay the user's unless a standing order says so (HEN-7).
+- **HEN-12** The Henchman MUST be told when a task's pull request
+  changes, while it runs: a check that failed, more comments to answer,
+  changes asked for, a conflict with its base, that it can merge (ready,
+  clean on GitHub, no changes asked for), or that it was merged or
+  closed. Each read of a task's pull requests (the PR tab, the sweep,
+  `work_overview`) is compared with the read before; a pull request new
+  since then, and the first read of a task, are not news. A failed check
+  is told once per commit and name, a conflict and "can merge" once per
+  commit, whatever GitHub reports in between. While the Henchman runs and
+  the window's sweep (PR-8) hasn't read every task for 5 minutes, the
+  backend reads them (settled tasks every 15 minutes, as the sweep does).
+  Changes to one pull request make one line in the next message (HEN-9),
+  by its task's key, repository and number; one for a task left alone is
+  not told. Put back at launch, the Henchman is told once, 20 seconds
+  later, that Layer started, to call `work_overview` and do the same for
+  every task and chat.
 
 Code: `commands/henchman.rs` (the room, its context, `spawn_henchman`),
 `commands/henchman_tools.rs` (HEN-4, `pane_restart`),
 `commands/henchman_orders.rs` and `config/henchman.rs` (HEN-7, HEN-8),
-`commands/henchman_feed.rs` (HEN-9, HEN-10), `commands/processes.rs` and
+`commands/henchman_feed.rs` (HEN-9, HEN-10, HEN-12),
+`commands/henchman_work.rs` (HEN-11), `commands/henchman_watch.rs`
+(HEN-12), `commands/processes.rs` and
 `pty/pids.rs` (HEN-6), `components/henchman/`, `lib/lair.ts` (HEN-5).
 
 Known gaps:
@@ -3671,10 +3717,14 @@ Known gaps:
   forced quit, they are put back without the Henchman hearing.
 - A terminal agent's turn that ended on an error is not told apart from
   one that finished: the Henchman reads it with `pane_read`.
-- It acts on nothing itself yet: starting work, opening PRs and finishing
-  stay in their own views (step 2).
+- Starting a ticket, opening PRs and finishing stay in their own views
+  (step 2): the Henchman works only inside tasks already started.
 - A PR row is as old as the last sweep, up to 15 minutes for a task the
-  sweep counts as settled.
+  sweep counts as settled; with the window away, up to 5 minutes for
+  the rest.
+- A terminal agent that exited is not picked up by `task_work`, since
+  its CLI takes no prompt on a resumed conversation: a new agent starts
+  beside it.
 - A process started by a command run outside a shell (an agent's own tool
   call, over ACP) is listed only while it listens on a port.
 

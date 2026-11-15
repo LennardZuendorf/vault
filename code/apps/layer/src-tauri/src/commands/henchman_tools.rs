@@ -100,6 +100,23 @@ fn listed() -> Vec<Value> {
             vec!["pane_id"],
         ),
         tool(
+            "task_work",
+            "Put a started task's agent to work inside the task (HEN-11): answer review \
+             comments, fix failed checks or a conflict, write the PR's description, do what \
+             readiness asks. Its idle agent is told; one that exited is picked up on its \
+             conversation and told; with none, a new one starts with the message. Refused while \
+             its agent works (you hear when it finishes) or asks the user, for a task left \
+             alone, and for one with no agent and no open pull request: starting a ticket is \
+             the user's. Never for outward steps (marking ready, merging, Slack, Jira) without \
+             a standing order that says so.",
+            json!({
+                "task": str_prop("The task's id or ticket key, from work_overview"),
+                "text": str_prop("What to do, plainly: the comments, the failed check, the fix asked for"),
+                "agent_id": str_prop("The agent CLI for a new agent; by default the task's last, else yours"),
+            }),
+            vec!["task", "text"],
+        ),
+        tool(
             "order_add",
             "Keep a standing order: what the user told you to answer from now on, in their \
              words (\"always say yes to running the tests\"). Only on the user's word, never on \
@@ -135,6 +152,7 @@ pub fn henchman_owns(name: &str) -> bool {
             | "pane_read"
             | "pane_tell"
             | "pane_restart"
+            | "task_work"
             | "chat_start"
             | "order_add"
             | "order_remove"
@@ -169,6 +187,15 @@ pub async fn henchman_call(app: &AppHandle, name: &str, args: Value, caller: Opt
             let handle = app.clone();
             let pane = super::blocking(app.clone(), move |s| restart_exited(&handle, s, &id)).await?;
             Ok(json!({ "pane_id": pane.id, "title": pane.title }))
+        }
+        "task_work" => {
+            let task = required(&args, "task")?.to_string();
+            let text = required(&args, "text")?.to_string();
+            let agent = arg(&args, "agent_id").map(str::to_string);
+            let own = caller.and_then(|c| state.ptys.info(c).ok()).and_then(|p| p.agent_id);
+            let handle = app.clone();
+            super::blocking(app.clone(), move |s| super::henchman_work::task_work(&handle, s, &task, &text, agent, own))
+                .await
         }
         "order_add" => {
             let order = super::henchman_orders::add(app, &state, required(&args, "text")?)?;
@@ -217,7 +244,7 @@ struct Facts {
     changed: u32,
 }
 
-fn failed(conclusion: Option<&str>) -> bool {
+pub(crate) fn failed(conclusion: Option<&str>) -> bool {
     matches!(conclusion, Some("failure" | "timed_out" | "action_required" | "startup_failure"))
 }
 
@@ -448,7 +475,7 @@ fn read(state: &AppState, pane_id: &str, lines: usize) -> Result<Value> {
     Ok(json!({ "pane": head, "output": output }))
 }
 
-fn tell(state: &AppState, pane_id: &str, text: &str) -> Result<Value> {
+pub(crate) fn tell(state: &AppState, pane_id: &str, text: &str) -> Result<Value> {
     let info = state.ptys.info(pane_id)?;
     if is_henchman(state, &info) {
         return Err(Error::Other("that pane is you".into()));
@@ -480,7 +507,7 @@ fn tell(state: &AppState, pane_id: &str, text: &str) -> Result<Value> {
 /// Restart an agent that exited by itself (HEN-10), but not one the
 /// Henchman restarted a moment ago, nor one that runs: a running agent is
 /// the user's to restart.
-fn restart_exited(app: &AppHandle, state: &AppState, id: &str) -> Result<PaneInfo> {
+pub(crate) fn restart_exited(app: &AppHandle, state: &AppState, id: &str) -> Result<PaneInfo> {
     let info = state.ptys.info(id)?;
     if is_henchman(state, &info) {
         return Err(Error::Other("that pane is you".into()));

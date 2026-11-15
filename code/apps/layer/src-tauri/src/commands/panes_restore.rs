@@ -249,6 +249,10 @@ pub fn restore_panes(app: &AppHandle) {
                 if pane.mid_turn {
                     super::henchman_feed::interrupted(&p.id);
                 }
+                // Back at launch, it looks at everything once (HEN-12).
+                if super::henchman::is_henchman(&state, &p) {
+                    super::henchman_feed::greet();
+                }
                 forget(&pane.id)
             }
             Back::Gone(_) => forget(&pane.id),

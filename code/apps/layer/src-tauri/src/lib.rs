@@ -246,6 +246,8 @@ pub fn run() {
 
             attention::spawn(handle.clone())?;
             news::spawn(handle.clone());
+            // Pull requests read for the Henchman while the window is away (HEN-12).
+            commands::spawn_henchman_watch(handle.clone());
             // The Slack bot's connection, when it is set up and on (BOT-1).
             handle.state::<AppState>().slack_bot.spawn(handle.clone());
             // Phones, if a way in was left on (PHONE-1). Nothing when not.

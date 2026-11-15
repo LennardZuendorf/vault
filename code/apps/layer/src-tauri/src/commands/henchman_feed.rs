@@ -1,10 +1,12 @@
-//! What the Henchman is told as it happens (HEN-9, HEN-10): every agent
-//! and chat that finishes a turn, was put back mid-turn after the app quit,
-//! or exited by itself, batched into one message while it is busy, with its
-//! standing orders, so it can answer what you've answered before, tell an
-//! agent with steps of its own plan left to go on, and restart one that
-//! fell over. Run from the attention pass (`attention.rs`), which already
-//! looks at every pane.
+//! What the Henchman is told as it happens (HEN-9, HEN-10, HEN-12): every
+//! agent and chat that finishes a turn, was put back mid-turn after the app
+//! quit, or exited by itself, and what changed on the tasks' pull requests,
+//! batched into one message while it is busy, with its standing orders, so
+//! it can answer what you've answered before, tell an agent with steps of
+//! its own plan left to go on, restart one that fell over, and put a task's
+//! agent on what its pull request needs. Once Layer has started, it is told
+//! to look at everything. Run from the attention pass (`attention.rs`),
+//! which already looks at every pane.
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -29,6 +31,9 @@ const QUEUE: usize = 12;
 /// How long a pane put back mid-turn waits for a Henchman to hear of it.
 /// Woken later than this, the user has likely seen to it themselves.
 const STALE: Duration = Duration::from_secs(10 * 60);
+/// How long after launch the Henchman put back is told Layer started: the
+/// other panes are back by then, and their conversations replayed.
+const SETTLE: Duration = Duration::from_secs(20);
 
 /// Panes put back at launch that were mid-turn when the app quit, by their
 /// new ids (HEN-10). Filled by the restore, which runs apart from the
@@ -38,6 +43,25 @@ static INTERRUPTED: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
 /// A pane the restore put back that was mid-turn at quit.
 pub(crate) fn interrupted(pane_id: &str) {
     INTERRUPTED.lock().push((pane_id.to_string(), Instant::now()));
+}
+
+/// When the restore put the Henchman back (HEN-12).
+static GREET: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// The restore put the Henchman back: once Layer has settled it is told to
+/// look at everything, since nothing else wakes it until an agent stops.
+pub(crate) fn greet() {
+    *GREET.lock() = Some(Instant::now());
+}
+
+/// Whether the Henchman is to be told Layer started: settled, and not so
+/// late the user has likely seen to things themselves.
+fn greet_due() -> bool {
+    let mut at = GREET.lock();
+    if at.is_some_and(|at| at.elapsed() >= STALE) {
+        *at = None;
+    }
+    at.is_some_and(|at| at.elapsed() >= SETTLE)
 }
 
 /// The agents in the middle of a turn, at a permission question included:
@@ -86,6 +110,17 @@ struct Stopped {
     error: Option<String>,
 }
 
+/// What changed on one pull request (HEN-12).
+#[derive(Debug, Clone, PartialEq)]
+struct PrNews {
+    task_id: String,
+    /// The task's ticket key, or its name.
+    name: String,
+    repo: String,
+    number: u64,
+    what: Vec<String>,
+}
+
 /// The panes seen at the last pass, and what is still to be told.
 #[derive(Default)]
 pub struct HenchmanFeed {
@@ -95,6 +130,7 @@ pub struct HenchmanFeed {
     /// Agents running at the last pass, to see which then exited.
     running: HashSet<String>,
     queue: Vec<Stopped>,
+    prs: Vec<PrNews>,
 }
 
 impl HenchmanFeed {
@@ -124,24 +160,40 @@ impl HenchmanFeed {
             self.queue.push(stopped(state, p, Why::Finished));
         }
 
+        let changed = super::henchman_watch::take_changes();
         let Some(henchman) = henchman else {
             self.queue.clear();
+            self.prs.clear();
             return;
         };
+        for c in changed.into_iter().filter(|c| !alone.contains(&c.task_id)) {
+            let task = state.config.task(&c.task_id).ok();
+            let name = task.map(|t| t.issue_key.unwrap_or(t.name)).unwrap_or_else(|| "a task".into());
+            let news = PrNews { task_id: c.task_id, name, repo: c.repo, number: c.number, what: c.what };
+            merge(&mut self.prs, news);
+        }
         // Itself put back mid-turn: it goes on with its own work first.
         if back.contains(&henchman.id) {
             let _ = state.ptys.submit(&henchman.id, RESTORED);
         }
-        if self.queue.is_empty() || busy(state, henchman) {
+        let greet = greet_due();
+        if (!greet && self.queue.is_empty() && self.prs.is_empty()) || busy(state, henchman) {
+            return;
+        }
+        let orders = state.config.with(|c| c.henchman.orders.clone());
+        // What stopped meanwhile waits for the next pass, after this turn.
+        if greet {
+            if state.ptys.submit(&henchman.id, &started(&orders)).is_ok() {
+                *GREET.lock() = None;
+            }
             return;
         }
         let at = self.queue.len().saturating_sub(QUEUE);
-        let told = &self.queue[at..];
-        let orders = state.config.with(|c| c.henchman.orders.clone());
-        let text = message(&orders, told, at);
+        let text = message(&orders, &self.queue[at..], at, &self.prs);
         // Kept for the next pass if it can't be sent now.
         if state.ptys.submit(&henchman.id, &text).is_ok() {
             self.queue.clear();
+            self.prs.clear();
         }
     }
 
@@ -204,6 +256,23 @@ fn take_interrupted(henchman: bool) -> HashSet<String> {
     std::mem::take(&mut *list).into_iter().map(|(id, _)| id).collect()
 }
 
+/// One more change to a pull request already waiting to be told joins its
+/// line. Past `QUEUE` pull requests, the oldest go: `work_overview` has them.
+fn merge(prs: &mut Vec<PrNews>, news: PrNews) {
+    match prs.iter_mut().find(|n| n.task_id == news.task_id && n.repo == news.repo && n.number == news.number) {
+        Some(n) => {
+            for w in news.what {
+                if !n.what.contains(&w) {
+                    n.what.push(w);
+                }
+            }
+        }
+        None => prs.push(news),
+    }
+    let over = prs.len().saturating_sub(QUEUE);
+    prs.drain(..over);
+}
+
 /// What the Henchman is told when it was itself put back mid-turn.
 const RESTORED: &str =
     "[villain-layer · restored] Layer quit in the middle of your turn, and you are back. Go on where you were.";
@@ -254,11 +323,11 @@ fn failed_on<'a>(bodies: impl IntoIterator<Item = &'a Body>) -> Option<String> {
     error
 }
 
-/// The one message for everything that stopped since it was last told:
-/// its first line names them, since that is all the conversation shows
-/// of it until it is opened (ACP-19).
-fn message(orders: &[StandingOrder], stopped: &[Stopped], dropped: usize) -> String {
-    let mut m = format!("[villain-layer · {}] {}\n\n", tag(stopped), headline(stopped, dropped));
+/// The one message for everything that stopped and every pull request that
+/// changed since it was last told: its first line names them, since that is
+/// all the conversation shows of it until it is opened (ACP-19).
+fn message(orders: &[StandingOrder], stopped: &[Stopped], dropped: usize, prs: &[PrNews]) -> String {
+    let mut m = format!("[villain-layer · {}] {}\n\n", tag(stopped, prs), headline(stopped, dropped, prs));
     for s in stopped {
         let why = match s.why {
             Why::Finished => "",
@@ -281,6 +350,29 @@ fn message(orders: &[StandingOrder], stopped: &[Stopped], dropped: usize) -> Str
     if dropped > 0 {
         m.push_str(&format!("- and {dropped} more before these: work_overview has them\n"));
     }
+    if !prs.is_empty() {
+        if !stopped.is_empty() || dropped > 0 {
+            m.push('\n');
+        }
+        m.push_str("Pull requests that changed:\n");
+    }
+    for p in prs {
+        m.push_str(&format!("- {} · {} #{} (task {}): {}\n", p.name, p.repo, p.number, p.task_id, p.what.join("; ")));
+    }
+    orders_and_what_to_do(&mut m, orders, "\nFor each:\n");
+    m
+}
+
+/// What the Henchman put back at launch is told (HEN-12): nothing else wakes
+/// it until an agent stops, and work waits meanwhile.
+fn started(orders: &[StandingOrder]) -> String {
+    let mut m = String::from("[villain-layer · started] Layer started, and you are back. Look at everything once.\n");
+    orders_and_what_to_do(&mut m, orders, "\nCall work_overview, then for each task and chat:\n");
+    m
+}
+
+/// The standing orders, then how to act on what the message names.
+fn orders_and_what_to_do(m: &mut String, orders: &[StandingOrder], each: &str) {
     m.push_str("\nYour standing orders:\n");
     if orders.is_empty() {
         m.push_str("none yet.\n");
@@ -288,23 +380,39 @@ fn message(orders: &[StandingOrder], stopped: &[Stopped], dropped: usize) -> Str
     for o in orders {
         m.push_str(&format!("- [{}] {}\n", o.id, o.text));
     }
-    m.push_str(concat!(
-        "\nFor each: if it asks something an order answers, answer it with pane_tell as the order ",
-        "says; if it asks nothing and stopped with steps of its own plan left, tell it \"go on\". ",
-        "One put back after Layer quit, or whose turn ended on an error a retry fixes (overloaded, ",
-        "a rate limit, a lost connection), you tell to go on where it was. One that exited by ",
-        "itself you restart with pane_restart, then tell it to go on; if it exits again, leave it ",
-        "and tell me. Then one line here for each you answered (\"ACME-12: said go on\"). Anything ",
-        "else, and anything you're unsure of, one line for me, unanswered. Finished work is mine ",
-        "to look at: say it's done."
-    ));
-    m
+    m.push_str(each);
+    m.push_str(WHAT_TO_DO);
 }
 
+/// Act first, then say: the user asked for a Henchman that does what it may
+/// without being asked each time (HEN-12).
+const WHAT_TO_DO: &str = concat!(
+    "- It asks something an order answers: answer it with pane_tell, as the order says.\n",
+    "- It asks nothing and stopped with steps of its own plan left: tell it \"go on\". Put back ",
+    "after Layer quit, or its turn ended on an error a retry fixes (overloaded, a rate limit, a ",
+    "lost connection): tell it to go on where it was. Three times in a row at most; then ask me.\n",
+    "- It exited by itself: restart it with pane_restart, then tell it to go on; if it exits ",
+    "again, leave it and tell me.\n",
+    "- Its pull request's checks failed, or it has comments to answer, changes asked for or a ",
+    "conflict: put the task's agent on it with task_work, saying what to fix, unless its agent ",
+    "works already.\n",
+    "- A pull request can merge or was merged: tell me.\n",
+    "Then one line here for each thing you did (\"ACME-12: said go on\", \"ACME-14: its agent is ",
+    "on 2 review comments\"), and one line for each thing only I can answer. Don't ask me whether ",
+    "to do what you may do yourself. Merging, marking ready, finishing and anything others see ",
+    "stay mine unless an order says so. Finished work is mine to look at: say it's done."
+);
+
 /// The bracket's word: what they have in common.
-fn tag(stopped: &[Stopped]) -> &'static str {
+fn tag(stopped: &[Stopped], prs: &[PrNews]) -> &'static str {
     let all = |why: Why| !stopped.is_empty() && stopped.iter().all(|s| s.why == why);
-    if all(Why::Interrupted) {
+    if !prs.is_empty() {
+        if stopped.is_empty() {
+            "pull requests"
+        } else {
+            "changed"
+        }
+    } else if all(Why::Interrupted) {
         "restored"
     } else if all(Why::Exited) {
         "exited"
@@ -316,9 +424,18 @@ fn tag(stopped: &[Stopped]) -> &'static str {
 }
 
 /// "ACME-12 · Claude Code and Chat · Why is staging slow stopped", or how
-/// many past three.
-fn headline(stopped: &[Stopped], dropped: usize) -> String {
+/// many past three; then the pull requests: one by what changed, more by
+/// how many.
+fn headline(stopped: &[Stopped], dropped: usize, prs: &[PrNews]) -> String {
+    let prs = match prs {
+        [] => None,
+        [one] => Some(format!("{} · {} #{}: {}", one.name, one.repo, one.number, one.what.join("; "))),
+        more => Some(format!("{} pull requests changed", more.len())),
+    };
     let n = stopped.len() + dropped;
+    if n == 0 {
+        return format!("{}.", prs.unwrap_or_else(|| "Nothing".into()));
+    }
     let names: Vec<&str> = stopped.iter().map(|s| s.name.as_str()).collect();
     let who = match names.as_slice() {
         _ if n > 3 => format!("{n} agents and chats"),
@@ -326,14 +443,17 @@ fn headline(stopped: &[Stopped], dropped: usize) -> String {
         [one] => one.to_string(),
         [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     };
-    let what = match tag(stopped) {
+    let what = match tag(stopped, &[]) {
         "restored" => "were put back mid-turn",
         "exited" => "exited by themselves",
         "finished" => "finished a turn",
         _ => "stopped",
     };
     // "were" and "themselves" read for one as well as many here.
-    format!("{who} {what}.")
+    match prs {
+        Some(prs) => format!("{who} {what}; {prs}."),
+        None => format!("{who} {what}."),
+    }
 }
 
 #[cfg(test)]
@@ -426,7 +546,7 @@ mod tests {
                 error: None,
             },
         ];
-        let m = message(&orders, &stopped, 3);
+        let m = message(&orders, &stopped, 3, &[]);
         let at = |s: &str| m.find(s).unwrap_or_else(|| panic!("{s} missing from:\n{m}"));
         assert!(at("ACME-12 · Claude Code (pane p1)") < at("said: Done with step 2 of 4."));
         assert!(at("ACME-14 · Codex (pane p2)") < at("pane_read shows"));
@@ -441,21 +561,23 @@ mod tests {
     #[test]
     fn the_first_line_names_what_stopped_since_it_is_all_the_conversation_shows() {
         let two = [stop("ACME-12 · Claude Code", Why::Finished), stop("Chat · Why so slow", Why::Finished)];
-        let m = message(&[], &two, 0);
+        let m = message(&[], &two, 0, &[]);
         assert!(
             m.starts_with("[villain-layer · finished] ACME-12 · Claude Code and Chat · Why so slow finished a turn.\n")
         );
         let back = [stop("ACME-12 · Claude Code", Why::Interrupted)];
-        assert!(message(&[], &back, 0).starts_with("[villain-layer · restored] ACME-12 · Claude Code were put back"));
+        assert!(
+            message(&[], &back, 0, &[]).starts_with("[villain-layer · restored] ACME-12 · Claude Code were put back")
+        );
         let mixed = [stop("A", Why::Exited), stop("B", Why::Finished)];
-        assert!(message(&[], &mixed, 2).starts_with("[villain-layer · stopped] 4 agents and chats stopped."));
+        assert!(message(&[], &mixed, 2, &[]).starts_with("[villain-layer · stopped] 4 agents and chats stopped."));
     }
 
     #[test]
     fn an_agent_put_back_or_exited_says_so_with_the_error_its_turn_ended_on() {
         let mut exited = stop("ACME-9 · Claude Code", Why::Exited);
         exited.error = Some("Overloaded".into());
-        let m = message(&[], &[exited, stop("ACME-3 · Codex", Why::Interrupted)], 0);
+        let m = message(&[], &[exited, stop("ACME-3 · Codex", Why::Interrupted)], 0, &[]);
         assert!(m.contains("ACME-9 · Claude Code (pane p) — exited by itself\n"));
         assert!(m.contains("its turn ended on an error: Overloaded"));
         assert!(m.contains("— put back after Layer quit in the middle of its turn"));
@@ -519,6 +641,50 @@ mod tests {
 
     #[test]
     fn without_orders_it_says_there_are_none() {
-        assert!(message(&[], &[], 0).contains("none yet."));
+        assert!(message(&[], &[], 0, &[]).contains("none yet."));
+    }
+
+    fn news(task: &str, what: &str) -> PrNews {
+        PrNews {
+            task_id: task.into(),
+            name: task.to_uppercase(),
+            repo: "api".into(),
+            number: 34,
+            what: vec![what.into()],
+        }
+    }
+
+    #[test]
+    fn a_pull_request_that_changed_is_named_on_the_first_line_and_put_to_work() {
+        let one = [news("acme-12", "checks failed: build")];
+        let m = message(&[], &[], 0, &one);
+        assert!(m.starts_with("[villain-layer · pull requests] ACME-12 · api #34: checks failed: build.\n"), "{m}");
+        assert!(m.contains("- ACME-12 · api #34 (task acme-12): checks failed: build\n"));
+        assert!(m.contains("task_work"));
+        let both = message(&[], &[stop("ACME-9 · Codex", Why::Finished)], 0, &[news("a", "x"), news("b", "y")]);
+        assert!(
+            both.starts_with("[villain-layer · changed] ACME-9 · Codex finished a turn; 2 pull requests changed.\n")
+        );
+    }
+
+    #[test]
+    fn changes_to_one_pull_request_before_it_is_told_make_one_line() {
+        let mut prs = Vec::new();
+        merge(&mut prs, news("acme-12", "checks failed: build"));
+        merge(&mut prs, news("acme-12", "1 comment to answer"));
+        merge(&mut prs, news("acme-12", "checks failed: build"));
+        merge(&mut prs, news("acme-14", "can merge"));
+        assert_eq!(prs.len(), 2);
+        assert_eq!(prs[0].what, ["checks failed: build", "1 comment to answer"]);
+    }
+
+    #[test]
+    fn once_layer_started_the_henchman_is_told_to_look_at_everything_and_act() {
+        let orders = [StandingOrder { id: "o1".into(), text: "yes to running the tests".into() }];
+        let m = started(&orders);
+        assert!(m.starts_with("[villain-layer · started] Layer started"));
+        let at = |s: &str| m.find(s).unwrap_or_else(|| panic!("{s} missing from:\n{m}"));
+        assert!(at("[o1]") < at("Call work_overview") && at("Call work_overview") < at("task_work"));
+        assert!(m.contains("Don't ask me whether to do what you may do yourself"));
     }
 }

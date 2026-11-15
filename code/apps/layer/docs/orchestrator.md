@@ -201,3 +201,18 @@ Step 1 only listed, and the agents kept asking the same questions. So:
   conversation and told to go on, once; a turn that ended on an error a
   retry fixes is told to go on (HEN-10).
 
+## Decided later still (Nov 15): it works on its own
+
+It still had to be pinged for everything: it listed the PRs that needed
+work and asked whether to open chats for them. So:
+
+- **Acts alone, inside tasks:** it puts a started task's agent on review
+  comments, failed checks, conflicts, changes asked for, the PR's
+  description and readiness fixes, on the task's own branch, and says
+  what it did. Starting a ticket, marking ready, merging, Slack and Jira
+  still need your word or a standing order (HEN-11).
+- **Wakes on changes:** when an agent stops, when Layer starts, and when
+  a task's PR fails a check, gets comments, has changes asked for,
+  conflicts, can merge or merged. With the window away, Layer itself
+  reads the PRs while the Henchman runs (HEN-12).
+

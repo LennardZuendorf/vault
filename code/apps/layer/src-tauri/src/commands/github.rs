@@ -196,20 +196,7 @@ pub async fn github_task_prs(state: State<'_, AppState>, task_id: String) -> Res
 #[tauri::command]
 pub async fn github_all_prs(state: State<'_, AppState>) -> Result<Vec<TaskPrs>> {
     let (client, _) = github_client(&state)?;
-    let ids: Vec<String> = state.config.with(|c| {
-        c.tasks
-            .iter()
-            // A review task left from 0.5.0 has no pull request of its own on
-            // its branch, and its ticket is someone else's to move.
-            .filter(|t| t.review.is_none())
-            .map(|t| t.id.clone())
-            .collect()
-    });
-    let ids = {
-        let mut settled = state.prs_settled.lock();
-        settled.retain(|id, _| ids.contains(id));
-        due(ids, &settled, std::time::Instant::now())
-    };
+    let ids = sweep_ids(&state);
 
     // A few tasks at a time rather than one after another: with every task's
     // repos in series a sweep of a dozen tasks took longer than the interval
@@ -234,11 +221,24 @@ pub async fn github_all_prs(state: State<'_, AppState>) -> Result<Vec<TaskPrs>> 
         .filter_map(|t| async move { t })
         .collect::<Vec<_>>()
         .await;
+    // The Henchman's own sweep waits while the window's runs (HEN-12).
+    super::henchman_watch::swept();
     Ok(out)
 }
 
+/// The tasks a sweep reads: every one but a review task left from 0.5.0,
+/// which has no pull request of its own on its branch and whose ticket is
+/// someone else's to move, and a settled one only when it is due.
+pub(crate) fn sweep_ids(state: &AppState) -> Vec<String> {
+    let ids: Vec<String> =
+        state.config.with(|c| c.tasks.iter().filter(|t| t.review.is_none()).map(|t| t.id.clone()).collect());
+    let mut settled = state.prs_settled.lock();
+    settled.retain(|id, _| ids.contains(id));
+    due(ids, &settled, std::time::Instant::now())
+}
+
 /// How many tasks the PR sweep asks GitHub about at once.
-const SWEEP_TASKS: usize = 4;
+pub(crate) const SWEEP_TASKS: usize = 4;
 
 /// How often the sweep asks about a task whose pull requests were all
 /// closed or merged. Every task kept was swept every 90 seconds, done ones
@@ -512,7 +512,11 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
     } else {
         state.prs_settled.lock().remove(task_id);
     }
-    state.prs_seen.lock().insert(task_id.to_string(), rows.clone());
+    let before = state.prs_seen.lock().insert(task_id.to_string(), rows.clone());
+    // The Henchman hears what changed since the read before (HEN-12).
+    if let Some(before) = before {
+        super::henchman_watch::seen(state, task_id, &before, &rows);
+    }
     Ok(rows)
 }
 
