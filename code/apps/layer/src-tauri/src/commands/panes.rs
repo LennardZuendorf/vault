@@ -334,6 +334,9 @@ pub(crate) fn start_agent(
 
     pretrust_own_dir(state, &agent_id, &cwd);
     let env = plug_in(app, def, &mut args, own.as_deref());
+    if state.config.with(|c| c.ui.agents_auto_mode) {
+        args.extend(agents::auto_mode_args(def).iter().map(|a| a.to_string()));
+    }
 
     let pane = state.ptys.spawn(
         app,
@@ -684,6 +687,10 @@ pub(crate) fn open_chat(
     pretrust_own_dir(state, &agent_id, &dir.to_string_lossy());
     // The chat's folder is the app's own, so it can hold what a CLI needs.
     let env = plug_in(app, def, &mut args, Some(&dir));
+    // The Henchman whatever the setting (HEN-2), every chat while it is on (PANE-18).
+    if henchman || state.config.with(|c| c.ui.agents_auto_mode) {
+        args.extend(agents::auto_mode_args(def).iter().map(|a| a.to_string()));
+    }
 
     let pane = state.ptys.spawn(
         app,

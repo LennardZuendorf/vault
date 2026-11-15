@@ -484,6 +484,16 @@ Each of them can also run as a conversation the app draws, over ACP (§20).
   within a task) and **Newest first** (by when each started). Ties keep
   the order the panes came in. Looking at a finished agent does not move
   it, so opening one does not reorder the list under you.
+- **PANE-18** Claude Code MUST start in its `auto` mode while "Start
+  Claude Code in auto mode" is on (the default): Claude judges which
+  commands and edits are safe and asks only about the rest, so an agent
+  stops less often to ask what it asked before. It holds for task agents
+  and chats, in a terminal (`--permission-mode auto`, on a start and on a
+  resume) or over ACP (set before the first prompt, as BOT-12 sets it).
+  A Slack thread's chat follows the bot's *Work without asking* instead
+  (BOT-12), and the Henchman always starts in it (HEN-2). An agent that
+  offers no `auto` mode keeps its own. Turned off, an agent asks as its
+  own settings say; one already running keeps its mode.
 
 Code: `pty.rs`, `agents.rs`, `commands/panes.rs` (`restart_pane`),
 `Terminals.tsx`, `Terminal.tsx`, `AgentsView.tsx` (`lib/agentSort.ts`),
@@ -1396,6 +1406,7 @@ Known gaps:
 | Notifications: Slack | — | once the bot is connected: the channel, four switches (BOT-15, NOTE-5) |
 | Agents: Put terminals back when the app reopens | on | PANE-7 |
 | Agents: Trust the folders this app creates | on | PANE-10 |
+| Agents: Start Claude Code in auto mode | on | PANE-18 |
 | Agents: Let agents read terminal output | **off** | MCP `pane_output`, `handoff_prompt` |
 | Agents: Most terminals running at once | 32 | 32, 48 or 64 (PANE-2) |
 | Agents: Task folder location | `~/.villain-worktrees` | where task folders go |

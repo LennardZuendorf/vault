@@ -135,9 +135,10 @@ New:
    shared state.
 2. **Act.** `task_start`, loops, opening PRs, asking for review again,
    finishing, each with its card.
-3. **Drive.** `drive`, and events pushed to it: it carries the tickets
-   handed to it, and passes red checks and review comments on for every
-   task.
+3. **Drive.** Told when any agent ends a turn, it answers what you've
+   answered before and says "go on" to an agent with planned steps left,
+   for every task and chat; then `drive`, red checks and review comments.
+   Standing orders, kept in the lair, are what it answers from.
 4. **Away.** @DrDoom and the phone reach the same Henchman.
 
 Each step is used for a few days before the next one starts.
@@ -168,10 +169,31 @@ it is.
   What you tell it to pass on goes straight away; it starts a chat on
   your word.
 - **On its own:** it passes red checks and review comments to the task's
-  own agent. For a ticket you hand it, it also tells the agent to go on
-  between turns. Starting work, opening PRs, asking for review, finishing,
-  answering agents' questions, and anything in Jira, GitHub or Slack wait
-  for your click.
+  own agent. Starting work, opening PRs, asking for review, finishing,
+  and anything in Jira, GitHub or Slack wait for your click, unless a
+  standing order says otherwise (below).
 - **In flight:** it suggests which tasks to leave alone for now and why;
   it stops and hides nothing.
 - **Name:** Henchman.
+
+## Decided later (Nov 15): it drives
+
+Step 1 only listed, and the agents kept asking the same questions. So:
+
+- **Answers on its own:** when an agent or chat ends a turn, the Henchman
+  hears of it. It answers a question you've answered before, from its
+  standing orders, and says "go on" to an agent that stopped with planned
+  steps left. A new question comes to you. Each answer it gives is one
+  line in its conversation.
+- **Standing orders:** what you tell it to answer from now on, kept
+  across restarts, listed in the lair, each removable. You add one by
+  telling it ("always say yes to running the tests").
+- **Outward actions:** a standing order may let it say yes to marking a
+  PR ready, posting in Slack or commenting in Jira, once you've said so.
+  Nothing outward happens without such an order or your click.
+- **Which:** every task agent and chat, except one you tell it to leave
+  alone.
+- **Permission prompts:** Claude Code starts in its auto mode (PANE-18),
+  for task agents and chats as for the Henchman, so the prompts it would
+  otherwise repeat mostly never come.
+

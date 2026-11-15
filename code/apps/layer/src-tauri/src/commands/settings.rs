@@ -118,6 +118,7 @@ pub fn set_ui_prefs(app: AppHandle, state: State<AppState>, ui: UiPrefs) -> Resu
         restore_panes: ui.restore_panes,
         pane_limit: ui.pane_limit.clamp(crate::pty::PANE_LIMIT, crate::pty::MAX_PANES),
         agents_read_panes: ui.agents_read_panes,
+        agents_auto_mode: ui.agents_auto_mode,
         trust_agent_dirs: ui.trust_agent_dirs,
         sync_jira_status: ui.sync_jira_status,
         system_notifications: ui.system_notifications,

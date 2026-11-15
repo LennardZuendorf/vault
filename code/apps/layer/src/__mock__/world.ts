@@ -80,6 +80,7 @@ const ui: UiPrefs = {
   system_notifications: true,
   notify_waiting_agents: true,
   agents_read_panes: false,
+  agents_auto_mode: true,
   keep_awake: false,
 };
 

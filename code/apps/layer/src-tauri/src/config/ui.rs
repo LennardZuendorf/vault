@@ -59,6 +59,12 @@ pub struct UiPrefs {
     /// a failing script or a remote URL with credentials in it.
     #[serde(default)]
     pub agents_read_panes: bool,
+    /// Start Claude Code in its `auto` mode (PANE-18). On by default: in its
+    /// own mode an agent stopped to ask before most commands, the same
+    /// questions in every task, and someone driving twenty tickets answered
+    /// them all day.
+    #[serde(default = "yes")]
+    pub agents_auto_mode: bool,
     /// Keep the Mac from idle sleep while an agent is working (STATE-7).
     /// Off by default: on battery, an agent left working overnight would
     /// keep the machine up until it ran flat.
@@ -80,6 +86,7 @@ impl Default for UiPrefs {
             system_notifications: true,
             notify_waiting_agents: true,
             agents_read_panes: false,
+            agents_auto_mode: true,
             keep_awake: false,
         }
     }

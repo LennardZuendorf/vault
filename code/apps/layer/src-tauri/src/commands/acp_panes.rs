@@ -80,12 +80,28 @@ pub(crate) fn start(app: &AppHandle, state: &AppState, def: &agents::AgentDef, s
         title_activity: None,
         title_topic: None,
     };
-    let presets = if super::henchman::is_room(state, std::path::Path::new(&opts.cwd)) {
-        super::henchman::presets()
-    } else {
-        crate::slack_bot::presets_for(&state.config.read(), &opts.cwd)
-    };
+    // Asked before the config is read: `is_room` reads it too.
+    let henchman = super::henchman::is_room(state, std::path::Path::new(&opts.cwd));
+    let presets = launch_presets(&state.config.read(), &opts.cwd, henchman);
     state.ptys.spawn_acp(app, opts, acp::Launch { mcp, pick, prompt, presets, on_session: Some(on_session) })
+}
+
+/// What an agent opening in `cwd` is set to before its first prompt, as
+/// (category, value). The Henchman always works in `auto` (HEN-2); a Slack
+/// thread's chat as the bot is set (BOT-12, BOT-17), so turning *Work
+/// without asking* off there still holds; every other agent in `auto`
+/// while the owner leaves that on (PANE-18). A value the agent doesn't
+/// offer is skipped when it is set.
+fn launch_presets(config: &crate::config::AppConfig, cwd: &str, henchman: bool) -> Vec<(String, String)> {
+    if henchman {
+        super::henchman::presets()
+    } else if crate::slack_bot::is_thread_room(config, cwd) {
+        crate::slack_bot::presets_for(config, cwd)
+    } else if config.ui.agents_auto_mode {
+        vec![("mode".to_string(), "auto".to_string())]
+    } else {
+        Vec::new()
+    }
 }
 
 /// The models a conversation was offered: its settings in the `model`
@@ -135,4 +151,58 @@ pub fn acp_answer(state: State<AppState>, pane_id: String, entry: usize, option:
 #[tauri::command]
 pub fn acp_set(state: State<AppState>, pane_id: String, setting: String, value: String) -> Result<()> {
     state.ptys.acp_set(&pane_id, &setting, &value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{AppConfig, SlackBotConfig, SlackThread};
+
+    fn auto() -> Vec<(String, String)> {
+        vec![("mode".to_string(), "auto".to_string())]
+    }
+
+    fn with_bot(bot_auto: bool, agents_auto: bool) -> AppConfig {
+        let bot = SlackBotConfig {
+            owner: "UME".into(),
+            agent_id: "claude".into(),
+            bot_user: "UBOT".into(),
+            bot_name: "drdoom".into(),
+            enabled: true,
+            auto: bot_auto,
+            personality: String::new(),
+            model: String::new(),
+        };
+        let thread = SlackThread {
+            channel: "C1".into(),
+            ts: "1.1".into(),
+            room: "/chat/slack".into(),
+            label: "#ops".into(),
+            link: String::new(),
+            seen: String::new(),
+        };
+        let mut config = AppConfig { slack_bot: Some(bot), slack_threads: vec![thread], ..Default::default() };
+        config.ui.agents_auto_mode = agents_auto;
+        config
+    }
+
+    #[test]
+    fn task_agents_and_chats_open_in_auto_mode_while_the_owner_leaves_it_on() {
+        assert_eq!(launch_presets(&AppConfig::default(), "/work/T-1", false), auto());
+        let mut off = AppConfig::default();
+        off.ui.agents_auto_mode = false;
+        assert!(launch_presets(&off, "/work/T-1", false).is_empty());
+    }
+
+    #[test]
+    fn the_henchman_is_in_auto_mode_whatever_the_setting() {
+        assert_eq!(launch_presets(&with_bot(false, false), "/chat/henchman", true), auto());
+    }
+
+    #[test]
+    fn a_slack_thread_follows_the_bot_not_the_owners_setting() {
+        assert!(launch_presets(&with_bot(false, true), "/chat/slack", false).is_empty());
+        assert_eq!(launch_presets(&with_bot(true, false), "/chat/slack", false), auto());
+        assert_eq!(launch_presets(&with_bot(false, true), "/chat/mine", false), auto());
+    }
 }

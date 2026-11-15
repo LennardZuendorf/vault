@@ -458,6 +458,8 @@ export interface UiPrefs {
   /** A banner when an agent stops to wait on you while the window is away, and the dock count. */
   notify_waiting_agents: boolean;
   agents_read_panes: boolean;
+  /** Claude Code starts in its auto mode (PANE-18). */
+  agents_auto_mode: boolean;
   /** Keep the Mac from idle sleep while an agent is working (STATE-7). */
   keep_awake: boolean;
 }

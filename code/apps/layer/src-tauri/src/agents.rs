@@ -776,6 +776,16 @@ pub fn available() -> Vec<AgentStatus> {
         .collect()
 }
 
+/// What starts this CLI in its `auto` mode (PANE-18), when it has one we
+/// can name on its command line. Claude Code's `auto` judges each command
+/// and edit itself and asks only about the rest.
+pub fn auto_mode_args(def: &AgentDef) -> &'static [&'static str] {
+    match def.integration {
+        Integration::Claude => &["--permission-mode", "auto"],
+        _ => &[],
+    }
+}
+
 /// Argv and any text that must be typed in after start-up.
 pub fn launch_args(def: &AgentDef, prompt: Option<&str>) -> (Vec<String>, Option<String>) {
     let mut args: Vec<String> = def.base_args.iter().map(|s| s.to_string()).collect();
@@ -1108,5 +1118,13 @@ mod tests {
         prepare_launch(Integration::Gemini, &dir, Some(&mcp), None, None).unwrap();
         assert!(!wt.join(".gemini").exists());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn only_claude_code_is_started_in_auto_mode_by_its_command_line() {
+        assert_eq!(auto_mode_args(find("claude").unwrap()), ["--permission-mode", "auto"]);
+        for a in AGENTS.iter().filter(|a| a.id != "claude") {
+            assert!(auto_mode_args(a).is_empty(), "{}", a.id);
+        }
     }
 }

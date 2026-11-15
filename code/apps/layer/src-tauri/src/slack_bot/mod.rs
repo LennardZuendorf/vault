@@ -43,7 +43,7 @@ const AUTO: &str = "auto";
 /// restarted starts the same way.
 pub fn presets_for(config: &crate::config::AppConfig, room: &str) -> Vec<(String, String)> {
     let Some(bot) = config.slack_bot.as_ref() else { return Vec::new() };
-    if !config.slack_threads.iter().any(|t| t.room == room) {
+    if !is_thread_room(config, room) {
         return Vec::new();
     }
     let mut presets = Vec::new();
@@ -54,6 +54,12 @@ pub fn presets_for(config: &crate::config::AppConfig, room: &str) -> Vec<(String
         presets.push(("model".to_string(), bot.model.clone()));
     }
     presets
+}
+
+/// Whether a chat in `room` answers a Slack thread, so the bot's settings
+/// say how it starts rather than the owner's (BOT-12, PANE-18).
+pub fn is_thread_room(config: &crate::config::AppConfig, room: &str) -> bool {
+    config.slack_bot.is_some() && config.slack_threads.iter().any(|t| t.room == room)
 }
 
 /// Why a chat that should work without asking will not (BOT-12): the mode

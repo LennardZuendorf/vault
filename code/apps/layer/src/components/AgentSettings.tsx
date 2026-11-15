@@ -99,6 +99,12 @@ export function AgentSettings() {
             onChange={(v) => void saveUi({ trust_agent_dirs: v }, "terminals")}
           />
           <Switch
+            label="Start Claude Code in auto mode"
+            detail="Claude decides which commands and edits are safe and asks only about the rest. Off: each agent asks as its own settings say. For agents started from now on."
+            checked={ui.agents_auto_mode}
+            onChange={(v) => void saveUi({ agents_auto_mode: v }, "terminals")}
+          />
+          <Switch
             label="Let agents read terminal output"
             detail="A dev server's log or a test run, instead of starting a second copy. Off until you want it: a shell's scrollback holds everything typed in it."
             checked={ui.agents_read_panes}
