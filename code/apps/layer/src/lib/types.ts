@@ -1,5 +1,6 @@
 import type { TrackerKind } from "@layer/types";
 import type { SavedSignIn } from "./types-browser";
+import type { HenchmanAgent } from "./types-henchman";
 import type {
   GithubConfig,
   GrafanaConfig,
@@ -473,6 +474,8 @@ export interface Settings {
   slack_bot: SlackBotConfig | null;
   /** The models each ACP agent last offered, by agent id (BOT-17). */
   agent_models: Record<string, ModelChoice[]>;
+  /** What the Henchman is woken with (HEN-15). */
+  henchman: HenchmanAgent;
   worktree_root: string;
   worktree_root_is_default: boolean;
   jira_connected: boolean;

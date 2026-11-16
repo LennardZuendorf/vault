@@ -1605,6 +1605,15 @@ body.dragging * {
   margin-top: 4px;
   line-height: 1.45;
 }
+/* Sized by their content, the agent's select cut its name short beside a
+   wide "… decides". */
+.even-fields > .field {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.even-fields > .field > select {
+  width: 100%;
+}
 .section-tabs {
   flex-wrap: wrap;
   column-gap: 18px;

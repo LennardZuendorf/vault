@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import type { AcpStanding, AcpVersion, AgentStatus } from "../lib/types";
 import { useStore } from "../store";
+import { HenchmanSettings } from "./henchman/HenchmanSettings";
 import { BusyLabel, ErrorMessage, Field, Switch, useFailure } from "./ui";
 import { useUiPrefs } from "./useUiPrefs";
 
@@ -80,6 +81,7 @@ export function AgentSettings() {
   return (
     <>
       <AgentList />
+      <HenchmanSettings />
 
       <Field
         label="Terminals"

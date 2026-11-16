@@ -25,6 +25,8 @@ pub struct Settings {
     pub slack_bot: Option<SlackBotConfig>,
     /// The models each ACP agent last offered, for the bot's (BOT-17).
     pub agent_models: std::collections::HashMap<String, Vec<crate::config::ModelChoice>>,
+    /// What the Henchman is woken with (HEN-15).
+    pub henchman: crate::config::HenchmanAgent,
     pub worktree_root: String,
     pub worktree_root_is_default: bool,
     pub jira_connected: bool,
@@ -93,6 +95,7 @@ pub fn get_settings(state: State<AppState>) -> Settings {
         grafana: c.grafana,
         slack_bot: c.slack_bot,
         agent_models: c.agent_models,
+        henchman: c.henchman.agent,
     }
 }
 

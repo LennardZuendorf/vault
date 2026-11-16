@@ -1418,6 +1418,7 @@ Known gaps:
 | Agents: Start Claude Code in auto mode | on | PANE-18 |
 | Agents: Let agents read terminal output | **off** | MCP `pane_output`, `handoff_prompt` |
 | Agents: Most terminals running at once | 32 | 32, 48 or 64 (PANE-2) |
+| Agents: Henchman's agent, model and effort | Claude Code, Sonnet, Medium | HEN-15 |
 | Agents: Task folder location | `~/.villain-worktrees` | where task folders go |
 | Keep awake (the cup in the top bar) | off | STATE-7, PHONE-8 |
 | Browser: sites agents may use | none: this machine's pages only | BRW-3, BRW-11 |
@@ -3562,7 +3563,8 @@ Slack come later.
 - **HEN-2** There MUST be one Henchman: a chat over ACP (§20) in a room
   of its own, `<worktree root>/_chat/henchman`, so it keeps its history
   across restarts (CHAT-1) and holds no worktrees. It is woken from its
-  tab with any agent that speaks ACP; waking it while it runs gives back
+  tab with the agent chosen for it (HEN-15), or else any that speaks
+  ACP; waking it while it runs gives back
   the one running. Its context file says who it is, what its tools do,
   and what it never does: write code, edit files, merge, or answer anyone
   in Jira, GitHub or Slack without asking. It is not listed in Chat and
@@ -3790,10 +3792,26 @@ Slack come later.
   kept in `henchman.json` beside the config, so Layer quit and opened
   again shows the same lair; a file that cannot be read is kept beside
   it as `henchman.json.unreadable`, and the lair starts empty.
+- **HEN-15** Settings → Agents MUST choose the agent the Henchman is woken
+  with, any that runs as a conversation (ACP), and the model and effort
+  it runs on, saved as they are chosen. The models are the ones the
+  agent offered, as for the bot (BOT-17); the efforts are Low, Medium
+  and High, or the agent decides. It starts on Claude Code, Sonnet and
+  Medium: it reads Layer and passes words on, and writes no code. Left
+  to Claude Code, it opened on the default model at the effort the user
+  set for their own work, Xhigh, for a brief. Its conversation is put on that model, then
+  that effort, after its mode (HEN-2), each time it opens, put back at
+  launch too, and only when it runs the agent they were chosen with. A
+  value the agent does not offer then is left as the agent has it.
+  Choosing another agent goes back to it deciding both. The Henchman
+  running keeps its agent: while it runs on another, Settings says so
+  and offers to wake it with the chosen one, which begins a new
+  conversation.
 
 Code: `commands/henchman.rs` (the room, its context, `spawn_henchman`),
 `commands/henchman_tools.rs` (HEN-4, `pane_restart`),
-`commands/henchman_orders.rs` and `config/henchman.rs` (HEN-7, HEN-8),
+`commands/henchman_orders.rs` and `config/henchman.rs` (HEN-7, HEN-8,
+HEN-15),
 `commands/henchman_feed.rs` (HEN-9, HEN-10, HEN-12),
 `commands/henchman_work.rs` (HEN-11), `commands/henchman_watch.rs`
 (HEN-12), `commands/henchman_need.rs` and `attention.rs` (HEN-13),

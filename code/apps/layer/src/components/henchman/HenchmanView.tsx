@@ -23,7 +23,10 @@ export function HenchmanView() {
   const { restart, restarting } = useRestart(() => {});
   // The one running, else the last: an exited one says so and offers Resume.
   const pane = panes.find((p) => p.running) ?? panes[panes.length - 1];
-  const agent = agents.find((a) => a.installed && a.acp);
+  const chosen = useStore((s) => s.settings?.henchman.agent_id);
+  // The one chosen for it (HEN-15), else any that runs as a conversation.
+  const usable = agents.filter((a) => a.installed && a.acp);
+  const agent = usable.find((a) => a.id === chosen) ?? usable[0];
   const asleep = useStore(useShallow((s) => s.waiting.filter(isWaitingHenchman)));
 
   async function wake() {

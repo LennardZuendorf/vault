@@ -22,7 +22,7 @@ mod project;
 pub mod shared;
 mod ui;
 pub use browser::{BrowserConfig, SavedSignIn, SavedTabs};
-pub use henchman::{HenchmanConfig, StandingOrder};
+pub use henchman::{HenchmanAgent, HenchmanConfig, StandingOrder};
 pub use integrations::{
     AthenaTable, FlowStatus, GithubConfig, GrafanaConfig, JiraConfig, LogSource, ModelChoice, SlackBotConfig,
     SlackConfig, SlackThread, StartTo, TicketFlow,

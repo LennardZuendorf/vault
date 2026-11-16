@@ -62,3 +62,13 @@ export interface HenchmanLair {
   /** Newest first. */
   did: HenchmanDid[];
 }
+
+/**
+ * The agent the Henchman is woken with, and the model and effort it opens
+ * on; empty is the agent's own (HEN-15). `HenchmanAgent` in `config/henchman.rs`.
+ */
+export interface HenchmanAgent {
+  agent_id: string;
+  model: string;
+  effort: string;
+}

@@ -323,6 +323,7 @@ pub fn run() {
             commands::resumable_agents,
             commands::spawn_chat,
             commands::spawn_henchman,
+            commands::set_henchman_agent,
             commands::henchman_orders,
             commands::henchman_order_add,
             commands::henchman_order_remove,

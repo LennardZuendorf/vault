@@ -10,6 +10,28 @@ pub struct HenchmanConfig {
     pub orders: Vec<StandingOrder>,
     /// The tasks (by id) and chats (by room) it hears nothing of (HEN-8).
     pub left_alone: Vec<String>,
+    /// What it is woken with (HEN-15).
+    pub agent: HenchmanAgent,
+}
+
+/// The agent the Henchman is woken with, and the model and effort its
+/// conversation opens on, put back at launch too (HEN-15). An empty model
+/// or effort is the agent's own.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct HenchmanAgent {
+    pub agent_id: String,
+    pub model: String,
+    pub effort: String,
+}
+
+/// Sonnet at medium effort: the Henchman reads Layer and passes words on,
+/// and writes no code. Left to Claude Code, it opened on the default model
+/// at the effort the user set for their own work, Xhigh, for a brief.
+impl Default for HenchmanAgent {
+    fn default() -> Self {
+        Self { agent_id: "claude".into(), model: "sonnet".into(), effort: "medium".into() }
+    }
 }
 
 /// One thing the user told the Henchman to answer from now on, in their

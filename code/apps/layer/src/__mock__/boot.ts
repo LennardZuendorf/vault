@@ -524,6 +524,14 @@ const answer: Record<string, Answer> = {
     }
     return null;
   },
+  set_henchman_agent: (a) => {
+    world.settings.henchman = {
+      agent_id: a.agentId as string,
+      model: a.model as string,
+      effort: a.effort as string,
+    };
+    return null;
+  },
   set_slack_bot_on: (a) => {
     if (world.settings.slack_bot) world.settings.slack_bot.enabled = a.on as boolean;
     world.slackBot.status = { state: a.on ? "connected" : "off", error: null };

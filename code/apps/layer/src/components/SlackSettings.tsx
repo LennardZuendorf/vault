@@ -2,8 +2,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
 import { api } from "../lib/api";
 import { BOT_NAME_MAX, botManifest, newAppUrl, useSlackBot } from "../lib/slackBot";
-import type { AgentStatus, SlackBotConfig, SlackBotStatus } from "../lib/types";
+import type { SlackBotStatus } from "../lib/types";
 import { useStore } from "../store";
+import { AgentAndModel } from "./AgentAndModel";
 import { ChangeRow, ConnectRow, useFold } from "./SharedSettings";
 import { ErrorMessage, Field, Switch, useFailure } from "./ui";
 
@@ -177,8 +178,11 @@ export function SlackSettings() {
             />
           </div>
           <AgentAndModel
-            bot={bot}
+            agentId={bot.agent_id}
+            model={bot.model}
             conversational={conversational}
+            agentHint="Who a thread is handed to."
+            modelHint="For chats opened from now on."
             onChange={(id, model) => void setAgent(id, model)}
           />
           {view && view.threads.length > 0 && (
@@ -362,69 +366,5 @@ export function SlackSettings() {
         </>
       )}
     </>
-  );
-}
-
-/**
- * Who a thread is handed to and the model its chats run on (BOT-17). An
- * agent names its models only to a conversation, so the list is what it
- * offered when one last opened.
- */
-function AgentAndModel({
-  bot,
-  conversational,
-  onChange,
-}: {
-  bot: SlackBotConfig;
-  conversational: AgentStatus[];
-  onChange: (agentId: string, model: string) => void;
-}) {
-  const offered = useStore((s) => s.settings?.agent_models[bot.agent_id]) ?? [];
-  const agentName = conversational.find((a) => a.id === bot.agent_id)?.name ?? bot.agent_id;
-  // A model saved that the agent no longer lists still shows as chosen.
-  const models =
-    bot.model && !offered.some((m) => m.value === bot.model)
-      ? [...offered, { value: bot.model, name: bot.model }]
-      : offered;
-  return (
-    <div className="row" style={{ marginTop: 10, gap: 12, alignItems: "flex-start" }}>
-      <Field label="Agent" hint="Who a thread is handed to.">
-        <select
-          className="ui-field"
-          value={bot.agent_id}
-          onChange={(e) => onChange(e.target.value, "")}
-        >
-          {!conversational.some((a) => a.id === bot.agent_id) && (
-            <option value={bot.agent_id}>{agentName}</option>
-          )}
-          {conversational.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </select>
-      </Field>
-      <Field
-        label="Model"
-        hint={
-          offered.length === 0
-            ? `Open a chat with ${agentName} once and its models are listed here.`
-            : "For chats opened from now on."
-        }
-      >
-        <select
-          className="ui-field"
-          value={bot.model}
-          onChange={(e) => onChange(bot.agent_id, e.target.value)}
-        >
-          <option value="">{agentName} decides</option>
-          {models.map((m) => (
-            <option key={m.value} value={m.value}>
-              {m.name}
-            </option>
-          ))}
-        </select>
-      </Field>
-    </div>
   );
 }

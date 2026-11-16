@@ -5,9 +5,10 @@
 
 use std::path::Path;
 
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 
-use crate::error::Result;
+use crate::config::HenchmanAgent;
+use crate::error::{Error, Result};
 use crate::pty::PaneInfo;
 
 use super::panes::{chat_room, open_chat, Resume, CHAT_TASK_ID};
@@ -33,8 +34,17 @@ const BRIEF: &str = "Call work_overview, then do what you can yourself: with tas
 /// `work_overview`, and in the agent's own mode each of its tools asked
 /// first, a click before every answer. None of them changes anything the
 /// user did not ask for in the chat.
-pub(crate) fn presets() -> Vec<(String, String)> {
-    vec![("mode".to_string(), "auto".to_string())]
+///
+/// Then on the model and effort chosen for it (HEN-15), when it runs the
+/// agent they were chosen with: another agent names its models otherwise.
+/// The model first, since an agent offers the efforts its model has.
+pub(crate) fn presets(chosen: &HenchmanAgent, agent: &str) -> Vec<(String, String)> {
+    let mut presets = vec![("mode".to_string(), "auto".to_string())];
+    if chosen.agent_id == agent {
+        let wanted = [("model", &chosen.model), ("thought_level", &chosen.effort)];
+        presets.extend(wanted.into_iter().filter(|(_, v)| !v.is_empty()).map(|(c, v)| (c.to_string(), v.clone())));
+    }
+    presets
 }
 
 /// Whether `dir` is the Henchman's room. By path under the worktree root,
@@ -73,6 +83,19 @@ pub async fn spawn_henchman(app: AppHandle, agent_id: String) -> Result<PaneInfo
         open_chat(&handle, state, agent_id, Some(BRIEF.into()), Some(room), Resume::No, true)
     })
     .await
+}
+
+/// The agent the Henchman is woken with, and its model and effort, empty
+/// for the agent's own (HEN-15). For the conversation opened from now on;
+/// the one running keeps what it has.
+#[tauri::command]
+pub fn set_henchman_agent(state: State<AppState>, agent_id: String, model: String, effort: String) -> Result<()> {
+    let def = crate::agents::find(&agent_id).ok_or_else(|| Error::NotFound(format!("agent {agent_id}")))?;
+    if def.acp.is_none() {
+        return Err(Error::Other(format!("{} cannot run as a conversation (ACP), which the Henchman is", def.name)));
+    }
+    let agent = HenchmanAgent { agent_id, model: model.trim().to_string(), effort: effort.trim().to_string() };
+    state.config.update(|c| c.henchman.agent = agent)
 }
 
 /// The Henchman's own context file, in place of a chat's (HEN-2): who it
@@ -220,11 +243,6 @@ pub(crate) fn session_meta() -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_henchman_opens_in_auto_mode() {
-        assert_eq!(presets(), [("mode".to_string(), "auto".to_string())]);
-    }
 
     #[test]
     fn the_henchmans_own_tools_are_allowed_where_auto_mode_reads_it_and_only_those() {

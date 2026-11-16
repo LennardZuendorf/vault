@@ -179,6 +179,9 @@ export const api = {
     invoke<PaneInfo>("spawn_chat", { agentId, prompt: prompt ?? null, acp }),
   /** Wake the Henchman (HEN-2); the running one when it already runs. */
   spawnHenchman: (agentId: string) => invoke<PaneInfo>("spawn_henchman", { agentId }),
+  /** What the Henchman is woken with from now on (HEN-15). */
+  setHenchmanAgent: (agentId: string, model: string, effort: string) =>
+    invoke<void>("set_henchman_agent", { agentId, model, effort }),
   /** Processes the panes started that still run (HEN-6). */
   runningProcesses: () => invoke<Process[]>("running_processes"),
   /** Stop one, and its children; the list after. */
