@@ -2436,6 +2436,12 @@ count and banner treats it like any other.
   words, muted and folded to its first line with its tag ("Layer ·
   finished"), and open on a click. The Henchman is sent one each time
   agents stop (HEN-9), and its conversation was nothing but those.
+- **ACP-20** Dropping up to ten PNG, JPEG, GIF or WebP images, each at
+  most 10 MiB, onto a conversation copies them to `attachments/` in the
+  task root or standalone chat room. Layer detects the format from the
+  bytes, never overwrites a file or writes into a checkout, and appends
+  quoted absolute paths to the editable draft. Saving blocks sending, not
+  typing; failed images show an inline error and successful ones remain.
 
 Code: `acp/` (`conn.rs` the protocol, `user.rs`, `conversation.rs`,
 `entry.rs`, `read.rs`, `process.rs`, `version.rs` for ACP-17), `pty/acp.rs`,
