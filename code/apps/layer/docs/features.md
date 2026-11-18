@@ -409,8 +409,9 @@ Each of them can also run as a conversation the app draws, over ACP (§20).
   except a full-screen program (on the alternate screen, as OpenCode is):
   its screen and modes are kept, and it MUST be made to draw its whole
   screen again, as a window resize would. Keystrokes echo immediately,
-  even while the pane is printing heavily. Output is batched to about 30
-  frames a second otherwise.
+  even while the pane is printing heavily. A layout that types `@` with
+  Option MUST send a literal `@` to the CLI without changing other Option
+  shortcuts. Output is batched to about 30 frames a second otherwise.
 - **PANE-9** Handoff moves the work, not the conversation: no CLI can
   resume another's session. It MUST give the new agent a briefing: the task prompt,
   the commits and changed files per repo since the branch point, and the
@@ -498,6 +499,10 @@ Each of them can also run as a conversation the app draws, over ACP (§20).
 Code: `pty.rs`, `agents.rs`, `commands/panes.rs` (`restart_pane`),
 `Terminals.tsx`, `Terminal.tsx`, `AgentsView.tsx` (`lib/agentSort.ts`),
 `PaneNotice.tsx`.
+
+Verify PANE-8 in the mock harness: open the Claude Code terminal, type `@`
+with an Option-based layout, and check `__mock.calls` for one `pty_write`
+with `data: "@"`, not an escape sequence.
 
 Known gaps:
 - Resume, pre-trust, and drafting PR and ticket descriptions are Claude

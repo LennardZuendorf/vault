@@ -124,6 +124,16 @@ class PaneTerminal {
       macOptionClickForcesSelection: true,
     });
     this.term.loadAddon(this.fit);
+    // With Option-as-Meta, xterm sends an escape sequence for Option-typed
+    // @ and the agent's file picker never sees it.
+    this.term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== "keydown" || e.key !== "@" || !e.altKey) return true;
+      if (e.ctrlKey || e.metaKey || e.isComposing) return true;
+      e.preventDefault();
+      e.stopPropagation();
+      this.term.input(e.key);
+      return false;
+    });
     // xterm reports every mouse movement to such an agent as input, and
     // input clears the selection: one made with ⌥-drag was gone the moment
     // the mouse moved, before ⌘C. Hovering is held back while there is a
