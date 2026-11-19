@@ -261,6 +261,7 @@ export function seedAcp(pane: string) {
 }
 
 export const acpAnswers: Record<string, (a: Record<string, unknown>) => unknown> = {
+  save_chat_image: (a) => `/task/attachments/${String(a.name)}`,
   acp_view: (a): AcpView => {
     const c = convo(a.paneId as string);
     const since = a.since as number | null;

@@ -217,6 +217,19 @@ export const api = {
   loopView: (paneId: string) => invoke<LoopView | null>("loop_view", { paneId }),
 
   // an agent over ACP (§20); `ptyDetach` says it is off screen, as for a terminal
+  saveChatImage: async (paneId: string, name: string, file: File): Promise<string> => {
+    const url = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error ?? new Error("Could not read the file."));
+      reader.readAsDataURL(file);
+    });
+    return invoke<string>("save_chat_image", {
+      paneId,
+      name,
+      data: url.slice(url.indexOf(",") + 1),
+    });
+  },
   /** What changed since `since`, and the pane is on screen from now (ACP-7). */
   acpView: (paneId: string, since: number | null) => invoke<AcpView>("acp_view", { paneId, since }),
   /** A prompt, with any images pasted into it (ACP-16). */

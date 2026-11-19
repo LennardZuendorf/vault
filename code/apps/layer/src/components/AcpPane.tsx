@@ -12,6 +12,7 @@ import { layerSaid } from "../lib/acpEntries";
 import { heldConversation, holdConversation, pruneConversations } from "../lib/acpPool";
 import { onAcpUpdate } from "../lib/acpUpdates";
 import { api } from "../lib/api";
+import { appendAttachmentPaths, useChatDrop } from "../lib/chatDrop";
 import type { IssueKeys } from "../lib/issue-keys";
 import { pastedImages, readImage, type PastedImage } from "../lib/pastedImage";
 import type { AcpEntry, AcpImage, AcpToolContent, AcpView, PaneInfo } from "../lib/types";
@@ -70,6 +71,7 @@ function AcpPane({
   // above it for a question answered in the log (NOTE-6).
   const failure = useFailure();
   const fail = failure.fail;
+  const dropFailure = useFailure();
   const textSize = useStore((s) => s.settings?.ui.conversation_font_size ?? 14);
   const keys = useIssueKeys();
   const shown = visible && appActive;
@@ -127,7 +129,16 @@ function AcpPane({
 
   const [draft, setDraft] = useState("");
   const [images, setImages] = useState<PastedImage[]>([]);
+  const over = !pane.running || (view?.exited ?? false);
+  const { dragging, setDragging, saving, savingRef, drop } = useChatDrop(
+    pane.id,
+    over,
+    (paths) => setDraft((now) => appendAttachmentPaths(now, paths)),
+    dropFailure.fail,
+    dropFailure.clear,
+  );
   const send = async () => {
+    if (savingRef.current) return;
     const text = draft.trim();
     if (!text && images.length === 0) return;
     const sent = images;
@@ -142,8 +153,8 @@ function AcpPane({
         sent.map(({ mimeType, data }) => ({ mimeType, data })),
       );
     } catch (e) {
-      setDraft(text);
-      setImages(sent);
+      setDraft((now) => text + (now ? `\n${now}` : ""));
+      setImages((now) => [...sent, ...now]);
       fail(e);
     }
   };
@@ -172,7 +183,6 @@ function AcpPane({
     attempt(() => api.acpSet(pane.id, setting, value));
 
   const busy = view?.busy ?? false;
-  const over = !pane.running || (view?.exited ?? false);
   const commands =
     draft.startsWith("/") && !draft.includes(" ")
       ? (view?.commands ?? []).filter((c) => c.name.startsWith(draft.slice(1))).slice(0, 8)
@@ -235,7 +245,19 @@ function AcpPane({
               ))}
             </div>
           )}
-          <div className="ui-field acp-box">
+          <div
+            className={`ui-field acp-box${dragging ? " acp-box-dragging" : ""}`}
+            onDragOver={(e) => {
+              if (!over && e.dataTransfer.types.includes("Files")) {
+                e.preventDefault();
+                setDragging(true);
+              }
+            }}
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+            }}
+            onDrop={drop}
+          >
             {images.length > 0 && (
               <div className="acp-images">
                 {images.map((img, i) => (
@@ -311,7 +333,7 @@ function AcpPane({
               ) : (
                 <button
                   className={`ui-button${over || (!draft.trim() && images.length === 0) ? "" : " ui-button-primary"}`}
-                  disabled={over || (!draft.trim() && images.length === 0)}
+                  disabled={over || saving || (!draft.trim() && images.length === 0)}
                   onClick={() => void send()}
                 >
                   Send
@@ -320,6 +342,7 @@ function AcpPane({
             </div>
           </div>
           <ErrorMessage>{failure.error}</ErrorMessage>
+          <ErrorMessage>{dropFailure.error}</ErrorMessage>
         </div>
       </div>
     </div>

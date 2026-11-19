@@ -295,6 +295,10 @@ details.acp-tool > summary::-webkit-details-marker {
   padding: 8px 10px 6px;
   border-radius: var(--radius-lg);
 }
+
+.acp-box-dragging {
+  background: var(--surface);
+}
 .acp-box textarea {
   resize: none;
   border: 0;

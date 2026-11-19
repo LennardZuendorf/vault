@@ -344,6 +344,7 @@ pub fn run() {
             commands::restart_pane,
             commands::acp_view,
             commands::acp_prompt,
+            commands::save_chat_image,
             commands::acp_cancel,
             commands::acp_answer,
             commands::acp_set,
