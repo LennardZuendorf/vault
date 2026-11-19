@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import { api } from "../lib/api";
 import { whenBehind } from "../lib/catchUp";
 import { afterDrag, isDragging } from "../lib/drag";
+import { optionTypedAt } from "../lib/optionAt";
 import { unframe } from "../lib/paneFeed";
 import { decode, TERMINAL_FONT, terminalTheme } from "../lib/terminal";
 import { currentTheme, type Theme } from "../lib/theme";
@@ -124,6 +125,13 @@ class PaneTerminal {
       macOptionClickForcesSelection: true,
     });
     this.term.loadAddon(this.fit);
+    this.term.attachCustomKeyEventHandler((e) => {
+      if (!optionTypedAt(e)) return true;
+      e.preventDefault();
+      e.stopPropagation();
+      this.term.input(e.key);
+      return false;
+    });
     // xterm reports every mouse movement to such an agent as input, and
     // input clears the selection: one made with ⌥-drag was gone the moment
     // the mouse moved, before ⌘C. Hovering is held back while there is a
