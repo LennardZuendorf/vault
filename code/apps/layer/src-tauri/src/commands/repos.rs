@@ -278,8 +278,9 @@ fn sync(state: &AppState, project: &Project) -> Result<String> {
     }
     // Settings added to the clone since the copy was made.
     let _ = git::copy_local_config(clone, &store);
-    let branch = &project.default_branch;
-    Ok(match git::fast_forward(clone, &store, branch) {
+    let (branch, moved) = follow_origin_default(state, project, &store, clone)?;
+    let branch = &branch;
+    let forwarded = match git::fast_forward(clone, &store, branch) {
         Ok(Forwarded::UpToDate) => format!("Fetched. {branch} is up to date."),
         Ok(Forwarded::Moved(n)) => format!("Fetched. {branch} moved forward {n} commit{}.", plural(n)),
         Ok(Forwarded::OwnCommits(n)) => {
@@ -290,7 +291,35 @@ fn sync(state: &AppState, project: &Project) -> Result<String> {
         }
         Ok(Forwarded::NoBranch) => format!("Fetched. The clone has no {branch} of its own."),
         Err(e) => return Err(Error::Other(format!("Fetched, but {branch} was not moved: {e}"))),
+    };
+    Ok(match moved {
+        Some(was) => {
+            forwarded.replacen("Fetched. ", &format!("Fetched. The default branch is {branch} now, not {was}. "), 1)
+        }
+        None => forwarded,
     })
+}
+
+/// The repo's default branch after a fetch: origin's, when origin names
+/// another (REPO-7), saved so tasks are cut from it too. A copy that fetches
+/// from the clone itself would only name the branch checked out there.
+fn follow_origin_default(
+    state: &AppState,
+    project: &Project,
+    store: &Path,
+    clone: &Path,
+) -> Result<(String, Option<String>)> {
+    let was = project.default_branch.clone();
+    let from_clone = git::origin_url(store).is_some_and(|url| canon(&url) == canon(clone));
+    let Some(now) = git::origin_default(store).filter(|b| !from_clone && *b != was) else {
+        return Ok((was, None));
+    };
+    state.config.update(|c| {
+        if let Some(p) = c.projects.iter_mut().find(|p| p.id == project.id) {
+            p.default_branch = now.clone();
+        }
+    })?;
+    Ok((now, Some(was)))
 }
 
 #[cfg(test)]
@@ -495,6 +524,26 @@ pub(super) mod tests {
         assert!(state.config.project("api").unwrap().store.is_some(), "the copy was made on the way");
         assert!(clone.join("b.txt").is_file());
         assert_eq!(sync(&state, &project).unwrap(), "Fetched. main is up to date.");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn sync_follows_origin_when_the_team_changes_its_default_branch() {
+        let (root, cfg) = setup();
+        let clone = PathBuf::from(&cfg.projects[0].path);
+        let state = state(&root, cfg);
+        let remote = root.join("remote.git");
+        git(&clone, &["push", "-q", "origin", "main:trunk"]);
+        git(&remote, &["symbolic-ref", "HEAD", "refs/heads/trunk"]);
+
+        let project = state.config.project("api").unwrap();
+        assert_eq!(
+            sync(&state, &project).unwrap(),
+            "Fetched. The default branch is trunk now, not main. The clone has no trunk of its own."
+        );
+        let project = state.config.project("api").unwrap();
+        assert_eq!(project.default_branch, "trunk", "tasks are cut from it from now on");
+        assert_eq!(sync(&state, &project).unwrap(), "Fetched. The clone has no trunk of its own.");
         std::fs::remove_dir_all(&root).ok();
     }
 }

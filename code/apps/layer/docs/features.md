@@ -76,7 +76,11 @@ a loop runs (LOOP-1).
   origin deleted and taking tags origin moved (an Actions repo moves `v1`
   each release; refused, it failed every Sync of a user whose git fetches
   all tags), and carry the clone's repo-local settings again. A failed
-  fetch says git's reason, not only that it failed. In the
+  fetch says git's reason, not only that it failed. When origin's HEAD
+  names another branch than the repo's default, and the copy has it, that
+  branch becomes the default, and the row says so: a clone's `origin/HEAD`
+  never moves after it is cloned, so a team that moved from `dev` to `main`
+  kept being synced and cut tasks from `dev`. In the
   clone it only ever fast-forwards the default branch, and only when that
   branch has no commits of its own and, if checked out, no uncommitted
   changes to tracked files. It never merges or rebases there, so how a team
