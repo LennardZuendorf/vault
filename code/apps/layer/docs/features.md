@@ -1362,6 +1362,11 @@ never hold credentials themselves.
 | `order_remove` | the Henchman's: drop a standing order (HEN-7) | |
 | `leave_alone` | the Henchman's: hear nothing of a task or chat until handed back (HEN-8) | |
 | `need_you` | the Henchman's: reach the user, a banner and a count on the dock, for what really needs them (HEN-13) | |
+| `list_routines` | a chat's: the routines on this Mac, when each runs next, and its newest runs (ROUT-11) | |
+| `create_routine` | a chat's: make a routine, its prompt, schedule and agent (ROUT-11) | |
+| `update_routine` | a chat's: change a routine; a field left out stays (ROUT-11) | |
+| `run_routine` | a chat's: run a routine now, as a new chat (ROUT-11) | |
+| `delete_routine` | a chat's: delete a routine and its runs (ROUT-11) | yes |
 | `browser_navigate` | open a page in the task's browser tab (BRW-3), and get its outline | |
 | `browser_back` | back one page | |
 | `browser_snapshot` | the page as an outline, each element it can act on numbered | |
@@ -3917,12 +3922,19 @@ Layer is back.
   recorded in the message center, and with *Notify when agents need you*
   on and the window away, it is a banner too. Both name the routine and
   open its page.
+- **ROUT-11** A chat's agent (§5), the Henchman's and a run's included,
+  MUST be able to do what the view does through Layer's MCP tools (§12):
+  list the routines with their next times and newest runs, make one,
+  change any of its fields, run it now and delete it. The same checks
+  refuse the same mistakes, and the view shows each change at once.
+  Deleting needs `confirm` (the user's yes). An agent at work in a task
+  is not offered them.
 
 Code: `src-tauri/src/routines.rs` (ROUT-2, ROUT-3, ROUT-5 to ROUT-7: the
 schedule and what is kept), `commands/routines.rs` (the commands, and
 starting and watching runs from the attention pass: ROUT-4, ROUT-8 to
-ROUT-10), `commands/acp_panes.rs` (presets), `components/routines/`,
-`lib/routines.ts`.
+ROUT-10), `commands/routine_tools.rs` (ROUT-11), `commands/acp_panes.rs`
+(presets), `components/routines/`, `lib/routines.ts`.
 
 Known gaps:
 - A run waits for nothing but its schedule: no trigger on a pull request

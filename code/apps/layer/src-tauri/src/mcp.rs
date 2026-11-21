@@ -233,6 +233,7 @@ async fn dispatch(app: &AppHandle, method: &str, params: Value, caller: Option<&
                     .chain(commands::finish_tools())
                     .chain(commands::epic_tools())
                     .chain(commands::henchman_tools(app, caller))
+                    .chain(commands::routine_tools(app, caller))
                     .chain(commands::tracker_tools(uses)),
             );
             Ok(json!({ "tools": all }))
@@ -318,6 +319,7 @@ const DANGER: &[&str] = &[
     "forget_note",
     "finish_task",
     "subtask_start",
+    "delete_routine",
 ];
 
 pub(crate) fn confirm_prop() -> Value {
@@ -729,6 +731,7 @@ async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) ->
         n if commands::finish_owns(n) => commands::finish_call(app, args, caller).await,
         n if commands::epic_owns(n) => commands::epic_call(app, n, args, caller).await,
         n if commands::henchman_owns(n) => commands::henchman_call(app, n, args, caller).await,
+        n if commands::routine_owns(n) => commands::routine_call(app, n, args, caller).await,
 
         "slack_delete" => {
             let links: Vec<String> = args
@@ -954,7 +957,8 @@ mod tests {
                 .chain(commands::spec_tools())
                 .chain(commands::pr_images_tools())
                 .chain(commands::finish_tools())
-                .chain(commands::epic_tools()),
+                .chain(commands::epic_tools())
+                .chain(commands::routine_listed()),
         );
         all.extend(
             commands::tracker_tools(Some(TrackerKind::Jira))

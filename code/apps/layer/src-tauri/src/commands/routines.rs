@@ -77,7 +77,13 @@ fn open(app: &AppHandle, state: &AppState, routine: &Routine, room: &Path, resum
 /// Start a run of routine `id`. One that cannot start is recorded as
 /// failed, with why (ROUT-7); the finished runs before it are closed
 /// (ROUT-9).
-fn start(app: &AppHandle, state: &AppState, id: &str, due: Option<DateTime<Utc>>, caught_up: bool) -> Result<Run> {
+pub(crate) fn start(
+    app: &AppHandle,
+    state: &AppState,
+    id: &str,
+    due: Option<DateTime<Utc>>,
+    caught_up: bool,
+) -> Result<Run> {
     let folder = state.config.folder().to_path_buf();
     let (routine, live) = routines::read(app, &folder, |all| {
         (all.routines.iter().find(|r| r.id == id).cloned(), all.live_run(id).is_some())
@@ -159,18 +165,23 @@ pub async fn routines_list(app: AppHandle) -> Result<View> {
 #[tauri::command]
 pub async fn routine_create(app: AppHandle) -> Result<String> {
     let handle = app.clone();
-    super::blocking(app, move |state| {
-        let agent = state.config.with(|c| c.henchman.agent.clone());
-        let id = new_id();
-        let mut routine = Routine { id: id.clone(), name: "New routine".into(), agent, ..Default::default() };
-        routines::settle(&mut routine, &Local::now());
-        routines::change(&handle, state.config.folder(), |all| {
-            all.routines.push(routine);
-            ((), true)
-        });
-        Ok(id)
-    })
-    .await
+    super::blocking(app, move |state| create(&handle, state, RoutinePatch::default())).await
+}
+
+/// A new routine with `fields` over those defaults, refused whole when one
+/// is wrong (ROUT-2, ROUT-11). Its id.
+pub(crate) fn create(app: &AppHandle, state: &AppState, fields: RoutinePatch) -> Result<String> {
+    check_agent(&fields)?;
+    let agent = state.config.with(|c| c.henchman.agent.clone());
+    let id = new_id();
+    let mut routine = Routine { id: id.clone(), name: "New routine".into(), agent, ..Default::default() };
+    routines::settle(&mut routine, &Local::now());
+    apply(&mut routine, fields, &Local::now())?;
+    routines::change(app, state.config.folder(), |all| {
+        all.routines.push(routine);
+        ((), true)
+    });
+    Ok(id)
 }
 
 /// What changed on a routine's page; a field left out stays.
@@ -192,22 +203,28 @@ pub struct RoutinePatch {
 #[tauri::command]
 pub async fn routine_update(app: AppHandle, id: String, patch: RoutinePatch) -> Result<()> {
     let handle = app.clone();
-    super::blocking(app, move |state| {
-        if let Some(agent) = &patch.agent_id {
-            agents::find(agent)
-                .filter(|d| d.acp.is_some())
-                .ok_or_else(|| Error::Other(format!("{agent} does not run as a conversation (ACP).")))?;
-        }
-        routines::change(&handle, state.config.folder(), |all| {
-            let Some(r) = all.routine_mut(&id) else {
-                return (Err(Error::NotFound(format!("routine {id}"))), false);
-            };
-            let out = apply(r, patch, &Local::now());
-            let ok = out.is_ok();
-            (out, ok)
-        })
+    super::blocking(app, move |state| update(&handle, state, &id, patch)).await
+}
+
+pub(crate) fn update(app: &AppHandle, state: &AppState, id: &str, patch: RoutinePatch) -> Result<()> {
+    check_agent(&patch)?;
+    routines::change(app, state.config.folder(), |all| {
+        let Some(r) = all.routine_mut(id) else {
+            return (Err(Error::NotFound(format!("routine {id}"))), false);
+        };
+        let out = apply(r, patch, &Local::now());
+        let ok = out.is_ok();
+        (out, ok)
     })
-    .await
+}
+
+fn check_agent(patch: &RoutinePatch) -> Result<()> {
+    if let Some(agent) = &patch.agent_id {
+        agents::find(agent)
+            .filter(|d| d.acp.is_some())
+            .ok_or_else(|| Error::Other(format!("{agent} does not run as a conversation (ACP).")))?;
+    }
+    Ok(())
 }
 
 fn apply(r: &mut Routine, patch: RoutinePatch, now: &DateTime<Local>) -> Result<()> {
@@ -258,27 +275,28 @@ fn apply(r: &mut Routine, patch: RoutinePatch, now: &DateTime<Local>) -> Result<
 #[tauri::command]
 pub async fn routine_delete(app: AppHandle, id: String) -> Result<()> {
     let handle = app.clone();
-    super::blocking(app, move |state| {
-        let gone = routines::change(&handle, state.config.folder(), |all| {
-            if all.routine_mut(&id).is_none() {
-                return (None, false);
-            }
-            let panes: Vec<String> =
-                all.runs.iter().filter(|r| r.routine_id == id).filter_map(|r| r.pane_id.clone()).collect();
-            all.routines.retain(|r| r.id != id);
-            all.runs.retain(|r| r.routine_id != id);
-            (Some(panes), true)
-        });
-        let panes = gone.ok_or_else(|| Error::NotFound(format!("routine {id}")))?;
-        for pane in panes {
-            let _ = state.ptys.close(&pane);
-            let _ = handle.emit("pty:activity", &pane);
+    super::blocking(app, move |state| delete(&handle, state, &id)).await
+}
+
+pub(crate) fn delete(app: &AppHandle, state: &AppState, id: &str) -> Result<()> {
+    let gone = routines::change(app, state.config.folder(), |all| {
+        if all.routine_mut(id).is_none() {
+            return (None, false);
         }
-        // Its id is one Layer made, so this is a folder of its own.
-        let _ = std::fs::remove_dir_all(rooms(state).join(&id));
-        Ok(())
-    })
-    .await
+        let panes: Vec<String> =
+            all.runs.iter().filter(|r| r.routine_id == id).filter_map(|r| r.pane_id.clone()).collect();
+        all.routines.retain(|r| r.id != id);
+        all.runs.retain(|r| r.routine_id != id);
+        (Some(panes), true)
+    });
+    let panes = gone.ok_or_else(|| Error::NotFound(format!("routine {id}")))?;
+    for pane in panes {
+        let _ = state.ptys.close(&pane);
+        let _ = app.emit("pty:activity", &pane);
+    }
+    // Its id is one Layer made, so this is a folder of its own.
+    let _ = std::fs::remove_dir_all(rooms(state).join(id));
+    Ok(())
 }
 
 /// Run a routine now, whatever its schedule (ROUT-5).
