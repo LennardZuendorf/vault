@@ -55,6 +55,7 @@ import { henchmanAnswers } from "./henchman";
 import { limitAnswers } from "./limits";
 import { loopAnswers, seedLoop } from "./loop";
 import { profileAnswers } from "./profiles";
+import { routineAnswers } from "./routines";
 import { runAnswers } from "./runs";
 import { specAnswers } from "./spec";
 import { githubTracker } from "./tracker";
@@ -658,6 +659,14 @@ const answer: Record<string, Answer> = {
   ...limitAnswers(world.tasks.length > 0),
   // The Henchman's standing orders (§28).
   ...henchmanAnswers(world.tasks.length > 0),
+  // Routines (§29): each run a chat in its own room.
+  ...routineAnswers(world.tasks.length > 0, (r, room, ask) => {
+    const p = newPane({ agentId: r.agent.agent_id, acp: true }, "agent", "chat");
+    p.cwd = room;
+    p.title = r.name;
+    if (ask) acpAnswers.acp_prompt({ paneId: p.id, text: r.prompt });
+    return p;
+  }),
   ...profileAnswers(),
   spawn_agent: (a) => {
     const p = newPane(a, "agent", a.taskId as string);

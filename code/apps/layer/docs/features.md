@@ -3857,6 +3857,84 @@ Known gaps:
 
 ---
 
+## 29. Routines
+
+Some prompts are worth asking again and again: a brief each morning, a
+sweep of open pull requests every hour, a check of dependencies once a
+week. A routine is such a prompt with a schedule. Layer asks it on time,
+as a new chat with an agent, and keeps what each run said. If Layer was
+closed (or the Mac asleep) when a routine was due, it runs once when
+Layer is back.
+
+- **ROUT-1** Routines MUST be their own view, the tab after Chat in the
+  top bar, named Routines. The list of routines is down the left, each
+  with when it runs next or how its last run went; the routine chosen
+  fills the rest. The tab's count is the runs that ask for permission,
+  with the live dot while any run works. With none, the view says what a
+  routine is and offers New routine.
+- **ROUT-2** A routine MUST have a name, what it asks (its prompt), when
+  it runs, the agent it runs with, and a switch that turns it on or off.
+  When is every hour at a minute, every day, every weekday (Monday to
+  Friday) or once a week on a day, at a time, on the Mac's own clock.
+  The agent is any that runs as a conversation (§20), on a model and
+  effort chosen as for the Henchman (HEN-15). Each field saves when it
+  changes or loses focus; there is no Save button. Deleting one asks
+  first, says its runs go with it, and stops a run still at work.
+- **ROUT-3** Routines and their runs MUST be kept on this Mac, in
+  `routines.json` beside the config, one set per profile (§25). They are
+  not shared with the workspace.
+- **ROUT-4** A run MUST be a new chat over ACP in a room of its own,
+  `<worktree root>/_chat/routines/<routine>/<run>`, with the routine's
+  prompt as its first message, in auto mode where its agent has one, on
+  the routine's model and effort. It gets a chat's context and Layer's
+  MCP tools, as any chat (§5). It is not listed in Chat, does not count
+  as a chat at work, is not put back at launch (PANE-7) and is not heard
+  by the Henchman (HEN-9).
+- **ROUT-5** A routine that is on MUST run when its time comes while
+  Layer runs, with the window open or closed. A routine made, turned on,
+  or given another time waits for its next time; it does not run at
+  once for a time already past. Run now runs it whatever its schedule.
+- **ROUT-6** When a routine's time passed while Layer was closed or the
+  Mac slept, it MUST run once when Layer is back, however many times it
+  missed, and its run says it caught up. At launch it waits a minute
+  first, so the agents Layer puts back start before it (LOOP-11).
+- **ROUT-7** A routine MUST run one at a time. When its time comes while
+  its previous run still works or asks, the time is skipped and listed
+  as skipped. A run that cannot start (its agent gone, the pane limit
+  reached, PANE-2) is listed as failed, with why.
+- **ROUT-8** The routine's page MUST list its runs, newest first: when
+  it was due (or Run now), the first line of what its agent last said,
+  and how it went: working, asking, done and how long it took, stopped,
+  skipped, failed. Clicking one opens its conversation on the page,
+  where it can be answered or asked more; Back returns to the list. The
+  newest 30 are kept.
+- **ROUT-9** Only a routine's newest run MUST stay open as a pane:
+  starting a run closes the finished runs before it. An older run, or
+  one whose pane has gone (Layer was quit), opens again on its own
+  conversation when it is clicked (ACP-9). A run Layer was quit during
+  is listed as stopped.
+- **ROUT-10** When a run finishes or asks for permission, it MUST be
+  recorded in the message center, and with *Notify when agents need you*
+  on and the window away, it is a banner too. Both name the routine and
+  open its page.
+
+Code: `src-tauri/src/routines.rs` (ROUT-2, ROUT-3, ROUT-5 to ROUT-7: the
+schedule and what is kept), `commands/routines.rs` (the commands, and
+starting and watching runs from the attention pass: ROUT-4, ROUT-8 to
+ROUT-10), `commands/acp_panes.rs` (presets), `components/routines/`,
+`lib/routines.ts`.
+
+Known gaps:
+- A run waits for nothing but its schedule: no trigger on a pull request
+  or a ticket.
+- A run's first message is the prompt alone: no files, no task to work in.
+- Routines are not shared with the team, and run only on this Mac while
+  Layer is open; one missed while the Mac was off runs when Layer opens.
+- Whether a time was missed because Layer was closed or because the Mac
+  slept is not told apart: both are "caught up".
+
+---
+
 ## Template for a new area or feature
 
 ```markdown

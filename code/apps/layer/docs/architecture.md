@@ -235,6 +235,7 @@ for, and the reverse, and that each is in this table.
 | `messages:changed` | none | the message center's log changed: recorded, read or cleared (`messages.rs`) | `Watchers.tsx` → `refreshMessages` |
 | `henchman:orders` | none | the Henchman's standing orders or what it leaves alone changed, by its tools or the lair (HEN-7, HEN-8) | `Watchers.tsx` → `useOrders.refresh` |
 | `henchman:lair` | the lair (`needs`, `did`) | the Henchman raised a need, the user closed one, one was seen, or its tools did something (HEN-13, HEN-14) | `Watchers.tsx` → `useLair.set` |
+| `routines:changed` | every routine (with `next`) and run kept | a routine was made, changed or deleted, a run started, changed state or was skipped (`routines.rs`, ROUT-1, ROUT-8) | `Watchers.tsx` → `useRoutines.set` |
 | `runs:changed` | none | an agent's run was recorded, a task finished or deleted, or the log cleared (`runs.rs`, RUN-1, RUN-9) | `UsageView.tsx`, while open → `listRuns` |
 | `limits:changed` | every provider's latest `PlanLimits` | a Claude status line posted, or OpenAI was asked (`limits.rs`, LIMIT-2, LIMIT-3) | `sidebar/PlanLimits.tsx` → its rows |
 | `notes:changed` | none | an agent remembered, checked or forgot a repo note (`notes.rs`, MEM-5), or the workspace's snapshot changed the notes (`commands/workspace.rs`, PROF-14) | `ReposView.tsx`, while open → `listRepoNotes` |

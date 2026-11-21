@@ -1,4 +1,5 @@
 import { CHAT_TASK_ID, paneName, taskTotals } from "./derive";
+import { isRoutineRun } from "./routines";
 import type { CheckoutPr, PaneInfo, TaskView } from "./types";
 
 /**
@@ -137,7 +138,8 @@ export function waiting(
     out.push({ w: { id: task.id, key, why, task, pane, finish }, rank: finish ? 9 : s.rank });
   }
   for (const p of panes) {
-    if (p.task_id !== CHAT_TASK_ID || p.kind !== "agent" || isHenchman(p)) continue;
+    if (p.task_id !== CHAT_TASK_ID || p.kind !== "agent" || isHenchman(p) || isRoutineRun(p))
+      continue;
     if (!p.running || p.activity !== "asking") continue;
     const w = { id: p.id, key: "Chat", why: `“${paneName(p)}” asks you`, task: null, pane: p };
     out.push({ w: { ...w, finish: false }, rank: 0.5 });

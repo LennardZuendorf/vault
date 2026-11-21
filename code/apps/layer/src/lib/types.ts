@@ -545,7 +545,8 @@ export type Target =
   | `pane:${string}:${string}`
   | `pr:${string}`
   | `ticket:${string}`
-  | `review:${string}`;
+  | `review:${string}`
+  | `routine:${string}`;
 
 export type MessageKind = "agent" | "review" | "ticket" | "pr" | "error" | "notice";
 export type MessageLevel = "info" | "success" | "error";

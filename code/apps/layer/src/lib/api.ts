@@ -85,6 +85,7 @@ import type {
   SetupSnapshot,
   WorkspacePlace,
 } from "./types-profiles";
+import type { RoutinePatch, RoutineRun, Routines } from "./types-routines";
 import type { RunLog } from "./types-runs";
 
 export const api = {
@@ -197,6 +198,16 @@ export const api = {
   henchmanLair: () => invoke<HenchmanLair>("henchman_lair"),
   /** The user closes one of the Henchman's needs. */
   henchmanNeedDone: (id: string) => invoke<HenchmanLair>("henchman_need_done", { id }),
+  /** Every routine and the runs kept (ROUT-1, ROUT-8). */
+  routinesList: () => invoke<Routines>("routines_list"),
+  /** A new routine, every day at 08:00; its id. */
+  routineCreate: () => invoke<string>("routine_create"),
+  routineUpdate: (id: string, patch: RoutinePatch) => invoke<void>("routine_update", { id, patch }),
+  /** It and its runs; a run at work is stopped. */
+  routineDelete: (id: string) => invoke<void>("routine_delete", { id }),
+  routineRunNow: (id: string) => invoke<RoutineRun>("routine_run_now", { id }),
+  /** A run's conversation, opened again where its pane has gone (ROUT-9). */
+  routineOpenRun: (runId: string) => invoke<PaneInfo>("routine_open_run", { runId }),
   ptyWrite: (paneId: string, data: string) => invoke<void>("pty_write", { paneId, data }),
   ptyResize: (paneId: string, rows: number, cols: number) =>
     invoke<void>("pty_resize", { paneId, rows, cols }),

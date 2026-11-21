@@ -19,6 +19,7 @@ mod phone;
 mod previous;
 mod profiles;
 mod pty;
+mod routines;
 mod runs;
 mod secrets;
 mod shellenv;
@@ -330,6 +331,12 @@ pub fn run() {
             commands::henchman_leave_alone,
             commands::henchman_lair,
             commands::henchman_need_done,
+            commands::routines_list,
+            commands::routine_create,
+            commands::routine_update,
+            commands::routine_delete,
+            commands::routine_run_now,
+            commands::routine_open_run,
             commands::running_processes,
             commands::stop_process,
             commands::pty_write,

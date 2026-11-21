@@ -11,6 +11,7 @@ import "./styles-profiles.css";
 import "./styles-observability.css";
 import "./styles-settings.css";
 import "./styles-henchman.css";
+import "./styles-routines.css";
 import App from "./App";
 import { Splash } from "./components/Splash";
 import { preventFileNavigation } from "./lib/chatDrop";

@@ -680,7 +680,9 @@ const CEILINGS: Record<string, number> = {
   // Oxfmt's line breaks took DiffView to 1103 and PrPanel to 871.
   "src/components/DiffView.tsx": 1150,
   "src/components/PrPanel.tsx": 900,
-  "src/store.ts": 800,
+  // The Routines tab (§29) made VIEWS too long for one line; Oxfmt gave
+  // each view a line of its own: 807.
+  "src/store.ts": 820,
   "src/components/Terminals.tsx": 700,
   // The panel and its bar are one view (BRW-9); each control in the bar
   // that does more than a call is its own component (SaveSignIn,
@@ -724,6 +726,9 @@ const CEILINGS: Record<string, number> = {
   // no new code: TicketsView 637, types 613.
   "src/components/tickets/TicketsView.tsx": 660,
   "src/lib/types.ts": 640,
+  // Every command's wrapper must live here (api-only); the routines' six
+  // (§29) took it to 607.
+  "src/lib/api.ts": 640,
 };
 
 for (const f of files) {
