@@ -1426,7 +1426,7 @@ Known gaps:
 | Agents: Henchman's agent, model and effort | Claude Code, Sonnet, Medium | HEN-15 |
 | Agents: Task folder location | `~/.villain-worktrees` | where task folders go |
 | Keep awake (the cup in the top bar) | off | STATE-7, PHONE-8 |
-| Code: Spec first | off | every agent is told to write the spec before any code (SPEC-27); the switch is not on the Code tab yet |
+| Code: Spec first | off | every agent is told to write the spec before any code (SPEC-27); the Settings switch comes with the Spec tab work, so it is not on Settings → Code yet |
 | Browser: sites agents may use | none: this machine's pages only | BRW-3, BRW-11 |
 | Browser: saved sign-ins | none | BRW-18 |
 | Remote access: Tailscale | off | PHONE-1, PHONE-2 |
@@ -2205,11 +2205,14 @@ requirements it decided by hand, and finding that Redraft threw both away.
   change, not when the spec does, so the entry file may be older than the
   file: the section says so. It says
   to change the spec only by writing it, never to wait for approval.
-- **SPEC-11** An opening prompt for a task whose spec folder holds files (every
-  route to an agent that builds one: `task_prompt`, so the launch dialog,
-  Start agent and handoffs, and Start work and the Henchman's Start)
-  MUST end by pointing at the spec folder by full path, so an agent started
-  inside one repository finds the whole spec.
+- **SPEC-11** An opening prompt for a task whose spec folder holds files (the
+  launch dialog's, a handoff's, a sub-task's, Start work's and the Henchman's
+  Start) MUST end by pointing at the spec folder by full path, so an agent
+  started inside one repository finds the whole spec, and, with Spec first
+  on (SPEC-27), with that line after the pointer. What a route adds (a
+  handoff's history, a sub-task's steps) goes before it, so these are the
+  last words of the prompt. Start agent on the Spec tab starts from the
+  launch dialog's prompt and puts its steps (SPEC-12) after it.
 
 - **SPEC-12** Start agent on the tab MUST start an agent on the approved
   tasks: at the task folder for every repository, or in one repository
@@ -2296,13 +2299,14 @@ requirements it decided by hand, and finding that Redraft threw both away.
   with why, and the others keep their commit. Open pull requests (PR-1)
   runs it first for the repositories whose committed copy is behind
   `spec/`.
-- **SPEC-27** With **Spec first** on (Settings → Code, off by default,
-  `set_spec_first`), every agent Layer starts MUST be told, in words only, to
+- **SPEC-27** With **Spec first** on (an app setting, off by default, `set_spec_first`;
+  its Settings switch comes with the Spec tab work), every agent Layer starts MUST be told, in words only, to
   write or update the spec in `<task>/spec/` before it changes any code:
   `Write or update the spec in <path> before you change any code.` is the
   first line of the context file's body, followed by "Then implement it step
   by step, ticking each step.", and the last line of every opening prompt
-  (SPEC-11), also while the spec folder is still empty. A review task is
+  (SPEC-11, with the same exception for Start agent), also while the spec
+  folder is still empty. A review task is
   never told it. Nothing blocks an agent that ignores it.
 
 Code: `spec.rs` (the files, and what is read from them),

@@ -500,9 +500,10 @@ pub(crate) async fn start_sub_task_inner(
             return Err(Error::Other(format!("{} waits for {}, not merged yet", of.title, and_list(&open))));
         }
     }
-    let prompt = super::jira::task_prompt(app.clone(), app.state(), task_id.clone(), None).await?;
+    let opening = super::jira::bare_prompt(app.clone(), &app.state(), &task, None).await?;
     let work = super::spec_work::spec_work_prompt(app.clone(), task_id.clone(), None).await?;
-    let prompt = [prompt, work].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n");
+    // The spec's line goes after the work prompt, not between it and the opening.
+    let prompt = super::jira::with_spec(app.clone(), task.clone(), sub_task_prompt(opening, work)).await?;
     let handle = app.clone();
     let pane = super::blocking(app.clone(), move |state| {
         start_agent(&handle, state, task_id, agent_id, None, Some(prompt), Resume::No, None, None, false)
@@ -519,6 +520,12 @@ pub(crate) async fn start_sub_task_inner(
         }
     }
     Ok(StartedSubTask { pane, moved })
+}
+
+/// A sub-task's opening prompt: the briefing, then the steps to work through
+/// when it has any.
+pub(crate) fn sub_task_prompt(opening: String, work: String) -> String {
+    [opening, work].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n")
 }
 
 #[tauri::command]

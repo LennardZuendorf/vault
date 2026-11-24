@@ -683,4 +683,26 @@ mod tests {
         assert!(!api.contains("R-2") && web.contains("R-2"), "{md}");
         std::fs::remove_dir_all(&root).ok();
     }
+
+    #[test]
+    fn the_spec_first_line_is_last_in_a_handoff_and_in_a_sub_tasks_prompt() {
+        let (root, state, task) = world(&["api"]);
+        on(&state);
+        let line = format!("{FIRST}{} before you change any code.", root.join("tasks/T-1/spec").display());
+        let opening = crate::commands::jira::plain_prompt(&task, &[], true);
+
+        let handoff = crate::commands::jira::handoff_text(&opening, "", Some(("claude", "tail")));
+        let handoff = with_spec_line(&state, &task, handoff);
+        assert!(handoff.contains("## What to do"), "{handoff}");
+        assert!(handoff.ends_with(&line), "{handoff}");
+        assert_eq!(handoff.matches(&line).count(), 1);
+
+        let work = "Work through the steps in tasks.md".to_string();
+        let sub = crate::commands::epics::sub_task_prompt(opening.clone(), work.clone());
+        let sub = with_spec_line(&state, &task, sub);
+        assert!(sub.find(&work).unwrap() < sub.find(&line).unwrap(), "{sub}");
+        assert!(sub.ends_with(&line), "{sub}");
+        assert_eq!(sub.matches(&line).count(), 1);
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

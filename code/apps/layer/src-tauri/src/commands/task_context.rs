@@ -334,8 +334,8 @@ fn spec_section(t: &Toolset, dir: &Path, folders: &[String], entry: Option<(Stri
             "## The spec\n\n",
             "The spec for this work is in `{at}`: one folder for the whole task, outside every ",
             "repository, and it is the record. Read it before you work, and when the plan ",
-            "changes, edit its files directly (`spec_write` does the same). Layer copies it ",
-            "into each repository on Commit spec. It is the user's spec as much as yours: ",
+            "changes, edit its files directly (`spec_write` does the same); nothing needs ",
+            "approving first. Layer copies it into each repository on Commit spec. It is the user's spec as much as yours: ",
             "meet its requirements, say which you could not, and ask the user its open ",
             "questions rather than guessing.\n\n",
         ),
@@ -626,7 +626,13 @@ mod tests {
         assert!(at_spec < at_ticket, "the spec comes before the ticket");
         assert!(md.contains("/work/acme-12/spec"), "{md}");
         assert!(md.contains("The spec is Kiro-style"), "the toolset's own paragraph");
-        assert!(md.contains("`/work/acme-12/spec/requirements.md`") || md.contains("in `/work/acme-12/spec`"));
+        assert!(md.contains("The spec for this work is in `/work/acme-12/spec`:"), "{md}");
+        assert!(
+            md.contains("requirements, then design, then tasks, in `/work/acme-12/spec`."),
+            "the paragraph's own path"
+        );
+        assert!(md.contains("Write each file in `/work/acme-12/spec`;"), "{md}");
+        assert!(md.contains("nothing needs approving first"));
         assert!(!md.contains("{spec_dir}"), "the placeholder is filled everywhere");
         assert!(md.contains("edit its files directly"), "the working copy is the record");
         assert!(!md.contains("spec_propose"));
@@ -761,7 +767,8 @@ mod tests {
 
         write_task_context(&state, &task).unwrap();
         let md = get(&root.join("tasks/T-1/CLAUDE.md"));
-        assert!(md.contains(&format!("`{}`", spec.display())) || md.contains(&spec.display().to_string()), "{md}");
+        assert!(md.contains(&format!("The spec for this work is in `{}`:", spec.display())), "{md}");
+        assert!(md.contains(&format!("Write each file in `{}`;", spec.display())), "{md}");
         assert!(md.contains("#### Goal\nRefunds."));
         assert!(md.contains("One spec for the task"), "two repositories");
         assert!(!md.contains("before you change any code"));
