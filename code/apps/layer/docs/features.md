@@ -2377,7 +2377,9 @@ requirements, then design, then tasks.
   - `spec_task`: tick or untick a step by `file` and `step` position (SPEC-33);
     returns the step.
   - `spec_commit`: Commit spec (SPEC-35), for the repositories named by folder or
-    name, or all. It is in `DANGER`: it needs `confirm: true`.
+    name, or all when `repos` is left out. A `repos` that is not a list of names
+    (`"api"`) is refused, not read as all. It is in `DANGER`: it needs
+    `confirm: true`.
 
   A write or a tick says `spec:changed`. `spec_propose` is gone: it answers with
   where to write instead, for running agents that still have it in context. A

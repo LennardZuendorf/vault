@@ -240,27 +240,34 @@ pub fn spec_tool(state: &AppState, name: &str, args: &Value, caller: Option<&str
         }
         "spec_commit" => {
             super::pr_task::not_a_review(&task, "given a spec of its own")?;
-            let known = repositories(state, &task);
-            let only = match args.get("repos").and_then(Value::as_array) {
-                Some(names) => Some(
-                    names
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(|n| {
-                            known
-                                .iter()
-                                .find(|(folder, project)| folder == n || project == n)
-                                .map(|(folder, _)| folder.clone())
-                                .ok_or_else(|| Error::NotFound(format!("a repository `{n}` in this task")))
-                        })
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-                None => None,
-            };
+            let only = repos_named(args.get("repos"), &repositories(state, &task))?;
             Ok(unchanged(serde_json::to_value(commit_spec(state, &task, only.as_deref()))?))
         }
         other => Err(Error::NotFound(format!("tool {other}"))),
     }
+}
+
+/// The repositories `spec_commit`'s `repos` names, as folders: none given is all
+/// of them (None). A `repos` that is not a list of names is refused, since
+/// reading `"api"` as "none given" would commit into every repository.
+fn repos_named(given: Option<&Value>, known: &[(String, String)]) -> Result<Option<Vec<String>>> {
+    let names = match given {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Array(names)) => names,
+        Some(_) => return Err(Error::Other("repos must be a list of repository names, such as [\"api\"]".into())),
+    };
+    let named = names
+        .iter()
+        .map(|n| {
+            let n = n.as_str().ok_or_else(|| Error::Other("repos must be a list of repository names".into()))?;
+            known
+                .iter()
+                .find(|(folder, project)| folder == n || project == n)
+                .map(|(folder, _)| folder.clone())
+                .ok_or_else(|| Error::NotFound(format!("a repository `{n}` in this task")))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Some(named))
 }
 
 /// The tool this file answers that is gone: `spec_propose`, which running
@@ -683,6 +690,22 @@ mod tests {
         let (root, state, _) = world(&["api"]);
         let refused = spec_tool(&state, "spec_commit", &json!({ "task_id": "t1", "repos": ["web"] }), None);
         assert!(refused.unwrap_err().to_string().contains("`web`"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn spec_commit_refuses_repos_that_is_not_a_list_of_names_instead_of_committing_everywhere() {
+        let (root, state, _) = world(&["api", "web"]);
+        for bad in [json!("api"), json!(7), json!({ "api": true }), json!([1]), json!(["api", null])] {
+            let refused = spec_tool(&state, "spec_commit", &json!({ "task_id": "t1", "repos": bad }), None);
+            assert!(refused.unwrap_err().to_string().contains("repos must be a list"), "{bad}");
+        }
+        for fine in [json!({ "task_id": "t1" }), json!({ "task_id": "t1", "repos": null })] {
+            let rows = spec_tool(&state, "spec_commit", &fine, None).unwrap().value;
+            assert_eq!(rows.as_array().map(Vec::len), Some(2), "none given means every repository: {rows}");
+        }
+        let one = spec_tool(&state, "spec_commit", &json!({ "task_id": "t1", "repos": ["web"] }), None).unwrap();
+        assert_eq!(one.value.as_array().map(Vec::len), Some(1));
         std::fs::remove_dir_all(&root).ok();
     }
 
