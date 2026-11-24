@@ -2108,7 +2108,7 @@ requirements, then design, then tasks.
   with a built-in's id replaces it. A custom manifest writes its paragraph
   inline (`agents_md`). The list is refused whole, with the reason, when it is
   not valid JSON or one manifest breaks a rule (`toolset::validate`): the id is
-  lowercase letters, digits, `-` or `_` and not used twice; a name; a version
+  1 to 60 lowercase letters, digits, `-` or `_` and not used twice; a name; a version
   that is one plain path segment (letters, digits, `.`, `_`, `+`, `-`), because
   it names a folder; at least one file glob; every glob (`files`, `steps`, a
   `skills` glob, `commit_to`) a relative path inside its folder, with no `..`,

@@ -141,9 +141,10 @@ pub fn find(id: &str, custom: &[Toolset]) -> Option<Toolset> {
 }
 
 /// Whether `id` can name a toolset: it becomes a folder name in the config
-/// folder and is stored on tasks and repositories.
+/// folder and is stored on tasks and repositories, whose record refuses one
+/// longer than 60 (`crates/domain`, `toolset_id`).
 pub fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+    !id.is_empty() && id.len() <= 60 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
 /// Refuse a manifest that could write outside the spec folder, run nothing,
@@ -151,7 +152,7 @@ pub fn valid_id(id: &str) -> bool {
 pub fn validate(t: &Toolset) -> Result<(), String> {
     let label = if t.id.is_empty() { "toolset" } else { t.id.as_str() };
     if !valid_id(&t.id) {
-        return Err(format!("{label}: the id must be lowercase letters, digits, - or _"));
+        return Err(format!("{label}: the id must be 1 to 60 lowercase letters, digits, - or _"));
     }
     if t.name.trim().is_empty() {
         return Err(format!("{label}: it needs a name"));
@@ -327,6 +328,17 @@ mod tests {
         let mut t = openspec();
         t.files.clear();
         t.steps.clear();
+        assert!(validate(&t).is_err());
+    }
+
+    #[test]
+    fn an_id_is_at_most_60_characters_as_a_repositorys_record_says() {
+        // The domain's `toolset_id` refuses more, so a longer one could be made here
+        // and then be refused when the repository is shared.
+        assert!(valid_id(&"a".repeat(60)));
+        assert!(!valid_id(&"a".repeat(61)));
+        let mut t = openspec();
+        t.id = "a".repeat(61);
         assert!(validate(&t).is_err());
     }
 
