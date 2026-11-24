@@ -11,7 +11,7 @@ use crate::error::{Error, Result};
 use crate::pty::{PaneInfo, PaneKind, SpawnOptions};
 use crate::shellenv;
 
-use super::panes_restore::remember_pane;
+use super::panes_restore::{remember_pane, saved_session};
 use super::task_context::write_task_context;
 use super::AppState;
 
@@ -157,7 +157,7 @@ pub(crate) fn open_shell(
             title_topic: None,
         },
     )?;
-    remember_pane(app, state, &pane);
+    remember_pane(app, state, &pane, None);
     Ok(pane)
 }
 
@@ -247,6 +247,14 @@ pub(crate) enum Resume {
 }
 
 impl Resume {
+    /// The conversation it is opened to pick up by its id (ACP-9), if any.
+    pub(crate) fn session(&self) -> Option<String> {
+        match self {
+            Resume::Restart { session, .. } => session.clone(),
+            _ => None,
+        }
+    }
+
     /// The newest conversation, when there is one to pick up.
     pub(crate) fn newest_if(found: bool) -> Self {
         if found {
@@ -306,9 +314,10 @@ pub(crate) fn start_agent(
         if let Some(dir) = agent_file_dir(state, &task) {
             let _ = crate::mcp::write_config(&dir);
         }
+        let opened_on = resume.session();
         let start = super::acp_panes::Start { task_id, checkout_id, cwd, title, prompt, resume };
         let pane = super::acp_panes::start(app, state, def, start)?;
-        remember_pane(app, state, &pane);
+        remember_pane(app, state, &pane, opened_on);
         return Ok(pane);
     }
     let program =
@@ -358,7 +367,7 @@ pub(crate) fn start_agent(
             title_topic: agents::topic_reader(def.integration),
         },
     )?;
-    remember_pane(app, state, &pane);
+    remember_pane(app, state, &pane, None);
     Ok(pane)
 }
 
@@ -671,6 +680,7 @@ pub(crate) fn open_chat(
     let title = format!("{name}{}", if resume != Resume::No { " (resumed)" } else { "" });
 
     if acp {
+        let opened_on = resume.session();
         let cwd = dir.to_string_lossy().to_string();
         let start = super::acp_panes::Start {
             task_id: CHAT_TASK_ID.to_string(),
@@ -681,7 +691,7 @@ pub(crate) fn open_chat(
             resume,
         };
         let pane = super::acp_panes::start(app, state, def, start)?;
-        remember_pane(app, state, &pane);
+        remember_pane(app, state, &pane, opened_on);
         return Ok(pane);
     }
     let program =
@@ -723,7 +733,7 @@ pub(crate) fn open_chat(
             title_topic: agents::topic_reader(def.integration),
         },
     )?;
-    remember_pane(app, state, &pane);
+    remember_pane(app, state, &pane, None);
     Ok(pane)
 }
 
@@ -819,7 +829,9 @@ pub(crate) fn restart(app: &AppHandle, state: &AppState, id: &str) -> Result<Pan
         _ => def.program,
     };
     shellenv::which(program).ok_or_else(|| Error::NotFound(format!("{program} is not on your PATH")))?;
-    let session = state.ptys.session(id)?;
+    // Stopped before its agent named its conversation, it goes back to the
+    // one it was opened on (ACP-9), which its saved record keeps.
+    let session = state.ptys.session(id)?.or_else(|| state.config.with(|c| saved_session(&c.saved_panes, id)));
     // Without its id, `--continue` takes the folder's newest conversation,
     // and another agent there may be the one writing it.
     let shared = state

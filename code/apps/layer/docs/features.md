@@ -2396,8 +2396,11 @@ count and banner treats it like any other.
 - **ACP-9** An ACP agent MUST pick a conversation up by its id. Restart
   (PANE-14) and a restore (PANE-7) use the id the agent gave, kept with the
   saved pane: `session/load`, which replays it into the pane, or else
-  `session/resume`. Resume with no id takes the newest the agent lists for
-  the folder (`session/list`). One that cannot be picked up is started
+  `session/resume`. Until the agent gives one, the pane keeps the id it
+  was opened to pick up: one stopped or quit before its agent said so was
+  started new, and its conversation lost. Resume with no id takes the
+  newest the agent lists for the folder (`session/list`). One that cannot
+  be picked up is started
   new, and the pane says why. So two agents in one folder never pick up
   the same conversation, and Restart works for every ACP agent. A replay
   shows what the user wrote, without a CLI's record of its own local

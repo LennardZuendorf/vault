@@ -22,7 +22,9 @@ use super::AppState;
 /// Called where the pane is actually created rather than by each caller: an
 /// agent started from a ticket went through `start_agent` directly and so was
 /// never recorded, and vanished for good at the next restart.
-pub(crate) fn remember_pane(app: &AppHandle, state: &AppState, pane: &PaneInfo) {
+///
+/// `opened_on` is the conversation it was opened to pick up, if any (ACP-9).
+pub(crate) fn remember_pane(app: &AppHandle, state: &AppState, pane: &PaneInfo, opened_on: Option<String>) {
     let saved = SavedPane {
         id: pane.id.clone(),
         task_id: pane.task_id.clone(),
@@ -47,20 +49,11 @@ pub(crate) fn remember_pane(app: &AppHandle, state: &AppState, pane: &PaneInfo) 
         open.insert((agent.clone(), pane.cwd.clone()));
     }
     let picked_up = state.config.update(|c| {
-        let mut saved = saved;
         // Read under the config's lock, which the ACP connection takes to
         // record the conversation too: one of the two is sure to see it,
         // however the opening and this race (ACP-9).
-        if saved.acp {
-            saved.session = state.ptys.session(&saved.id).ok().flatten();
-        }
-        // Recorded again, the pane keeps the loop it is on (LOOP-11).
-        saved.on_loop = c.saved_panes.iter().find(|p| p.id == saved.id).and_then(|p| p.on_loop.clone());
-        // Replace rather than append: recording the same pane twice is how a
-        // restore that also recorded what it restored doubled this list on
-        // every launch.
-        c.saved_panes.retain(|p| p.id != saved.id);
-        c.saved_panes.push(saved);
+        let named = if saved.acp { state.ptys.session(&saved.id).ok().flatten() } else { None };
+        record(&mut c.saved_panes, saved, named, opened_on);
         // Panes that exited are never removed from here — only closing one on
         // purpose does that — so without a bound this grows for as long as the
         // app is used.
@@ -77,6 +70,31 @@ pub(crate) fn remember_pane(app: &AppHandle, state: &AppState, pane: &PaneInfo) 
     if pane.acp && pane.task_id == super::CHAT_TASK_ID {
         state.slack_bot.adopt(pane, &state.config.read().slack_threads);
     }
+}
+
+/// Records `saved` in place of any earlier record of the same pane. `named`
+/// is the conversation its agent said it is in, `opened_on` the one it was
+/// opened to pick up.
+fn record(list: &mut Vec<SavedPane>, mut saved: SavedPane, named: Option<String>, opened_on: Option<String>) {
+    // Until its agent names its conversation, the pane keeps the one it was
+    // opened on (ACP-9). Recorded as none, one stopped or quit before its
+    // agent said so was started new, and its conversation lost.
+    if saved.acp {
+        saved.session = named.or(opened_on);
+    }
+    // Recorded again, the pane keeps the loop it is on (LOOP-11).
+    saved.on_loop = list.iter().find(|p| p.id == saved.id).and_then(|p| p.on_loop.clone());
+    // Replace rather than append: recording the same pane twice is how a
+    // restore that also recorded what it restored doubled this list on every
+    // launch.
+    list.retain(|p| p.id != saved.id);
+    list.push(saved);
+}
+
+/// The conversation the record of pane `id` keeps, for a restart before its
+/// agent named one (ACP-9).
+pub(crate) fn saved_session(saved: &[SavedPane], id: &str) -> Option<String> {
+    saved.iter().find(|p| p.id == id).and_then(|p| p.session.clone())
 }
 
 /// Each open agent, as the CLI and the folder it runs in.
@@ -727,5 +745,16 @@ mod tests {
         );
         assert_eq!(title_in(transcript).as_deref(), Some("Backend architecture and domain structure review"));
         assert_eq!(title_in(r#"{"type":"user"}"#), None);
+    }
+
+    #[test]
+    fn a_conversation_its_agent_has_not_named_yet_is_recorded_as_the_one_it_was_opened_on() {
+        let chat = SavedPane { acp: true, ..pane("the-chat", CHAT_TASK_ID, "agent") };
+        let mut saved = vec![];
+        record(&mut saved, chat.clone(), None, Some("opened-on".into()));
+        assert_eq!(saved_session(&saved, "the-chat").as_deref(), Some("opened-on"), "a restart picks it up");
+        record(&mut saved, chat, Some("named".into()), Some("opened-on".into()));
+        assert_eq!(saved_session(&saved, "the-chat").as_deref(), Some("named"), "the one its agent names wins");
+        assert_eq!(saved.len(), 1, "recorded once");
     }
 }
