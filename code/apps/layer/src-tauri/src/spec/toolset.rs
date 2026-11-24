@@ -171,7 +171,9 @@ pub fn find(id: &str, custom: &[Toolset]) -> Option<Toolset> {
 /// folder and is stored on tasks and repositories, whose record refuses one
 /// longer than 60 (`crates/domain`, `toolset_id`).
 pub fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 60 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+    !id.is_empty()
+        && id.len() <= 60
+        && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
 /// Refuse a manifest that could write outside the spec folder, run nothing,

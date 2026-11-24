@@ -101,6 +101,8 @@ export interface SpecView {
   /** The working copy, where agents and the user edit. */
   dir: string;
   files: SpecFileView[];
+  /** Files the toolset keeps that are not UTF-8 text: not shown, and left out of Commit spec. */
+  unreadable: string[];
   repos: RepoSpecView[];
   install: InstallState | null;
 }

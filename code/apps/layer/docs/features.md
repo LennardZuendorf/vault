@@ -2050,7 +2050,11 @@ requirements, then design, then tasks.
   over it, and every edit of the Spec tab's, a draft's and an agent's takes
   one lock (`commands/spec_work.rs`, `EDITING`), so a reader sees the old text
   or the new and two writers do not lose a tick. A listing stops at 5000
-  files and 16 folders deep, and skips `node_modules` and `.git`.
+  files and 16 folders deep, and skips `node_modules` and `.git`. A file is
+  text: one that is not UTF-8 fails its own read (`spec_read` of its path) and
+  nothing else. A listing, the Spec tab, Commit spec and a sub-task's seeding
+  leave it out and name it (`read_all`), so one such file cannot make the tab
+  empty or stop Open pull requests.
 - **SPEC-3** A task with no folder of its own (its root is itself a
   checkout, from before tasks had folders) MUST keep its spec in
   `<config folder>/specs/<repository>/<task>/` instead (`spec_dir`,
@@ -2244,7 +2248,9 @@ requirements, then design, then tasks.
   already what it would write. `whole` copies every file; `own` copies the step
   files with only the steps that belong to that repository and to everyone
   (SPEC-34), and what is above the first repository's section, and every other
-  file whole; `none` writes nothing and says so in its row. The result is a row
+  file whole; `none` writes nothing and says so in its row. A file that is not UTF-8
+  text is left out and named in the row's detail (`; left out, not UTF-8 text:
+  <path>`), and the repository's commit goes on without it. The result is a row
   per repository, a failed one named with why, and the others keep their
   commit. A review task, which has no spec, is refused. Open pull requests
   (PR-1, `commands/open_prs.rs`) MUST run Commit spec first, for the
@@ -2271,7 +2277,8 @@ requirements, then design, then tasks.
   total (its own and everyone's, SPEC-34) and where Commit spec stands (what it
   did just now, or "Not in its last commit", or "Committed", or "Kept by the
   app, not committed"); and, on the tab, a badge of steps done of all, else how
-  many files there are. The editor saves a file as a file write
+  many files there are. A file the toolset keeps that is not UTF-8 text is
+  named in a note and not shown (SPEC-2). The editor saves a file as a file write
   (`write_spec_file`), through the same lock and refusals as an agent's
   `spec_write`. Commit spec is off while any editor holds text not saved, since
   it puts the saved files into the repositories. An empty spec says where its
@@ -2376,7 +2383,8 @@ requirements, then design, then tasks.
   `spec_work.rs`, `spec_tool`), each acting on `task_id`, else the task of the
   pane it is called from:
   - `spec_read`: with no `path`, the spec's files, each with its steps done and
-    total; with one, that file's text.
+    total (a step file that is not UTF-8 text has an `error` and no steps); with
+    one, that file's text.
   - `spec_write`: a file's whole new text, making its folders; only a file the
     toolset lists, and nothing outside `spec/` (the refusals of SPEC-2).
   - `spec_task`: tick or untick a step by `file` and `step` position (SPEC-33);

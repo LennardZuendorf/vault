@@ -19,7 +19,7 @@ use crate::tickets::{NewTicket, Ticket, TicketPage, Tracker};
 
 use super::panes::{agent_file_dir, start_agent, Resume};
 use super::spec_commit::repositories;
-use super::spec_copy::{list_files, read_file, spec_dir, toolset_of};
+use super::spec_copy::{list_files, not_text, read_file, spec_dir, toolset_of};
 use super::spec_old::DRAFTS;
 use super::spec_view::step_texts;
 use super::spec_work::write_spec;
@@ -467,7 +467,12 @@ fn seed_sub_task(state: &AppState, epic: &Task, task: &Task, sub: &SubTask) -> R
     let holds = |rel: &str| t.steps.iter().any(|g| glob::matches(g, rel));
     let files = list_files(&dir, &t)?;
     for rel in files.iter().filter(|rel| !holds(rel)) {
-        write_spec(state, task, rel, &read_file(&dir, &t, rel)?)?;
+        match read_file(&dir, &t, rel) {
+            Ok(text) => write_spec(state, task, rel, &text)?,
+            // Not text: it cannot be written as one, and is not seeded.
+            Err(e) if not_text(&e) => {}
+            Err(e) => return Err(e),
+        }
     }
     if let Some(rel) = files.iter().find(|rel| holds(rel)) {
         let sections: Vec<String> = sub
@@ -662,6 +667,7 @@ mod tests {
         put(&spec.join("requirements.md"), "## Requirements\n- R-1 [api, web]: x\n");
         put(&spec.join("design.md"), "## Approach\ny\n");
         put(&spec.join("tasks.md"), PLAN);
+        std::fs::write(spec.join("bugfix.md"), [0xff, 0xfe]).unwrap();
         let sub_root = root.join("tasks/T-2");
         std::fs::create_dir_all(&sub_root).unwrap();
         let mut task = epic.clone();
@@ -677,6 +683,7 @@ mod tests {
         let mine = sub_root.join("spec");
         assert_eq!(get(&mine.join("requirements.md")), "## Requirements\n- R-1 [api, web]: x\n");
         assert_eq!(get(&mine.join("design.md")), "## Approach\ny\n");
+        assert!(!mine.join("bugfix.md").exists(), "a file that is not text is not seeded, and does not fail the rest");
         let steps = get(&mine.join("tasks.md"));
         assert!(steps.contains("# api") && steps.contains("[x] 2. Log it") && !steps.contains("Call it"), "{steps}");
         assert!(!steps.contains("# web"), "{steps}");

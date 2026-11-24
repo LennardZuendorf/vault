@@ -13,7 +13,7 @@ use crate::spec::toolset::{Extra, Toolset};
 
 use super::spec::{check_of, Check};
 use super::spec_commit::{changed_since_commit, repositories};
-use super::spec_copy::{list_files, read_file, spec_dir, toolset_of};
+use super::spec_copy::{list_files, read_all, read_file, spec_dir, toolset_of};
 use super::spec_install::{state_of, InstallState};
 use super::spec_work::{remove_spec, with_spec_moved, write_checked};
 use super::AppState;
@@ -67,6 +67,9 @@ pub struct SpecView {
     /// The working copy: where agents and the user edit.
     pub dir: String,
     pub files: Vec<SpecFileView>,
+    /// Files the toolset keeps that are not UTF-8 text, so they are not shown or
+    /// committed. Named so that a file missing from the tree is explained.
+    pub unreadable: Vec<String>,
     pub repos: Vec<RepoSpecView>,
     pub install: Option<InstallState>,
 }
@@ -100,12 +103,14 @@ pub(crate) fn view(state: &AppState, task: &Task) -> Result<SpecView> {
     let (t, dir) = (toolset_of(state, &task), spec_dir(state, &task));
     let repos = repositories(state, &task);
     let folders: Vec<String> = repos.iter().map(|r| r.folder.clone()).collect();
-    let mut files = Vec::new();
-    for path in list_files(&dir, &t)? {
-        let text = read_file(&dir, &t, &path)?;
-        let steps = if holds_steps(&t, &path) { owned_steps(&text, &folders) } else { Vec::new() };
-        files.push(SpecFileView { path, text, steps });
-    }
+    let (texts, unreadable) = read_all(&dir, &t)?;
+    let files: Vec<SpecFileView> = texts
+        .into_iter()
+        .map(|(path, text)| {
+            let steps = if holds_steps(&t, &path) { owned_steps(&text, &folders) } else { Vec::new() };
+            SpecFileView { path, text, steps }
+        })
+        .collect();
     let behind = changed_since_commit(state, &task);
     let repos = repos
         .iter()
@@ -134,6 +139,7 @@ pub(crate) fn view(state: &AppState, task: &Task) -> Result<SpecView> {
         },
         dir: dir.display().to_string(),
         files,
+        unreadable,
         repos,
         install: state_of(state, &task),
     })
@@ -205,6 +211,21 @@ mod tests {
         let json = serde_json::to_value(&v).unwrap();
         assert!(json["toolset"].get("install").is_none() && json["toolset"].get("agents_md").is_none());
         assert_eq!(json["repos"][0]["commit"], "whole");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_file_that_is_not_utf8_is_named_and_the_rest_of_the_spec_is_still_shown() {
+        let (root, state, task) = world(&["api"]);
+        let spec = root.join("tasks/T-1/spec");
+        put(&spec.join("requirements.md"), "## Requirements\n");
+        std::fs::write(spec.join("design.md"), [0xff, 0xfe, 0x00]).unwrap();
+
+        let v = view(&state, &task).unwrap();
+
+        let paths: Vec<&str> = v.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["requirements.md"]);
+        assert_eq!(v.unreadable, ["design.md"]);
         std::fs::remove_dir_all(&root).ok();
     }
 

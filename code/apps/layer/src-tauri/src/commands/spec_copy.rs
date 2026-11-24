@@ -153,7 +153,9 @@ fn walk(dir: &Path, prefix: &str, depth: usize, t: &Toolset, found: &mut Vec<Str
         Err(e) => return Err(e.into()),
     };
     for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
+        // A name that is not UTF-8 cannot be written as a spec path, so no read or
+        // write could reach it again; it is not listed.
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else { continue };
         let rel = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
         let Ok(kind) = entry.file_type() else { continue };
         if kind.is_dir() {
@@ -167,16 +169,46 @@ fn walk(dir: &Path, prefix: &str, depth: usize, t: &Toolset, found: &mut Vec<Str
     Ok(())
 }
 
-/// One file of the spec.
+/// One file of the spec. Text only: a file that is not UTF-8 (something pasted
+/// in, a binary with a `.md` name) is an error `not_text` knows, so a listing
+/// can leave it out where reading the one file cannot.
 pub(crate) fn read_file(dir: &Path, t: &Toolset, rel: &str) -> Result<String> {
     let path = target(dir, t, rel)?;
     refuse_links(dir, rel)?;
     match std::fs::symlink_metadata(&path) {
-        Ok(m) if m.is_file() => Ok(std::fs::read_to_string(&path)?),
+        Ok(m) if m.is_file() => std::fs::read_to_string(&path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::InvalidData => {
+                Error::Io(std::io::Error::new(e.kind(), format!("{rel} is not UTF-8 text, so it cannot be read here")))
+            }
+            _ => e.into(),
+        }),
         Ok(_) => Err(refused(format!("{rel} is not a file"))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(Error::NotFound(rel.to_string())),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Whether `e` is `read_file` meeting a file that is not UTF-8 text.
+pub(crate) fn not_text(e: &Error) -> bool {
+    matches!(e, Error::Io(io) if io.kind() == std::io::ErrorKind::InvalidData)
+}
+
+/// Files with their text, and the paths of those left out for not being text.
+pub(crate) type Texts = (Vec<(String, String)>, Vec<String>);
+
+/// Every file of the spec with its text, and the paths of the files that are not
+/// UTF-8 text and so are left out. One such file must not fail a listing, the
+/// Spec tab or Open pull requests; only reading that file by itself fails.
+pub(crate) fn read_all(dir: &Path, t: &Toolset) -> Result<Texts> {
+    let (mut texts, mut skipped) = (Vec::new(), Vec::new());
+    for rel in list_files(dir, t)? {
+        match read_file(dir, t, &rel) {
+            Ok(text) => texts.push((rel, text)),
+            Err(e) if not_text(&e) => skipped.push(rel),
+            Err(e) => return Err(e),
+        }
+    }
+    Ok((texts, skipped))
 }
 
 /// Replace the whole text of one file of the spec, making its folders. The
@@ -575,6 +607,25 @@ mod tests {
         let first = text.lines().next().unwrap();
         assert!(text.lines().all(|l| l == first) && text.lines().count() == 5000, "one writer's whole text");
         assert_eq!(list_files(&dir, &kiro).unwrap(), vec!["tasks.md"]);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_file_that_is_not_utf8_fails_its_own_read_and_is_only_named_in_a_listing() {
+        let (root, _, _) = world(&["api"]);
+        let dir = root.join("spec");
+        let openspec = named("openspec");
+        put(&dir.join("openspec/changes/a/proposal.md"), "Why\n");
+        let bad = dir.join("openspec/changes/a/design.md");
+        std::fs::write(&bad, [0x23, 0x20, 0xff, 0xfe, 0x0a]).unwrap();
+
+        let refused = read_file(&dir, &openspec, "openspec/changes/a/design.md").unwrap_err();
+        assert!(not_text(&refused), "{refused}");
+        assert!(refused.to_string().contains("design.md is not UTF-8 text"), "{refused}");
+        assert!(!not_text(&read_file(&dir, &openspec, "openspec/changes/a/gone.md").unwrap_err()));
+        let (texts, skipped) = read_all(&dir, &openspec).unwrap();
+        assert_eq!(texts, [("openspec/changes/a/proposal.md".to_string(), "Why\n".to_string())]);
+        assert_eq!(skipped, ["openspec/changes/a/design.md"]);
         std::fs::remove_dir_all(&root).ok();
     }
 

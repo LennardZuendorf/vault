@@ -17,7 +17,7 @@ use crate::spec::{self, glob};
 
 use super::spec::check_of;
 use super::spec_commit::commit_spec;
-use super::spec_copy::{list_files, move_old_spec, read_file, remove_file, spec_dir, toolset_of, write_file};
+use super::spec_copy::{list_files, move_old_spec, not_text, read_file, remove_file, spec_dir, toolset_of, write_file};
 use super::AppState;
 
 /// Every edit of a spec file, a tick or a whole new text, from an agent or
@@ -209,16 +209,30 @@ pub fn spec_tool(state: &AppState, name: &str, args: &Value, caller: Option<&str
             None => {
                 let mut rows = Vec::new();
                 for path in list_files(&dir, &t)? {
+                    // A file that is not UTF-8 text is listed, as one that cannot be read,
+                    // rather than failing the list of the others.
+                    let mut unreadable = false;
                     let steps = if holds_steps(&t, &path) {
-                        owned_steps(&read_file(&dir, &t, &path)?, &[])
+                        match read_file(&dir, &t, &path) {
+                            Ok(text) => owned_steps(&text, &[]),
+                            Err(e) if not_text(&e) => {
+                                unreadable = true;
+                                Vec::new()
+                            }
+                            Err(e) => return Err(e),
+                        }
                     } else {
                         Vec::new()
                     };
-                    rows.push(json!({
+                    let mut row = json!({
                         "path": path,
                         "steps_done": steps.iter().filter(|s| s.done).count(),
                         "steps_total": steps.len(),
-                    }));
+                    });
+                    if unreadable {
+                        row["error"] = json!("not UTF-8 text, so it cannot be read here");
+                    }
+                    rows.push(row);
                 }
                 Ok(unchanged(Value::Array(rows)))
             }
@@ -424,7 +438,12 @@ pub(crate) fn work_prompt(state: &AppState, task_id: &str, checkout_id: Option<&
     };
     let mut lists = Vec::new();
     for rel in list_files(&dir, &t)?.into_iter().filter(|f| holds_steps(&t, f)) {
-        let steps = owned_steps(&read_file(&dir, &t, &rel)?, &folders);
+        // A step file that is not text has no steps to name.
+        let text = match read_file(&dir, &t, &rel) {
+            Err(e) if not_text(&e) => continue,
+            other => other?,
+        };
+        let steps = owned_steps(&text, &folders);
         let mine = steps
             .iter()
             .filter(|s| {
@@ -593,6 +612,23 @@ mod tests {
         assert!(get(&spec_at(&root, "docs/superpowers/plans/two.md")).starts_with("- [x]"));
         let other = tick_step(&state, "t1", Some("docs/superpowers/specs/x.md"), 1, true).unwrap_err().to_string();
         assert!(other.contains("not a file of steps"), "{other}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_step_file_that_is_not_utf8_is_listed_as_unreadable_and_does_not_fail_the_list_or_the_prompt() {
+        let (root, state, _) = world(&["api"]);
+        put(&spec_at(&root, "requirements.md"), "# R\n");
+        std::fs::write(spec_at(&root, "tasks.md"), [0x2d, 0x20, 0xff, 0xfe]).unwrap();
+
+        let rows = spec_tool(&state, "spec_read", &json!({ "task_id": "t1" }), None).unwrap().value;
+
+        assert_eq!(rows[0], json!({ "path": "requirements.md", "steps_done": 0, "steps_total": 0 }));
+        assert_eq!(rows[1]["path"], "tasks.md");
+        assert!(rows[1]["error"].as_str().unwrap().contains("not UTF-8"), "{rows}");
+        let one = spec_tool(&state, "spec_read", &json!({ "task_id": "t1", "path": "tasks.md" }), None);
+        assert!(one.unwrap_err().to_string().contains("not UTF-8 text"), "only reading that file fails");
+        assert_eq!(work_prompt(&state, "t1", None).unwrap(), "", "no steps it can name");
         std::fs::remove_dir_all(&root).ok();
     }
 

@@ -344,6 +344,7 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
       toolset: worldOf(taskId).toolset,
       dir: `~/.villain-worktrees/${t?.branch ?? taskId}/spec`,
       files: list,
+      unreadable: [],
       repos,
       install: installs.get(taskId) ?? null,
     });

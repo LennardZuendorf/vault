@@ -140,6 +140,13 @@ export function SpecView({ task }: { task: TaskView }) {
         </div>
       )}
       <ErrorMessage>{actions.error}</ErrorMessage>
+      {spec.unreadable.length > 0 && (
+        <p className="spec-unreadable" role="status">
+          {spec.unreadable.join(", ")} {spec.unreadable.length === 1 ? "is" : "are"} not UTF-8 text,
+          so {spec.unreadable.length === 1 ? "it is" : "they are"} not shown here and Commit spec
+          leaves {spec.unreadable.length === 1 ? "it" : "them"} out.
+        </p>
+      )}
       {spec.files.length === 0 && current === null ? (
         <div className="empty">
           <h2>No spec yet</h2>

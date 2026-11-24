@@ -101,8 +101,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* The file changed under unsaved text: kept, and said so (SPEC-37). */
-.spec-conflict {
+/* The file changed under unsaved text: kept, and said so (SPEC-37). The same
+   note for files that are not text, which the tab leaves out. */
+.spec-conflict,
+.spec-unreadable {
   margin: 0 14px 4px;
   padding: 6px 10px;
   border-radius: var(--radius-md);

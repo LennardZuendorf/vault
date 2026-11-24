@@ -20,7 +20,7 @@ use crate::spec::toolset::Toolset;
 use crate::spec::{self, glob};
 
 use super::diff::RepoResult;
-use super::spec_copy::{list_files, read_file, spec_dir, toolset_of, write_under};
+use super::spec_copy::{read_all, spec_dir, toolset_of, write_under, Texts};
 use super::AppState;
 
 /// The one toolset whose files are not laid out as a repository root.
@@ -65,16 +65,12 @@ pub(crate) fn repositories(state: &AppState, task: &Task) -> Vec<Repo> {
 
 /// What Commit spec writes into `repo`: each file of the spec with the path
 /// it goes to. `own` filters the step files down to the repository's steps.
-fn would_write(
-    spec: &Path,
-    t: &Toolset,
-    task: &Task,
-    repo: &Repo,
-    folders: &[String],
-) -> Result<Vec<(String, String)>> {
+/// The paths of files that are not UTF-8 text come with it, left out: one
+/// would otherwise fail the whole repository, and Open pull requests with it.
+fn would_write(spec: &Path, t: &Toolset, task: &Task, repo: &Repo, folders: &[String]) -> Result<Texts> {
+    let (texts, skipped) = read_all(spec, t)?;
     let mut out = Vec::new();
-    for rel in list_files(spec, t)? {
-        let mut text = read_file(spec, t, &rel)?;
+    for (rel, mut text) in texts {
         if repo.project.spec_commit == SpecCommit::Own && t.steps.iter().any(|g| glob::matches(g, &rel)) {
             text = own_part(&text, &repo.folder, folders);
         }
@@ -83,7 +79,15 @@ fn would_write(
         })?;
         out.push((to, text));
     }
-    Ok(out)
+    Ok((out, skipped))
+}
+
+/// What a row says of files left out for not being text.
+fn left_out(skipped: &[String]) -> String {
+    match skipped {
+        [] => String::new(),
+        some => format!("; left out, not UTF-8 text: {}", some.join(", ")),
+    }
 }
 
 /// The sentence for a commit; `git::commit_only` writes it as the repository
@@ -98,9 +102,13 @@ fn commit_in(spec: &Path, t: &Toolset, task: &Task, repo: &Repo, folders: &[Stri
     if repo.project.spec_commit == SpecCommit::None {
         return Ok("the spec stays in Layer here (spec_commit is none)".into());
     }
-    let files = would_write(spec, t, task, repo, folders)?;
+    let (files, skipped) = would_write(spec, t, task, repo, folders)?;
     if files.is_empty() {
-        return Ok("the spec has no files yet".into());
+        return Ok(if skipped.is_empty() {
+            "the spec has no files yet".into()
+        } else {
+            format!("the spec has no text files yet{}", left_out(&skipped))
+        });
     }
     let worktree = Path::new(&repo.checkout.path);
     for (rel, text) in &files {
@@ -111,10 +119,11 @@ fn commit_in(spec: &Path, t: &Toolset, task: &Task, repo: &Repo, folders: &[Stri
         }
     }
     let paths: Vec<&str> = files.iter().map(|(rel, _)| rel.as_str()).collect();
-    Ok(match git::commit_only(worktree, &paths, &message(task))? {
+    let said = match git::commit_only(worktree, &paths, &message(task))? {
         Some(sha) => format!("committed {}", sha.get(..7).unwrap_or(&sha)),
         None => "nothing changed".into(),
-    })
+    };
+    Ok(said + &left_out(&skipped))
 }
 
 /// Commit the task's spec into each repository (`only`: those whose folder
@@ -152,7 +161,7 @@ pub(crate) fn changed_since_commit(state: &AppState, task: &Task) -> Vec<String>
         .iter()
         .filter(|r| r.project.spec_commit != SpecCommit::None)
         .filter(|repo| match would_write(&spec, &t, task, repo, &folders) {
-            Ok(files) => files
+            Ok((files, _)) => files
                 .iter()
                 .any(|(rel, text)| git::committed_text(Path::new(&repo.checkout.path), rel).as_deref() != Some(text)),
             Err(_) => true,
@@ -304,6 +313,26 @@ mod tests {
         for dot in [".claude", ".agents", ".opencode", ".gemini"] {
             assert!(!api.join(dot).exists(), "{dot} stays in the task's spec folder");
         }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_spec_file_that_is_not_utf8_is_left_out_and_said_not_failing_the_repository() {
+        let (root, state, task) = repos(&["api", "web"], "openspec");
+        spec_file(&root, "openspec/changes/a/proposal.md", "Why\n");
+        let bad = root.join("tasks/T-1/spec/openspec/changes/a/design.md");
+        std::fs::write(&bad, [0x23, 0x20, 0xff, 0xfe, 0x0a]).unwrap();
+
+        let rows = commit_spec(&state, &task, None);
+
+        assert!(rows.iter().all(|r| r.ok), "{rows:?}");
+        for row in &rows {
+            assert!(row.detail.starts_with("committed "), "{row:?}");
+            assert!(row.detail.ends_with("; left out, not UTF-8 text: openspec/changes/a/design.md"), "{row:?}");
+        }
+        let api = worktree(&root, "api");
+        assert_eq!(touched(&api), ["openspec/changes/a/proposal.md"]);
+        assert!(changed_since_commit(&state, &task).is_empty(), "what is left out is not a change");
         std::fs::remove_dir_all(&root).ok();
     }
 
