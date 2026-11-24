@@ -8,7 +8,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::agents;
-use crate::config::SavedPane;
+use crate::config::{AppConfig, SavedPane};
 use crate::error::{Error, Result};
 use crate::pty::{PaneInfo, PaneKind};
 
@@ -103,7 +103,12 @@ fn continued_by_an_open_agent(p: &SavedPane, open: &HashSet<(String, String)>) -
 /// (neither open nor waiting), then waiting ones, oldest first. Simply
 /// dropping the oldest could take a waiting pane, the one thing PANE-7 says
 /// is never lost, while dead entries newer than it stayed.
+///
+/// The Henchman's newest record never goes (HEN-2). Parked while it was off,
+/// or exited, it was the oldest pane that could go, and a day of other agents
+/// opening took its conversation with it.
 fn trim(saved: &mut Vec<SavedPane>, live: &HashSet<String>, keep: usize) {
+    let henchman = saved.iter().rfind(|p| super::henchman::is_saved(p)).map(|p| p.id.clone());
     let exited = |p: &SavedPane| !p.waiting && !live.contains(&p.id);
     let waiting = |p: &SavedPane| p.waiting;
     let any = |_: &SavedPane| true;
@@ -111,7 +116,7 @@ fn trim(saved: &mut Vec<SavedPane>, live: &HashSet<String>, keep: usize) {
     for goes in order {
         let mut over = saved.len().saturating_sub(keep);
         saved.retain(|p| {
-            let drop = over > 0 && goes(p);
+            let drop = over > 0 && henchman.as_ref() != Some(&p.id) && goes(p);
             if drop {
                 over -= 1;
             }
@@ -228,17 +233,6 @@ pub fn restore_panes(app: &AppHandle) {
     let forget = |id: &str| {
         let _ = state.config.update(|c| c.saved_panes.retain(|p| p.id != id));
     };
-    // Kept for another try, a few times: a CLI missing from PATH at one
-    // launch may be back at the next, but a pane whose repo has left the task
-    // never will be.
-    let failed = |id: &str| {
-        let _ = state.config.update(|c| {
-            for p in c.saved_panes.iter_mut().filter(|p| p.id == id) {
-                p.failed = p.failed.saturating_add(1);
-            }
-            c.saved_panes.retain(|p| p.failed < RESTORE_TRIES);
-        });
-    };
 
     // Which agent has already resumed in which folder this restore. Two
     // agents in one folder both ran `--continue`, which picks the newest
@@ -268,10 +262,34 @@ pub fn restore_panes(app: &AppHandle) {
             Back::Gone(_) => forget(&pane.id),
             Back::Failed(e) => {
                 eprintln!("could not restore a pane: {e}");
-                failed(&pane.id);
+                let _ = state.config.update(|c| restore_failed(c, &pane.id));
+                if super::henchman::is_saved(&pane) {
+                    super::notify(
+                        app,
+                        "error",
+                        format!("The Henchman did not come back, and waits for its tab to wake it: {e}"),
+                    );
+                    let _ = app.emit("panes:waiting", ());
+                }
             }
         }
     }
+}
+
+/// A pane that did not come back at launch is kept for another try, a few
+/// times: a CLI missing from PATH at one launch may be back at the next, but
+/// a pane whose repo has left the task never will be. The Henchman waits
+/// instead, for its tab to wake it (HEN-2): counted down like the rest, three
+/// launches without its CLI forgot its conversation.
+fn restore_failed(c: &mut AppConfig, id: &str) {
+    for p in c.saved_panes.iter_mut().filter(|p| p.id == id) {
+        if super::henchman::is_saved(p) {
+            p.waiting = true;
+        } else {
+            p.failed = p.failed.saturating_add(1);
+        }
+    }
+    c.saved_panes.retain(|p| p.failed < RESTORE_TRIES);
 }
 
 /// How putting one saved pane back went.
@@ -590,6 +608,39 @@ mod tests {
         assert_eq!(saved.len(), keep);
         let kept: Vec<&str> = saved.iter().take(5).map(|p| p.id.as_str()).collect();
         assert_eq!(kept, ["0", "1", "2", "3", "4"], "the oldest exited panes went, not the waiting or open ones");
+    }
+
+    #[test]
+    fn the_henchmans_newest_record_stays_when_a_full_list_is_trimmed() {
+        let henchman =
+            |id: &str| SavedPane { cwd: Some("/w/_chat/henchman".into()), ..pane(id, CHAT_TASK_ID, "agent") };
+        let mut saved = vec![
+            henchman("henchman-before"),
+            SavedPane { waiting: true, ..henchman("henchman-parked") },
+            SavedPane { waiting: true, ..pane("waiting", "t1", "agent") },
+            pane("open", "t2", "agent"),
+        ];
+        trim(&mut saved, &["open".into()].into(), 2);
+        let kept: Vec<String> = saved.into_iter().map(|p| p.id).collect();
+        assert_eq!(kept, ["henchman-parked", "open"], "the older Henchman went, as any exited pane does");
+    }
+
+    #[test]
+    fn a_henchman_that_fails_to_come_back_waits_where_another_pane_is_forgotten() {
+        let henchman = SavedPane {
+            cwd: Some("/w/_chat/henchman".into()),
+            session: Some("its-conversation".into()),
+            ..pane("henchman", CHAT_TASK_ID, "agent")
+        };
+        let mut c = AppConfig { saved_panes: vec![henchman, pane("agent", "t1", "agent")], ..Default::default() };
+        for _ in 0..RESTORE_TRIES {
+            restore_failed(&mut c, "henchman");
+            restore_failed(&mut c, "agent");
+        }
+        assert_eq!(c.saved_panes.len(), 1, "the other pane was forgotten");
+        let kept = &c.saved_panes[0];
+        assert!(kept.waiting && kept.failed == 0);
+        assert_eq!(kept.session.as_deref(), Some("its-conversation"));
     }
 
     /// A pane over the limit waited, then an agent was started in

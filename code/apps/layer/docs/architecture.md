@@ -293,8 +293,9 @@ in front, and slower once nobody has touched it for 45 seconds
 ## The browser
 
 `browser/` runs one headless Chrome for the app, with a tab per task
-(§18 in `features.md`). Chrome is the user's installed one, on a profile in
-the config folder, started by the first call that needs a tab.
+(§18 in `features.md`). Chrome is one installed on the Mac (Chrome for
+Testing or Chromium before Google Chrome, BRW-1, `chrome.rs`), on a profile
+in the config folder, started by the first call that needs a tab.
 
 - **The pipe.** Chrome reads DevTools Protocol messages on its fd 3 and
   writes on its fd 4 (`--remote-debugging-pipe`), each ended by a NUL.

@@ -399,7 +399,7 @@ Each of them can also run as a conversation the app draws, over ACP (§20).
   newest were the ones lost: a chat with a day's work in it went, at a
   restart with 12 agents and 2 shells open. Two agents in one folder never
   both resume the same conversation. A pane that fails to come back three launches in a row is
-  forgotten. Only a conversation the CLI would continue counts: Claude
+  forgotten, except the Henchman, which waits (HEN-2). Only a conversation the CLI would continue counts: Claude
   Code's one-shot runs (`claude -p`, the app's own PR description drafts)
   do not. Counted, a draft in the task folder had an agent restarted there,
   where Claude found "No conversation found to continue", while its real
@@ -1818,10 +1818,13 @@ to help an agent that is stuck. Under it is what an agent last did, and a
 ring marks where it clicked.
 
 - **BRW-1** There MUST be one browser for the app, started when it is first
-  needed, with one tab per task. It is the Google Chrome (or Chromium)
-  installed on the Mac, run headless with a profile of its own in the
-  app's config folder: never the user's own Chrome profile, its sign-ins or
-  its extensions. Without Chrome, the tools say what to install.
+  needed, with one tab per task. It is a Chrome installed on the Mac, run
+  headless with a profile of its own in the app's config folder: never the
+  user's own Chrome profile, its sign-ins or its extensions. Chrome for
+  Testing or Chromium MUST be run over Google Chrome when one is installed:
+  macOS takes a headless Google Chrome for the user's own, and while it
+  ran, opening Chrome from the Dock or Finder showed nothing. Without any
+  Chrome, the tools say what to install.
 - **BRW-2** An agent's tools MUST act on its own task's tab, found from the
   pane that calls (`X-Villain-Pane`). The chats have one browser between
   them, as a task's agents share the task's, shown beside them by the
@@ -3610,7 +3613,12 @@ Slack come later.
   waiting. One that waits all the same is woken from its tab where it
   left off, in its own conversation. Before, it came back in the order
   it was opened: with twelve agents open at a quit it waited, and Wake
-  forgot it and began a new conversation. It
+  forgot it and began a new conversation. One that fails to come back at
+  launch waits too, and the user is told: counted down like other panes
+  (PANE-7), three launches without its CLI forgot its conversation. Its
+  newest saved record is never the one dropped when the remembered panes
+  are trimmed (PANE-2): parked or exited, it was the oldest that could go,
+  and a day of other agents opening took it. It
   opens in auto mode where its agent has one, restored too, so reading
   Layer through its tools asks nothing first. Its conversation opens
   with Claude Code settings in `session/new`'s `_meta` (and load,
