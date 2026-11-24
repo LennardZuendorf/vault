@@ -325,6 +325,7 @@ pub fn run() {
             commands::spawn_chat,
             commands::spawn_henchman,
             commands::set_henchman_agent,
+            commands::set_henchman_on,
             commands::henchman_orders,
             commands::henchman_order_add,
             commands::henchman_order_remove,

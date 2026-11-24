@@ -28,6 +28,9 @@ export function HenchmanView() {
   const usable = agents.filter((a) => a.installed && a.acp);
   const agent = usable.find((a) => a.id === chosen) ?? usable[0];
   const asleep = useStore(useShallow((s) => s.waiting.filter(isWaitingHenchman)));
+  // Off in Settings (HEN-16): the tab is the lair alone. On until settings say.
+  const off = useStore((s) => s.settings?.henchman_on === false);
+  const toggleSettings = useStore((s) => s.toggleSettings);
 
   async function wake() {
     // One not put back at launch (PANE-7) comes back with its conversation.
@@ -66,7 +69,18 @@ export function HenchmanView() {
   return (
     <div className="hench">
       <div className="hench-talk">
-        {pane ? (
+        {off ? (
+          <div className="hench-empty">
+            {hello}
+            <p className="muted">
+              The Henchman is off. Your agents ping you themselves, and the lair beside this lists
+              what needs you.
+            </p>
+            <button className="ui-button" onClick={() => toggleSettings(true, "agents")}>
+              Turn it on in Settings
+            </button>
+          </div>
+        ) : pane ? (
           <>
             <PaneExited pane={pane} busy={restarting.has(pane.id)} onResume={restart} />
             <div className="pane-stack">

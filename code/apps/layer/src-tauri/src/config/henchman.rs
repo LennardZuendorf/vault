@@ -1,4 +1,5 @@
-//! What the Henchman answers from, and whom it leaves alone (HEN-7, HEN-8).
+//! What the Henchman answers from, whom it leaves alone, what it is woken
+//! with, and whether it is on at all (HEN-7, HEN-8, HEN-15, HEN-16).
 //! The user's own, on this Mac: not part of the setup a team shares.
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,11 @@ pub struct HenchmanConfig {
     pub left_alone: Vec<String>,
     /// What it is woken with (HEN-15).
     pub agent: HenchmanAgent,
+    /// Turned off in Settings → Agents (HEN-16). Off rather than on, so a
+    /// config written before the switch, or with no Henchman in it, keeps
+    /// it on.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub off: bool,
 }
 
 /// The agent the Henchman is woken with, and the model and effort its

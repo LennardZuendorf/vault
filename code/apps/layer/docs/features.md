@@ -1440,6 +1440,7 @@ Known gaps:
 | Agents: Start Claude Code in auto mode | on | PANE-18 |
 | Agents: Let agents read terminal output | **off** | MCP `pane_output`, `handoff_prompt` |
 | Agents: Most terminals running at once | 32 | 32, 48 or 64 (PANE-2) |
+| Agents: Henchman | on | HEN-16 |
 | Agents: Henchman's agent, model and effort | Claude Code, Sonnet, Medium | HEN-15 |
 | Agents: Task folder location | `~/.villain-worktrees` | where task folders go |
 | Keep awake (the cup in the top bar) | off | STATE-7, PHONE-8 |
@@ -3598,8 +3599,8 @@ Slack come later.
   and what it never does: write code, edit files, merge, or answer anyone
   in Jira, GitHub or Slack without asking. It is not listed in Chat and
   does not count as a chat that is working; its banners and messages
-  open its tab. It is restored at launch like any chat (PANE-7), and
-  before every other agent, so the restore limit never leaves it
+  open its tab. Unless it is off (HEN-16), it is restored at launch like
+  any chat (PANE-7), and before every other agent, so the restore limit never leaves it
   waiting. One that waits all the same is woken from its tab where it
   left off, in its own conversation. Before, it came back in the order
   it was opened: with twelve agents open at a quit it waited, and Wake
@@ -3836,11 +3837,21 @@ Slack come later.
   running keeps its agent: while it runs on another, Settings says so
   and offers to wake it with the chosen one, which begins a new
   conversation.
+- **HEN-16** Settings → Agents MUST turn the Henchman off and on again.
+  It is on until the user turns it off. Turned off, it is stopped,
+  running or not, and its conversation waits (PANE-7): it is not put back
+  at launch, and nothing wakes it, from its tab or anywhere else, while
+  it is off. Nothing runs for it then: the agents ping the user
+  themselves again (HEN-13), and nothing is kept to tell it (HEN-9,
+  HEN-12). Its tab stays, as the lair (HEN-5): in place of the
+  conversation it says the Henchman is off, with a button to Settings →
+  Agents. Turned on again, its tab wakes it where it left off. While it
+  is off, Settings shows only the switch, not its agent, model and effort.
 
-Code: `commands/henchman.rs` (the room, its context, `spawn_henchman`),
-`commands/henchman_tools.rs` (HEN-4, `pane_restart`),
+Code: `commands/henchman.rs` (the room, its context, `spawn_henchman`,
+HEN-16), `commands/henchman_tools.rs` (HEN-4, `pane_restart`),
 `commands/henchman_orders.rs` and `config/henchman.rs` (HEN-7, HEN-8,
-HEN-15),
+HEN-15, HEN-16),
 `commands/henchman_feed.rs` (HEN-9, HEN-10, HEN-12),
 `commands/henchman_work.rs` (HEN-11), `commands/henchman_watch.rs`
 (HEN-12), `commands/henchman_need.rs` and `attention.rs` (HEN-13),

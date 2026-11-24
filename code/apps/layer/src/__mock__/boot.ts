@@ -79,6 +79,9 @@ seedEpic(world);
 if (params.get("tracker") === "github") githubTracker(world);
 for (const p of world.panes) if (p.acp) seedAcp(p.id);
 const HENCHMAN_ROOM = "/Users/you/.villain-worktrees/_chat/henchman";
+const HENCHMAN_OFF = "The Henchman is off. Turn it on in Settings → Agents.";
+// `?henchman=off`: turned off in Settings (HEN-16).
+if (params.get("henchman") === "off") world.settings.henchman_on = false;
 // `?henchman=waiting`: it was left out at launch (PANE-7) and waits.
 if (params.get("henchman") === "waiting")
   world.waiting.push({
@@ -533,6 +536,24 @@ const answer: Record<string, Answer> = {
     };
     return null;
   },
+  // Off, it stops and its conversation waits, as the app keeps it (HEN-16).
+  set_henchman_on: (a) => {
+    world.settings.henchman_on = a.on as boolean;
+    if (a.on) return null;
+    for (const p of world.panes.filter((x) => x.cwd === HENCHMAN_ROOM)) {
+      world.waiting.push({
+        id: `saved-${p.id}`,
+        task_id: "chat",
+        kind: "agent",
+        agent_id: p.agent_id,
+        cwd: HENCHMAN_ROOM,
+        title: p.topic,
+      });
+    }
+    world.panes = world.panes.filter((x) => x.cwd !== HENCHMAN_ROOM);
+    void emit("panes:waiting");
+    return null;
+  },
   set_slack_bot_on: (a) => {
     if (world.settings.slack_bot) world.settings.slack_bot.enabled = a.on as boolean;
     world.slackBot.status = { state: a.on ? "connected" : "off", error: null };
@@ -683,6 +704,7 @@ const answer: Record<string, Answer> = {
   },
   // The Henchman (§28): one, in its own room, asked for a brief.
   spawn_henchman: (a) => {
+    if (!world.settings.henchman_on) throw new Error(HENCHMAN_OFF);
     const running = world.panes.find((x) => x.cwd === HENCHMAN_ROOM && x.running);
     if (running) return running;
     const p = newPane({ ...a, acp: true }, "agent", "chat");
@@ -703,9 +725,11 @@ const answer: Record<string, Answer> = {
   reopen_waiting_pane: (a) => {
     const w = world.waiting.find((x) => x.id === a.id);
     if (!w) throw new Error("That pane is no longer waiting to be reopened.");
+    const henchman = w.cwd === HENCHMAN_ROOM;
+    // Refused while it is off, and still waiting (HEN-16).
+    if (henchman && !world.settings.henchman_on) throw new Error(HENCHMAN_OFF);
     world.waiting = world.waiting.filter((x) => x !== w);
     void emit("panes:waiting");
-    const henchman = w.cwd === HENCHMAN_ROOM;
     const p = newPane({ agentId: w.agent_id, acp: henchman }, w.kind, w.task_id);
     // Back in its own folder, as the app reopens it: a chat in its room (CHAT-1).
     if (w.cwd !== null) p.cwd = w.cwd;

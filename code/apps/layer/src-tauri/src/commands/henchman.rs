@@ -5,9 +5,9 @@
 
 use std::path::Path;
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
-use crate::config::HenchmanAgent;
+use crate::config::{AppConfig, HenchmanAgent, SavedPane};
 use crate::error::{Error, Result};
 use crate::pty::PaneInfo;
 
@@ -83,6 +83,49 @@ pub async fn spawn_henchman(app: AppHandle, agent_id: String) -> Result<PaneInfo
         open_chat(&handle, state, agent_id, Some(BRIEF.into()), Some(room), Resume::No, true)
     })
     .await
+}
+
+/// Turn the Henchman off or on again (HEN-16). Off, it is stopped and its
+/// conversation waits (PANE-7), so it is not put back at launch and its
+/// tab, once it is on again, wakes it where it left off. Closed instead of
+/// waiting, the next wake began a new conversation. Off the command thread:
+/// stopping waits up to five seconds for the agent to save.
+#[tauri::command]
+pub async fn set_henchman_on(app: AppHandle, on: bool) -> Result<()> {
+    let handle = app.clone();
+    super::blocking(app, move |state| {
+        // Read before the update: config locks are not reentrant.
+        let room = state.config.worktree_root().join("_chat").join(ROOM);
+        state.config.update(|c| switch(c, on, &room))?;
+        if on {
+            return Ok(());
+        }
+        // An exited one too: left in the list, its Resume would wake it.
+        for pane in state.ptys.list(Some(CHAT_TASK_ID)).into_iter().filter(|p| is_henchman(state, p)) {
+            state.ptys.close(&pane.id)?;
+        }
+        let _ = handle.emit("panes:waiting", ());
+        Ok(())
+    })
+    .await
+}
+
+/// The switch and, turned off, every saved Henchman waiting, in one write:
+/// off with a saved pane not waiting, the next launch would try it, be
+/// refused, and after a few launches forget its conversation.
+fn switch(c: &mut AppConfig, on: bool, room: &Path) {
+    c.henchman.off = !on;
+    let ours = |p: &SavedPane| p.task_id == CHAT_TASK_ID && p.cwd.as_deref().is_some_and(|d| Path::new(d) == room);
+    c.saved_panes.iter_mut().filter(|p| !on && ours(p)).for_each(|p| p.waiting = true);
+}
+
+/// What `open_chat` says when the Henchman's room is asked for while it is
+/// off: every way of waking it ends there (HEN-16).
+pub(crate) fn refuse_while_off(state: &AppState) -> Result<()> {
+    if state.config.with(|c| c.henchman.off) {
+        return Err(Error::Other("The Henchman is off. Turn it on in Settings → Agents.".into()));
+    }
+    Ok(())
 }
 
 /// The agent the Henchman is woken with, and its model and effort, empty
@@ -272,5 +315,38 @@ mod tests {
         assert!(room.join("CLAUDE.md").exists());
         assert!(!room.join(".claude").join("settings.json").exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn turned_off_the_henchman_waits_where_it_left_off_and_cannot_be_woken() {
+        let root = std::env::temp_dir().join(format!("vl-henchman-{}", uuid::Uuid::new_v4()));
+        let state = super::super::repos::tests::state(&root, Default::default());
+        let room = state.config.worktree_root().join("_chat").join(ROOM);
+        let saved = |id: &str, cwd: &Path| -> SavedPane {
+            let pane =
+                serde_json::json!({ "id": id, "task_id": CHAT_TASK_ID, "kind": "agent", "cwd": cwd, "acp": true });
+            serde_json::from_value(pane).unwrap()
+        };
+        let other = root.join("_chat").join("a-chat");
+        state.config.update(|c| c.saved_panes = vec![saved("henchman", &room), saved("chat", &other)]).unwrap();
+        assert!(refuse_while_off(&state).is_ok(), "on until turned off");
+
+        state.config.update(|c| switch(c, false, &room)).unwrap();
+        let waits = |id: &str| state.config.read().saved_panes.iter().any(|p| p.id == id && p.waiting);
+        assert!(waits("henchman"), "kept, not put back at launch");
+        assert!(!waits("chat"), "other chats come back as before");
+        assert!(refuse_while_off(&state).is_err());
+
+        state.config.update(|c| switch(c, true, &room)).unwrap();
+        assert!(refuse_while_off(&state).is_ok());
+        assert!(waits("henchman"), "its tab wakes it where it left off");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_config_from_before_the_switch_keeps_the_henchman_on() {
+        let config: AppConfig = serde_json::from_value(serde_json::json!({ "henchman": { "orders": [] } })).unwrap();
+        assert!(!config.henchman.off);
+        assert!(!AppConfig::default().henchman.off);
     }
 }
