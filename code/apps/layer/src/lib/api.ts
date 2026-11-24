@@ -322,6 +322,7 @@ export const api = {
     invoke<SpecCheck>("check_spec", { taskId, checkoutId }),
   /** Install the task's spec toolset again, after a failure; announced as `spec:install`. */
   installSpecToolset: (taskId: string) => invoke<InstallState>("install_spec_toolset", { taskId }),
+  watchSpec: (taskId: string | null) => invoke<void>("watch_spec", { taskId }),
   /**
    * Commit spec: put the task's `spec/` into each repository per its
    * `spec_commit` and commit it there. `repos` limits it to those folders.

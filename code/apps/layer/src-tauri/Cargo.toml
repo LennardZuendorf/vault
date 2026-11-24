@@ -70,6 +70,10 @@ code-villain-notify = { workspace = true }
 # The window keeps drawing when WebKit loses its GPU helper (WIN-7).
 code-villain-webview = { workspace = true }
 notify-rust = "4"
+# The Spec tab follows `<task>/spec/` as an agent writes it (SPEC-28): FSEvents,
+# pushed to the window. Nothing else in the tree watches files, and polling
+# would break "push, don't poll".
+notify = "8"
 # Profiles (§25): bringing another copy of the app forward, and marking each
 # copy's Dock icon. Tauri has neither. Already in the build through tao, so
 # no new crates: only these classes' bindings are added. NSPasteboard and

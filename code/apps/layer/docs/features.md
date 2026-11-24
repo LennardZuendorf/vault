@@ -2308,13 +2308,24 @@ requirements it decided by hand, and finding that Redraft threw both away.
   (SPEC-11, with the same exception for Start agent), also while the spec
   folder is still empty. A review task is
   never told it. Nothing blocks an agent that ignores it.
+- **SPEC-28** The app MUST show a change to the spec folder as it is made,
+  not when the tab is next opened. While a task's Spec tab is on screen, a
+  change in `<task>/spec/`, by an agent, an editor or the user, MUST reach
+  the tab as `spec:changed` once the folder has been quiet for 200 ms (and at
+  least once a second while it is not), so a burst of writes is one re-read.
+  Only the task on screen is followed, and none when its Spec tab is not. A
+  folder that does not exist yet is followed from its nearest existing folder
+  and from the moment it appears, so an agent's first write shows too. It
+  MUST be pushed by the system's file events, never polled
+  (`commands/spec_watch.rs`, the `watch_spec` command, called from
+  `Watchers.tsx`).
 
 Code: `spec.rs` (the files, and what is read from them),
 `commands/spec.rs` (where the spec and its copies live, what was
 approved, approving), `commands/spec_view.rs` (what the tab is shown),
 `commands/spec_outside.rs` (Put back, `spec_propose` and turning a
 proposal down), `commands/spec_work.rs` (ticking, prompts, the pull
-request's part, telling agents), `commands/spec_commit.rs` (Commit spec), `commands/spec_draft.rs` and
+request's part, telling agents), `commands/spec_commit.rs` (Commit spec), `commands/spec_watch.rs` (SPEC-28), `commands/spec_draft.rs` and
 `commands/spec_prompts.rs` (drafting, applying answers, checking,
 merging), `commands/task_context.rs`, `git/only.rs` (committing only the
 spec), `mcp.rs` (`spec_task`), `commands/open_prs.rs`, `SpecView.tsx`,

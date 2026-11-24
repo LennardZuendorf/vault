@@ -661,6 +661,8 @@ const answer: Record<string, Answer> = {
     error: null,
     running: false,
   }),
+  // Following the spec folder (§19): nothing is written to one here.
+  watch_spec: () => null,
   // Commit spec (§19): every repository took it.
   commit_spec_cmd: (a) =>
     (world.tasks.find((t) => t.id === a.taskId)?.checkouts ?? []).map((c) => ({

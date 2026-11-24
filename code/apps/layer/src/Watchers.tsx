@@ -12,7 +12,7 @@ import { useTheme } from "./lib/theme";
 import type { InstallState, SpecPart, Target } from "./lib/types";
 import type { HenchmanLair } from "./lib/types-henchman";
 import { startWorkspaceSync, useSession } from "./lib/workspace-sync";
-import { exitIsNews, useStore } from "./store";
+import { exitIsNews, selectedTask, useStore } from "./store";
 
 /**
  * Tauri emits an unfocused event while the window is still coming up.
@@ -368,6 +368,17 @@ export function Watchers() {
       void r.then((un) => un());
     };
   }, []);
+
+  // The spec folder of the task whose Spec tab is on screen, followed so an
+  // agent's writes show as they happen (SPEC-28); none when it is not. A
+  // failure only means no live updates: the tab still reads on opening.
+  const specOf = useStore((s) => {
+    const task = selectedTask(s);
+    return s.view === "work" && s.tab === "spec" && task && !task.epic ? task.id : null;
+  });
+  useEffect(() => {
+    void api.watchSpec(specOf).catch(() => {});
+  }, [specOf]);
 
   // Hitting a usage limit is the one thing worth interrupting for: the agent
   // has stopped working and will not say so again.
