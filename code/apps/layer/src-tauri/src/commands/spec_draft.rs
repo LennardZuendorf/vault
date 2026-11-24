@@ -36,7 +36,7 @@ use super::spec_commit::{repositories, Repo};
 use super::spec_copy::{read_file, spec_dir, toolset_of};
 use super::spec_prompts::{answers_prompt, check_prompt, design_prompt, requirements_prompt, tasks_prompt};
 use super::spec_view::CheckView;
-use super::spec_work::{with_spec_moved, write_spec};
+use super::spec_work::{update_spec, with_spec_moved, write_spec};
 use super::task_context::TICKET_FILE;
 use super::AppState;
 
@@ -208,7 +208,9 @@ fn draft_inner(
     let folders: Vec<String> = repos.iter().map(|r| r.folder.clone()).collect();
     let kind = kind_of(&dir, &t, kind)?;
     let wanted = || Error::Other("write the requirements first".into());
-    let (rel, out) = match part {
+    // What goes into the file: a whole text, or the run's parts for the tasks,
+    // which are put together with what the file holds when it is written.
+    let (rel, body) = match part {
         Part::Requirements => {
             let rel = Part::Requirements.file(kind);
             let ticket = agent_file_dir(state, task).and_then(|d| std::fs::read_to_string(d.join(TICKET_FILE)).ok());
@@ -226,7 +228,7 @@ fn draft_inner(
             if out.trim().is_empty() {
                 return Err(Error::Other("claude returned no requirements".into()));
             }
-            (rel, out)
+            (rel, Body::Whole(out))
         }
         Part::Design => {
             let (_, reqs) = requirements_of(&dir, &t)?.ok_or_else(wanted)?;
@@ -240,18 +242,12 @@ fn draft_inner(
             if out.trim().is_empty() {
                 return Err(Error::Other("claude returned an empty design".into()));
             }
-            ("design.md", out)
+            ("design.md", Body::Whole(out))
         }
         Part::Tasks => {
             let (_, reqs) = requirements_of(&dir, &t)?.ok_or_else(wanted)?;
             let design = text_of(&dir, &t, "design.md")?.unwrap_or_else(|| "None.".into());
-            let old_file = text_of(&dir, &t, "tasks.md")?.unwrap_or_default();
-            // What each repository has of the file now, for the run to keep.
-            let old: Vec<(String, String)> = folders
-                .iter()
-                .map(|f| (f.clone(), without_heading(&own_part(&old_file, f, &folders), f)))
-                .filter(|(_, own)| !spec::steps(own).is_empty())
-                .collect();
+            let old = own_sections(&text_of(&dir, &t, "tasks.md")?.unwrap_or_default(), &folders);
             let prompt = tasks_prompt(&folders, &reqs, &design, &old, task.epic.then_some(under));
             let mut so_far = String::new();
             let out = run(&prompt, &home_dir(), false, &mut |delta| {
@@ -262,28 +258,52 @@ fn draft_inner(
             if split.iter().all(|(_, t)| spec::steps(t).is_empty()) {
                 return Err(Error::Other("claude returned no steps".into()));
             }
-            let requirements = spec::requirements(&reqs);
-            // Done stays done, and a step left without its requirements is
-            // marked, not dropped (SPEC-7).
-            let kept: Vec<(String, String)> = split
-                .into_iter()
-                .map(|(folder, text)| {
-                    let before = old.iter().find(|(f, _)| *f == folder).map(|(_, own)| own.as_str());
-                    let mine: Vec<_> = requirements.iter().filter(|r| r.names(&folder)).cloned().collect();
-                    let text = match before {
-                        Some(before) => spec::sync_steps(before, &text, &mine),
-                        None => text,
-                    };
-                    (folder, text)
-                })
-                .collect();
-            ("tasks.md", sectioned(&folders, &kept, &old))
+            ("tasks.md", Body::Tasks(split, spec::requirements(&reqs)))
         }
     };
+    // Written from the file as it is now: the run took minutes, and an agent
+    // may have ticked a step in them. Done stays done, and a step left without
+    // its requirements is marked, not dropped (SPEC-7).
+    let (before, out) = update_spec(state, task, rel, |current| {
+        Ok(match body {
+            Body::Whole(text) => text,
+            Body::Tasks(split, requirements) => {
+                let old = own_sections(current.unwrap_or_default(), &folders);
+                let kept: Vec<(String, String)> = split
+                    .into_iter()
+                    .map(|(folder, text)| {
+                        let before = old.iter().find(|(f, _)| *f == folder).map(|(_, own)| own.as_str());
+                        let mine: Vec<_> = requirements.iter().filter(|r| r.names(&folder)).cloned().collect();
+                        let text = match before {
+                            Some(before) => spec::sync_steps(before, &text, &mine),
+                            None => text,
+                        };
+                        (folder, text)
+                    })
+                    .collect();
+                sectioned(&folders, &kept, &old)
+            }
+        })
+    })?;
     say(rel, &out);
-    let before = text_of(&dir, &t, rel)?;
-    write_spec(state, task, rel, &out)?;
     Ok(Drafted { path: rel.to_string(), before })
+}
+
+/// What a draft is to write: a whole text, or the tasks' parts by repository
+/// with the requirements they serve.
+enum Body {
+    Whole(String),
+    Tasks(Vec<(String, String)>, Vec<spec::Requirement>),
+}
+
+/// Each repository's steps of a `tasks.md`, without the heading that opens its
+/// section; a repository with none is left out.
+fn own_sections(file: &str, folders: &[String]) -> Vec<(String, String)> {
+    folders
+        .iter()
+        .map(|f| (f.clone(), without_heading(&own_part(file, f, folders), f)))
+        .filter(|(_, own)| !spec::steps(own).is_empty())
+        .collect()
 }
 
 /// `text` without the `# <folder>` line that opens a repository's section.
@@ -708,6 +728,26 @@ mod tests {
         let steps = crate::spec::owned::owned_steps(&written, &folders);
         assert_eq!(steps.iter().filter(|s| s.repos == ["api"]).count(), 2, "{steps:?}");
         assert_eq!(steps.iter().filter(|s| s.repos == ["web"]).count(), 1, "{steps:?}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_step_ticked_while_the_tasks_are_being_drafted_stays_ticked() {
+        let (root, state, task) = world(&["api"]);
+        put(&spec_at(&root, "requirements.md"), "## Requirements\n- R-1: WHEN a THE SYSTEM SHALL b.\n");
+        put(&spec_at(&root, "tasks.md"), "## Tasks\n- [ ] 1. Add it (R-1)\n- [ ] 2. Test it (R-1)\n");
+        // The run takes minutes; an agent ticks step 1 meanwhile.
+        let mut run = |_: &str, _: &Path, _: bool, _: &mut dyn FnMut(&str)| -> Result<String> {
+            crate::commands::spec_work::tick_step(&state, "t1", None, 1, true).unwrap();
+            Ok("## Tasks\n- [ ] 1. Add it (R-1)\n- [ ] 2. Test it (R-1)\n- [ ] 3. Log it (R-1)\n".into())
+        };
+
+        let drafted = draft_inner(&state, &task, Part::Tasks, None, &[], &quiet, &mut run).unwrap();
+
+        let written = get(&spec_at(&root, "tasks.md"));
+        assert!(written.contains("- [x] 1. Add it"), "the tick survives: {written}");
+        assert!(written.contains("3. Log it"), "{written}");
+        assert!(drafted.before.unwrap().contains("[x] 1. Add it"), "Undo restores what was there, tick and all");
         std::fs::remove_dir_all(&root).ok();
     }
 

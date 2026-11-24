@@ -3261,7 +3261,7 @@ Known gaps:
 ## 26. Epics
 
 An epic is a piece of work too big for one agent and one pull request: a
-spec, approved once, whose steps become sub-tasks, each filed in Jira under
+spec, written once, whose steps become sub-tasks, each filed in Jira under
 the epic and each a task of its own. The epic is where they are planned
 and followed. It lists its sub-tasks above the task list, with each one's
 state on one line under it. Its page has two tabs, Sub-tasks and Spec,
@@ -3461,7 +3461,7 @@ Known gaps:
 - The epic's chat is not told when a sub-task's agent asks something,
   finishes or has its pull requests merged. It finds out with
   `epic_subtasks` when it looks.
-- Changing an epic's approved spec after filing changes no sub-task: each
+- Changing an epic's spec after filing changes no sub-task: each
   keeps the spec it was filed with, and is changed in its own Spec tab.
 - A sub-task the tasks draft adds after filing is filed with the next
   File; one it drops stays filed.

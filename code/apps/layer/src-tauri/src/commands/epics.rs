@@ -1,4 +1,4 @@
-//! Epics (§26): an epic's spec, approved once, makes its sub-tasks. Each is
+//! Epics (§26): an epic's spec, written once, makes its sub-tasks. Each is
 //! filed in Jira under the epic and made a task of its own with its share of
 //! the spec (EPIC-7), and started from the epic when what it waits for has
 //! merged (EPIC-8).
@@ -35,7 +35,7 @@ const FILED: &str = "sub-tasks.json";
 /// What the Sub-tasks tab shows (EPIC-7, EPIC-8).
 #[derive(Debug, Serialize)]
 pub struct EpicView {
-    /// Some repository's tasks are approved: there is a plan to file.
+    /// The spec has steps: there is a plan to file.
     pub planned: bool,
     pub sub_tasks: Vec<SubTaskView>,
 }
@@ -292,7 +292,7 @@ struct ToFile {
 }
 
 /// File the sub-tasks not filed yet (EPIC-7): a ticket under the epic, a
-/// task, and its share of the spec, approved. No agent starts and no ticket
+/// task, and its share of the spec. No agent starts and no ticket
 /// moves.
 #[tauri::command]
 pub async fn file_sub_tasks(
@@ -306,7 +306,7 @@ pub async fn file_sub_tasks(
     let e = epic.clone();
     let (planned, todo) = super::blocking(app.clone(), move |state| Ok(to_file(state, &e))).await?;
     if !planned {
-        return Err(Error::Other("approve the epic's tasks first: they say what its sub-tasks are".into()));
+        return Err(Error::Other("write the epic's tasks first: they say what its sub-tasks are".into()));
     }
     let tracker = match (&epic.issue_key, tracker(&state)) {
         (_, Ok(tracker)) => Some(tracker),

@@ -63,7 +63,7 @@ export function openWaits(
 
 /**
  * Each epic's Sub-tasks tab, as last read. Read when its row or page is
- * drawn and again after anything that changes it (filing, approving its
+ * drawn and again after anything that changes it (filing, writing its
  * tasks); its sub-tasks' own progress comes from the task list's events.
  */
 export const useEpicViews = create<{

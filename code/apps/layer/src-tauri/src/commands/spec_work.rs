@@ -112,10 +112,30 @@ pub(crate) fn tick_step(
 /// answers, so the lock above is every edit's. Refused outside the spec folder
 /// and for a file the task's toolset does not keep in a spec.
 pub(crate) fn write_spec(state: &AppState, task: &Task, path: &str, text: &str) -> Result<()> {
+    update_spec(state, task, path, |_| Ok(text.to_string())).map(|_| ())
+}
+
+/// `write_spec` for a text that depends on what the file holds: `make` is given
+/// the file as it is now, read under the lock the write takes, so a tick an
+/// agent made a moment ago is in it. Returns what the file held, and what it
+/// holds now.
+pub(crate) fn update_spec(
+    state: &AppState,
+    task: &Task,
+    path: &str,
+    make: impl FnOnce(Option<&str>) -> Result<String>,
+) -> Result<(Option<String>, String)> {
     let task = with_spec_moved(state, task)?;
     let (t, dir) = (toolset_of(state, &task), spec_dir(state, &task));
     let _one = EDITING.lock();
-    write_file(&dir, &t, path, text)
+    let now = match read_file(&dir, &t, path) {
+        Ok(text) => Some(text),
+        Err(Error::NotFound(_)) => None,
+        Err(e) => return Err(e),
+    };
+    let text = make(now.as_deref())?;
+    write_file(&dir, &t, path, &text)?;
+    Ok((now, text))
 }
 
 /// What a spec tool answers, and the task whose spec it changed, so the

@@ -30,7 +30,7 @@ export function EpicMain({ epic }: { epic: TaskView }) {
   useEffect(() => {
     void loadSpec(epic.id).catch(() => {});
   }, [epic.id, loadSpec]);
-  // Approving its tasks changes what it plans: read again on coming back.
+  // Writing its tasks changes what it plans: read again on coming back.
   useEffect(() => {
     if (tab !== "spec") void load(epic.id).catch(() => {});
   }, [epic.id, tab, load]);
