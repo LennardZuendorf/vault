@@ -554,6 +554,16 @@ const answer: Record<string, Answer> = {
     void emit("panes:waiting");
     return null;
   },
+  // Kept trimmed, and refused whole past the limit, as the app does (HEN-17).
+  set_henchman_instructions: (a) => {
+    const text = (a.instructions as string).trim();
+    if (text.length > 4000)
+      throw new Error(
+        `Custom instructions hold at most 4000 characters; these have ${text.length}.`,
+      );
+    world.settings.henchman_instructions = text;
+    return null;
+  },
   set_slack_bot_on: (a) => {
     if (world.settings.slack_bot) world.settings.slack_bot.enabled = a.on as boolean;
     world.slackBot.status = { state: a.on ? "connected" : "off", error: null };

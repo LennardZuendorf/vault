@@ -141,6 +141,32 @@ pub fn set_henchman_agent(state: State<AppState>, agent_id: String, model: Strin
     state.config.update(|c| c.henchman.agent = agent)
 }
 
+/// The most the user's own instructions hold (HEN-17): it reads them with
+/// the rest of its context at every wake.
+const INSTRUCTIONS_MAX: usize = 4000;
+
+/// The user's own instructions for the Henchman (HEN-17), in their words.
+/// Read each time it is woken: the one running reads them when it is next
+/// woken. Empty, there are none.
+#[tauri::command]
+pub fn set_henchman_instructions(state: State<AppState>, instructions: String) -> Result<()> {
+    let instructions = cleaned(instructions)?;
+    state.config.update(|c| c.henchman.instructions = instructions)
+}
+
+/// Instructions as kept: without the blank lines around them, and refused
+/// past the limit rather than cut, which would drop the user's last words.
+fn cleaned(instructions: String) -> Result<String> {
+    let instructions = instructions.trim();
+    let count = instructions.chars().count();
+    if count > INSTRUCTIONS_MAX {
+        return Err(Error::Other(format!(
+            "Custom instructions hold at most {INSTRUCTIONS_MAX} characters; these have {count}."
+        )));
+    }
+    Ok(instructions.to_string())
+}
+
 /// The Henchman's own context file, in place of a chat's (HEN-2): who it
 /// is, what its tools do, and what it never does.
 pub(crate) fn write_context(state: &AppState, dir: &Path) -> Result<()> {
@@ -246,6 +272,16 @@ pub(crate) fn write_context(state: &AppState, dir: &Path) -> Result<()> {
             md.push_str(&format!("- {}\n", p.name));
         }
     }
+    // Last, after Layer's own rules, so they read as within them (HEN-17).
+    if !cfg.henchman.instructions.is_empty() {
+        if !md.ends_with("\n\n") {
+            md.push('\n');
+        }
+        md.push_str("## Custom instructions\n\n");
+        md.push_str("The user's own instructions for you. Follow them within the rules above.\n\n");
+        md.push_str(&cfg.henchman.instructions);
+        md.push('\n');
+    }
     std::fs::write(dir.join("CLAUDE.md"), &md)?;
     std::fs::write(dir.join("AGENTS.md"), &md)?;
     // Where its settings were, which auto mode never read (`session_meta`).
@@ -348,5 +384,33 @@ mod tests {
         let config: AppConfig = serde_json::from_value(serde_json::json!({ "henchman": { "orders": [] } })).unwrap();
         assert!(!config.henchman.off);
         assert!(!AppConfig::default().henchman.off);
+    }
+
+    #[test]
+    fn the_users_instructions_come_after_its_own_rules_in_both_files_and_go_when_cleared() {
+        let root = std::env::temp_dir().join(format!("vl-henchman-{}", uuid::Uuid::new_v4()));
+        let state = super::super::repos::tests::state(&root, Default::default());
+        let room = root.join("_chat").join(ROOM);
+        std::fs::create_dir_all(&room).unwrap();
+        let read = |file: &str| std::fs::read_to_string(room.join(file)).unwrap();
+        for (said, kept) in [("\n  Raise only what blocks a release.\n- Be brief.\n\n", true), ("  \n ", false)] {
+            let instructions = cleaned(said.into()).unwrap();
+            state.config.update(|c| c.henchman.instructions = instructions).unwrap();
+            write_context(&state, &room).unwrap();
+            let md = read("CLAUDE.md");
+            assert_eq!(md, read("AGENTS.md"));
+            assert_eq!(md.contains("## Custom instructions"), kept);
+            assert_eq!(md.contains("\n\nRaise only what blocks a release.\n- Be brief.\n"), kept);
+            let rules = md.find("## How to write").unwrap();
+            assert!(md.find("## Custom instructions").is_none_or(|at| at > rules));
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn instructions_past_the_limit_are_refused_whole_and_say_how_many_fit() {
+        assert!(cleaned("x".repeat(INSTRUCTIONS_MAX)).is_ok());
+        let refused = cleaned("x".repeat(INSTRUCTIONS_MAX + 1)).unwrap_err().to_string();
+        assert!(refused.contains("at most 4000 characters; these have 4001"));
     }
 }

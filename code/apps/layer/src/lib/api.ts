@@ -182,6 +182,9 @@ export const api = {
   spawnHenchman: (agentId: string) => invoke<PaneInfo>("spawn_henchman", { agentId }),
   /** Turn the Henchman off, which stops it and keeps its conversation, or on again (HEN-16). */
   setHenchmanOn: (on: boolean) => invoke<void>("set_henchman_on", { on }),
+  /** The user's own instructions for it, read each time it is woken; empty for none (HEN-17). */
+  setHenchmanInstructions: (instructions: string) =>
+    invoke<void>("set_henchman_instructions", { instructions }),
   /** What the Henchman is woken with from now on (HEN-15). */
   setHenchmanAgent: (agentId: string, model: string, effort: string) =>
     invoke<void>("set_henchman_agent", { agentId, model, effort }),

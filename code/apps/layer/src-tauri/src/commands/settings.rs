@@ -29,6 +29,8 @@ pub struct Settings {
     pub henchman: crate::config::HenchmanAgent,
     /// Whether it is on at all (HEN-16).
     pub henchman_on: bool,
+    /// The user's own instructions for it, empty for none (HEN-17).
+    pub henchman_instructions: String,
     pub worktree_root: String,
     pub worktree_root_is_default: bool,
     pub jira_connected: bool,
@@ -98,6 +100,7 @@ pub fn get_settings(state: State<AppState>) -> Settings {
         slack_bot: c.slack_bot,
         agent_models: c.agent_models,
         henchman_on: !c.henchman.off,
+        henchman_instructions: c.henchman.instructions,
         henchman: c.henchman.agent,
     }
 }

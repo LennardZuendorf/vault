@@ -480,6 +480,8 @@ export interface Settings {
   henchman: HenchmanAgent;
   /** Whether it is on at all (HEN-16). */
   henchman_on: boolean;
+  /** The user's own instructions for it, empty for none (HEN-17). */
+  henchman_instructions: string;
   worktree_root: string;
   worktree_root_is_default: boolean;
   jira_connected: boolean;

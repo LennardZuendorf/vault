@@ -1,5 +1,6 @@
 //! What the Henchman answers from, whom it leaves alone, what it is woken
-//! with, and whether it is on at all (HEN-7, HEN-8, HEN-15, HEN-16).
+//! with, whether it is on at all, and what the user tells it to keep in
+//! mind (HEN-7, HEN-8, HEN-15, HEN-16, HEN-17).
 //! The user's own, on this Mac: not part of the setup a team shares.
 
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,10 @@ pub struct HenchmanConfig {
     /// it on.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub off: bool,
+    /// The user's own instructions, added to its context each time it is
+    /// woken (HEN-17). Empty, there are none.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub instructions: String,
 }
 
 /// The agent the Henchman is woken with, and the model and effort its

@@ -13,10 +13,10 @@ const EFFORTS = [
 ] as const;
 
 /**
- * Settings → Agents: whether there is a Henchman at all (HEN-16), and what
- * it is woken with (HEN-15). Any agent that runs as a conversation, on the
- * model and effort chosen here, which it opens on each time, put back at
- * launch too.
+ * Settings → Agents: whether there is a Henchman at all (HEN-16), what it
+ * is woken with (HEN-15), and the user's own instructions for it (HEN-17).
+ * Any agent that runs as a conversation, on the model and effort chosen
+ * here, which it opens on each time, put back at launch too.
  */
 export function HenchmanSettings() {
   const chosen = useStore((s) => s.settings?.henchman);
@@ -143,9 +143,73 @@ export function HenchmanSettings() {
               </button>
             </div>
           )}
+          <Instructions />
         </>
       )}
       <ErrorMessage>{failure.error}</ErrorMessage>
     </Field>
+  );
+}
+
+/** The most the app keeps (HEN-17). */
+const INSTRUCTIONS_MAX = 4000;
+
+/**
+ * The user's own instructions for the Henchman (HEN-17). Saved when the
+ * field is left, or on ⌘Enter, with no Save button
+ * (studio/design/behaviour.md), like the Slack bot's personality.
+ */
+function Instructions() {
+  const saved = useStore((s) => s.settings?.henchman_instructions) ?? "";
+  const refreshSettings = useStore((s) => s.refreshSettings);
+  // Null until edited, so the field shows what is saved, not a stale copy.
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const failure = useFailure();
+
+  async function save(value: string) {
+    if (saving) return;
+    if (value.trim() === saved) return setDraft(null);
+    setSaving(true);
+    failure.clear();
+    try {
+      await api.setHenchmanInstructions(value);
+      await refreshSettings();
+      setDraft(null);
+    } catch (e) {
+      failure.fail(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Its own gap: the hint above it has none below.
+  return (
+    <div style={{ marginTop: 12 }}>
+      <Field
+        label="Custom instructions"
+        hint="In your words, after Layer's own rules: what to raise, what to leave, how to write to you. The one running reads them when it is next woken."
+      >
+        <textarea
+          // Field's label is not tied to it: named here for VoiceOver.
+          aria-label="Custom instructions"
+          className="ui-field"
+          rows={4}
+          maxLength={INSTRUCTIONS_MAX}
+          value={draft ?? saved}
+          readOnly={saving}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={(e) => void save(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && e.metaKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              e.currentTarget.blur();
+            }
+          }}
+          placeholder="Raise only what blocks a release. Keep each update to a line or two."
+        />
+        <ErrorMessage>{failure.error}</ErrorMessage>
+      </Field>
+    </div>
   );
 }
