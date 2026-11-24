@@ -530,6 +530,19 @@ pub(crate) fn agent_file_dir(state: &AppState, task: &Task) -> Option<PathBuf> {
 
 /// What the app knows, written where a coding agent will read it.
 ///
+/// Whether an agent starts after its context file was written, or not.
+/// A chat starts without one rather than not at all. The Henchman does not:
+/// started anyway, it worked on the instructions it read last, the user's
+/// newest unread, with nothing to say so (HEN-17).
+fn context_written(henchman: bool, written: Result<()>) -> Result<()> {
+    match written {
+        Err(e) if henchman => Err(Error::Other(format!(
+            "The Henchman was not woken: Layer could not write your instructions for it ({e}), and it would have worked on old ones."
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// Agents pick up `CLAUDE.md` (and `AGENTS.md`) from their working directory,
 /// so the chat scratch folder is a safe place to leave this: it is not a
 /// repository, so nothing here can pollute a diff or get committed by mistake.
@@ -672,9 +685,9 @@ pub(crate) fn open_chat(
         }
         None => chat_room(state, &uuid::Uuid::new_v4().to_string()[..8])?,
     };
-    // Best effort: a context file that cannot be written is not a reason to
-    // refuse to start the agent. The Henchman's room gets its own (HEN-2).
-    let _ = if henchman { super::henchman::write_context(state, &dir) } else { write_chat_context(state, &dir) };
+    // The Henchman's room gets its own (HEN-2).
+    let written = if henchman { super::henchman::write_context(state, &dir) } else { write_chat_context(state, &dir) };
+    context_written(henchman, written)?;
     let _ = crate::mcp::write_config(&dir);
     let name = if henchman { "Henchman" } else { def.name };
     let title = format!("{name}{}", if resume != Resume::No { " (resumed)" } else { "" });
@@ -912,5 +925,15 @@ mod tests {
         assert_eq!(Resume::No.args(claude).unwrap(), None);
         // A CLI that cannot resume is refused, not started on a new conversation.
         assert!(restart(Some(id)).args(agents::find("gemini").unwrap()).is_err());
+    }
+
+    #[test]
+    fn the_henchman_is_not_woken_on_old_instructions_where_a_chat_starts_without_its_context() {
+        let unwritable = || Err(Error::Other("read-only file system".into()));
+        let henchman = context_written(true, unwritable());
+        assert!(henchman.is_err(), "the Henchman is not started");
+        assert!(format!("{}", henchman.unwrap_err()).contains("read-only file system"), "and says why");
+        assert!(context_written(false, unwritable()).is_ok(), "a chat starts anyway");
+        assert!(context_written(true, Ok(())).is_ok());
     }
 }

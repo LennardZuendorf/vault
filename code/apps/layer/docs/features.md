@@ -3878,7 +3878,9 @@ Slack come later.
   characters; empty, there are none. Each time Layer wakes the Henchman,
   it adds them under "Custom instructions" to the context file it writes
   in its room (HEN-2), after its own rules, which they do not override.
-  The one running reads them when it is next woken. The field saves when
+  One whose file cannot be written is not woken, and says why: woken
+  anyway, it worked on the instructions it read last, with nothing to say
+  so. The one running reads them when it is next woken. The field saves when
   it loses focus or on ⌘Enter. Like its agent, they are shown only while
   the Henchman is on (HEN-16).
 
