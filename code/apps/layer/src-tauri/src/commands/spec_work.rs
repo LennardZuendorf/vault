@@ -51,6 +51,10 @@ fn tick_file(path: &Path, repo: &str, number: u32, done: bool) -> Result<Step> {
 /// differs from what was approved in its ticks. A spec changed outside the
 /// app is the user's to approve or put back (SPEC-22), not to be committed
 /// as ticks.
+///
+/// Open pull requests commits the whole spec now (`spec_commit.rs`); this goes
+/// with the old layout.
+#[allow(dead_code)]
 pub(crate) fn commit_ticks(state: &AppState, task: &Task, checkout_id: &str) -> Result<()> {
     let spec = spec_of(state, task);
     let Some(home) = spec.homes.iter().find(|h| h.checkout.id == checkout_id) else { return Ok(()) };

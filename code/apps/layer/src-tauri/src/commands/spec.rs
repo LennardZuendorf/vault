@@ -279,6 +279,9 @@ impl Spec {
     }
 
     /// Whether any copy of `slot` was changed outside the app (SPEC-22).
+    ///
+    /// Only `commit_ticks` asked, and nothing does now.
+    #[allow(dead_code)]
     pub fn has_outside(&self, slot: &Slot) -> bool {
         !self.outside(slot, self.kind()).is_empty()
     }

@@ -322,6 +322,12 @@ export const api = {
     invoke<SpecCheck>("check_spec", { taskId, checkoutId }),
   /** Install the task's spec toolset again, after a failure; announced as `spec:install`. */
   installSpecToolset: (taskId: string) => invoke<InstallState>("install_spec_toolset", { taskId }),
+  /**
+   * Commit spec: put the task's `spec/` into each repository per its
+   * `spec_commit` and commit it there. `repos` limits it to those folders.
+   */
+  commitSpec: (taskId: string, repos: string[] | null = null) =>
+    invoke<RepoResult[]>("commit_spec_cmd", { taskId, repos }),
   /** What Start agent adds to the opening prompt: work through the tasks (SPEC-12). */
   specWorkPrompt: (taskId: string, checkoutId: string | null) =>
     invoke<string>("spec_work_prompt", { taskId, checkoutId }),

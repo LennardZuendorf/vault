@@ -3,6 +3,7 @@ import { api } from "./api";
 import type {
   AppliedAnswers,
   InstallState,
+  RepoResult,
   SpecKind,
   SpecPart,
   SpecPartView,
@@ -45,6 +46,8 @@ interface Specs {
   installed: (taskId: string, state: InstallState) => void;
   /** Install the toolset again, for a task whose install failed. */
   retryInstall: (taskId: string) => Promise<void>;
+  /** Commit spec: a row per repository, a failed one named with why. */
+  commitSpec: (taskId: string, repos?: string[]) => Promise<RepoResult[]>;
   load: (taskId: string) => Promise<void>;
   edit: (taskId: string, file: SpecFile, text: string) => void;
   /** Draft one file: requirements or design for the task, or every repository's tasks. */
@@ -195,6 +198,7 @@ export const useSpecs = create<Specs>((set, get) => {
     retryInstall: async (taskId) => {
       get().installed(taskId, await api.installSpecToolset(taskId));
     },
+    commitSpec: (taskId, repos) => api.commitSpec(taskId, repos ?? null),
     load: async (taskId) => {
       const spec = await api.readSpec(taskId);
       // An edit under way here wins over the draft kept on disk, which is

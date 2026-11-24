@@ -745,6 +745,9 @@ send feedback to an agent, and finish a merged task.
   In the dialog, every repo that would get a new PR has a tick, all on to
   start with; one ticked off is neither pushed nor opened. A repo whose PR
   is already open has no tick: it is pushed and listed with the rest.
+  Before anything is pushed, the task's spec is committed (SPEC-26) into each
+  ticked repo whose committed copy differs from `spec/`, and the result says
+  so; a repo it could not be committed in is named and not opened.
 - **PR-2** PRs this call opened MUST be linked on the Jira ticket as a
   comment, and posted to Slack if that is on. When the call opens a PR and
   the task has more than one open, every one of them MUST list the others
@@ -2258,13 +2261,29 @@ requirements it decided by hand, and finding that Redraft threw both away.
   references renumbered and their ticks kept. An id that changed is noted
   beside its new one (`R-4 (was web R-2)`). It is shown as drafts and
   approved as usual; no worktree changes until then.
+- **SPEC-26** Commit spec MUST copy the task's working copy, `<task>/spec/`,
+  into each repository's worktree per that repository's `spec_commit`, and
+  commit only those paths on the task's branch (`git::commit_only`), as the
+  repository writes its own messages ("Update the spec for ACME-1." or
+  `docs: update the spec for ACME-1`). `spec/` mirrors a repository root: a
+  file goes to the same path. Only Kiro's files, laid out flat, go under
+  `<spec_folder, else specs>/<task>/`. It writes only files that exist in
+  `spec/` and that the toolset lists, never deletes anything in a
+  repository (an older `openspec/specs/` stays as it is), and refuses to
+  write through a link. `whole` copies every file; `own` copies the step
+  files with only the steps that belong to that repository (and everything
+  above the first repository heading) and every other file whole; `none`
+  copies nothing. A repository it could not write or commit in is named
+  with why, and the others keep their commit. Open pull requests (PR-1)
+  runs it first for the repositories whose committed copy is behind
+  `spec/`.
 
 Code: `spec.rs` (the files, and what is read from them),
 `commands/spec.rs` (where the spec and its copies live, what was
 approved, approving), `commands/spec_view.rs` (what the tab is shown),
 `commands/spec_outside.rs` (Put back, `spec_propose` and turning a
 proposal down), `commands/spec_work.rs` (ticking, prompts, the pull
-request's part, telling agents), `commands/spec_draft.rs` and
+request's part, telling agents), `commands/spec_commit.rs` (Commit spec), `commands/spec_draft.rs` and
 `commands/spec_prompts.rs` (drafting, applying answers, checking,
 merging), `commands/task_context.rs`, `git/only.rs` (committing only the
 spec), `mcp.rs` (`spec_task`), `commands/open_prs.rs`, `SpecView.tsx`,

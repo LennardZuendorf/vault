@@ -385,6 +385,7 @@ pub fn run() {
             commands::approve_spec,
             commands::put_back_spec,
             commands::install_spec_toolset,
+            commands::commit_spec_cmd,
             commands::turn_down_spec_proposal,
             commands::merge_specs,
             commands::check_spec,

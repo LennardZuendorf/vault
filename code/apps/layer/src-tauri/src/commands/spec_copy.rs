@@ -187,7 +187,17 @@ pub(crate) fn read_file(dir: &Path, t: &Toolset, rel: &str) -> Result<String> {
 /// else has made (`create_new`), and renamed over it: a reader sees the old
 /// text or the new, never half.
 pub(crate) fn write_file(dir: &Path, t: &Toolset, rel: &str, text: &str) -> Result<()> {
-    let path = target(dir, t, rel)?;
+    target(dir, t, rel)?;
+    write_under(dir, rel, text)
+}
+
+/// `write_file` for a path already known to be one the caller may write:
+/// Commit spec's, which are a repository's, not the spec folder's.
+pub(crate) fn write_under(dir: &Path, rel: &str, text: &str) -> Result<()> {
+    if !glob::is_safe_rel(rel) {
+        return Err(refused(format!("{rel:?} is not a path inside {}", dir.display())));
+    }
+    let path = dir.join(rel);
     let _writing = WRITING.lock();
     refuse_links(dir, rel)?;
     let parent = path.parent().ok_or_else(|| refused(format!("{rel} has no folder")))?;
@@ -424,92 +434,7 @@ fn copy_files(from: &Path, to: &Path, depth: usize, total: &mut usize) -> Result
 mod tests {
     use super::*;
     use crate::commands::spec::{APPROVED, DRAFTS};
-    use crate::config::{AppConfig, Checkout, ConfigStore, Project};
-
-    /// A task `T-1` of repositories `folders`, in a temp dir that is also the
-    /// config folder.
-    fn world(folders: &[&str]) -> (PathBuf, AppState, Task) {
-        let root = std::env::temp_dir().join(format!("vl-spec-copy-{}", uuid::Uuid::new_v4()));
-        let task_root = root.join("tasks/T-1");
-        let mut cfg = AppConfig::default();
-        for folder in folders {
-            let worktree = task_root.join(folder);
-            std::fs::create_dir_all(&worktree).unwrap();
-            cfg.projects.push(Project {
-                id: format!("p-{folder}"),
-                name: (*folder).into(),
-                path: String::new(),
-                default_branch: "main".into(),
-                group: None,
-                store: None,
-                update_by: None,
-                check: None,
-                check_approved: None,
-                spec_folder: None,
-                spec_toolset: None,
-                spec_commit: Default::default(),
-                remote: None,
-                repository_id: None,
-            });
-            cfg.checkouts.push(Checkout {
-                id: format!("c-{folder}"),
-                task_id: "t1".into(),
-                project_id: format!("p-{folder}"),
-                path: worktree.to_string_lossy().to_string(),
-                base: "main".into(),
-                base_commit: None,
-                push_lease: None,
-                point_before_update: None,
-                last_head: None,
-            });
-        }
-        std::fs::create_dir_all(&task_root).unwrap();
-        let task = Task {
-            toolset: None,
-            id: "t1".into(),
-            name: "T-1 Refunds".into(),
-            root: task_root.to_string_lossy().to_string(),
-            branch: "T-1".into(),
-            issue_key: None,
-            issue_url: None,
-            created_at: chrono::Utc::now(),
-            ticket_stage: None,
-            chat: None,
-            review: None,
-            browser: None,
-            browser_url: None,
-            epic: false,
-            sub_task: None,
-        };
-        cfg.tasks.push(task.clone());
-        let state = AppState {
-            slack_bot: Default::default(),
-            config: ConfigStore::for_tests(root.join("config.json"), cfg),
-            ptys: crate::pty::PtyManager::default(),
-            ticket_types: Default::default(),
-            epic_field_missing: Default::default(),
-            pending_notices: Default::default(),
-            status_cache: Default::default(),
-            prs_settled: Default::default(),
-            prs_seen: Default::default(),
-            news: Default::default(),
-            messages: crate::messages::Messages::for_tests(root.join("messages.json")),
-            notes: crate::notes::Notes::load(&root),
-            browser: Default::default(),
-            loops: Default::default(),
-            runs: crate::runs::Runs::for_tests(root.join("runs.json")),
-        };
-        (root, state, task)
-    }
-
-    fn put(path: &Path, text: &str) {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
-    }
-
-    fn get(path: &Path) -> String {
-        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
-    }
+    use crate::commands::spec_world::{get, put, world};
 
     fn named(id: &str) -> Toolset {
         toolset::find(id, &[]).unwrap()

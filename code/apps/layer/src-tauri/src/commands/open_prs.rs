@@ -41,6 +41,16 @@ pub async fn github_open_prs(
     // about a repo added since.
     let mut set: Vec<github::Sibling> = Vec::new();
 
+    // Commit spec once for the task, in the repositories whose committed copy
+    // is behind `spec/`, before anything is pushed.
+    let mut spec_rows: std::collections::HashMap<String, RepoResult> = {
+        let (task, skip) = (task.clone(), skip.clone());
+        super::blocking(app.clone(), move |state| Ok(super::spec_commit::commit_changed(state, &task, &skip))).await?
+    }
+    .into_iter()
+    .map(|r| (r.checkout_id.clone(), r))
+    .collect();
+
     for checkout in state.config.checkouts_of(&task_id) {
         if skip.contains(&checkout.id) {
             continue;
@@ -48,19 +58,22 @@ pub async fn github_open_prs(
         let dir = PathBuf::from(&checkout.path);
         let project = state.config.project(&checkout.project_id)?;
         let repo = project.name.clone();
-        // Steps agents ticked since the spec was approved go to review with
-        // the code (SPEC-13).
-        if let Err(e) = {
-            let (task, id) = (task.clone(), checkout.id.clone());
-            super::blocking(app.clone(), move |state| super::spec_work::commit_ticks(state, &task, &id)).await
-        } {
+        // The spec goes to review with the code (SPEC-13): what Commit spec
+        // put in this repository above. One that could not be committed is
+        // named, and its code is not opened without it.
+        if let Some(row) = spec_rows.remove(&checkout.id) {
+            let failed = !row.ok;
             results.push(RepoResult {
-                checkout_id: checkout.id,
-                repo,
-                ok: false,
-                detail: format!("the spec's ticked steps could not be committed: {e}"),
+                detail: if failed {
+                    format!("the spec could not be committed: {}", row.detail)
+                } else {
+                    format!("the spec changed since its last commit, so it was committed: {}", row.detail)
+                },
+                ..row
             });
-            continue;
+            if failed {
+                continue;
+            }
         }
 
         let measure = |point: Option<String>| {

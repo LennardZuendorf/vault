@@ -658,6 +658,14 @@ const answer: Record<string, Answer> = {
     error: null,
     running: false,
   }),
+  // Commit spec (§19): every repository took it.
+  commit_spec_cmd: (a) =>
+    (world.tasks.find((t) => t.id === a.taskId)?.checkouts ?? []).map((c) => ({
+      checkout_id: c.id,
+      repo: c.project_name,
+      ok: true,
+      detail: "committed 1a2b3c4",
+    })),
   // Epics (§26).
   ...epicAnswers(world, (a, taskId) => newPane(a, "agent", taskId)),
   // The run log (§22).
