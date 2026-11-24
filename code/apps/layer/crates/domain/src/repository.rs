@@ -29,8 +29,12 @@ pub struct Repository {
     pub check_command: Option<String>,
     /// Where specs are committed, from the root. None: `specs`.
     pub spec_folder: Option<String>,
-    /// Specs are kept by the app instead of committed here.
-    pub specs_in_app: bool,
+    /// The spec toolset this repository prefers, by id: only the default
+    /// Start work offers. None: no preference.
+    pub spec_toolset: Option<String>,
+    /// How a task's spec reaches this repository (`whole`, `own` or `none`).
+    /// `none` keeps it off the repository: it stays on the Mac.
+    pub spec_commit: SpecCommit,
     /// Who added it. Set by the server.
     pub added_by: Option<Uuid>,
     pub created_at: DateTime<Utc>,
@@ -46,6 +50,18 @@ pub enum UpdateBy {
     Rebase,
 }
 
+/// What Commit spec puts in a repository: the whole spec, only the part
+/// that is this repository's, or nothing (the app keeps it).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum SpecCommit {
+    #[default]
+    Whole,
+    Own,
+    None,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 #[ts(export, optional_fields)]
@@ -58,7 +74,8 @@ pub struct RepositoryCreate {
     pub update_by: Option<UpdateBy>,
     pub check_command: Option<String>,
     pub spec_folder: Option<String>,
-    pub specs_in_app: Option<bool>,
+    pub spec_toolset: Option<String>,
+    pub spec_commit: Option<SpecCommit>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
@@ -72,7 +89,8 @@ pub struct RepositoryPatch {
     pub update_by: Option<Option<UpdateBy>>,
     pub check_command: Option<Option<String>>,
     pub spec_folder: Option<Option<String>>,
-    pub specs_in_app: Option<bool>,
+    pub spec_toolset: Option<Option<String>>,
+    pub spec_commit: Option<SpecCommit>,
 }
 
 impl Validate for RepositoryCreate {
@@ -84,6 +102,7 @@ impl Validate for RepositoryCreate {
             self.group_name.as_deref(),
             self.check_command.as_deref(),
             self.spec_folder.as_deref(),
+            self.spec_toolset.as_deref(),
         )
     }
 }
@@ -96,6 +115,7 @@ impl Validate for RepositoryPatch {
             self.group_name.as_ref().and_then(Option::as_deref),
             self.check_command.as_ref().and_then(Option::as_deref),
             self.spec_folder.as_ref().and_then(Option::as_deref),
+            self.spec_toolset.as_ref().and_then(Option::as_deref),
         )
     }
 }
@@ -104,11 +124,30 @@ fn settings(
     group: Option<&str>,
     check: Option<&str>,
     spec_folder: Option<&str>,
+    spec_toolset: Option<&str>,
 ) -> Result<(), ValidationError> {
     group.map(|g| text(g, "A group", 60)).transpose()?;
     check.map(|c| text(c, "A check", 500)).transpose()?;
     spec_folder.map(folder).transpose()?;
+    spec_toolset.map(toolset_id).transpose()?;
     Ok(())
+}
+
+/// A toolset's id as the app spells it (`kiro`, `my-flow`): the manifest's
+/// own rule, so a record can't name one no manifest could have.
+fn toolset_id(value: &str) -> Result<(), ValidationError> {
+    let valid = !value.is_empty()
+        && value.len() <= 60
+        && value
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    if valid {
+        Ok(())
+    } else {
+        invalid(format!(
+            "{value:?} can't be a toolset's id: lowercase letters, digits, - or _."
+        ))
+    }
 }
 
 fn remote(value: &str) -> Result<(), ValidationError> {
@@ -288,5 +327,44 @@ mod tests {
         for bad in ["", "/etc", "../x", "a/../../b", "-x"] {
             assert!(folder(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_spec_commit_is_whole_own_or_none() {
+        for (word, mode) in [
+            ("whole", SpecCommit::Whole),
+            ("own", SpecCommit::Own),
+            ("none", SpecCommit::None),
+        ] {
+            let patch: RepositoryPatch =
+                serde_json::from_value(serde_json::json!({ "spec_commit": word })).unwrap();
+            assert_eq!(patch.spec_commit, Some(mode), "{word}");
+        }
+        for bad in ["", "all", "Whole", "true"] {
+            let patch = serde_json::from_value::<RepositoryPatch>(
+                serde_json::json!({ "spec_commit": bad }),
+            );
+            assert!(patch.is_err(), "{bad:?}");
+        }
+        assert_eq!(SpecCommit::default(), SpecCommit::Whole);
+    }
+
+    #[test]
+    fn a_spec_toolset_is_one_manifest_id() {
+        assert!(toolset_id("kiro").is_ok());
+        assert!(toolset_id("my_flow-2").is_ok());
+        for bad in ["", "Kiro", "a b", "../x", "x/y", &"a".repeat(61)] {
+            assert!(toolset_id(bad).is_err(), "{bad:?}");
+        }
+        let patch = RepositoryPatch {
+            spec_toolset: Some(Some("../x".into())),
+            ..Default::default()
+        };
+        assert!(patch.validate().is_err());
+        let clear = RepositoryPatch {
+            spec_toolset: Some(None),
+            ..Default::default()
+        };
+        assert!(clear.validate().is_ok());
     }
 }

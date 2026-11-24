@@ -137,7 +137,9 @@ export function ReposView() {
   async function setSpecs(p: Project, inApp: boolean, folder: string) {
     tryAt(p.id);
     try {
-      await api.setProjectSpecs(p.id, inApp, folder);
+      // The switch is the app keeping the spec (`none`) or committing all of it.
+      const commit = inApp ? "none" : p.spec_commit === "own" ? "own" : "whole";
+      await api.setProjectSpecs(p.id, p.spec_toolset ?? null, commit, folder);
       await refreshRepos();
     } catch (e) {
       row.fail(e);

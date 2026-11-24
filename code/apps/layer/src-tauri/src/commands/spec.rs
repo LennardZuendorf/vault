@@ -39,7 +39,7 @@ pub(crate) const DRAFTS: &str = ".spec-drafts";
 
 /// Under `DRAFTS`: the spec as it was approved, which every repository's
 /// copy is compared against (SPEC-22).
-const APPROVED: &str = "approved";
+pub(super) const APPROVED: &str = "approved";
 
 /// One file of the spec: the task's requirements or design, or one
 /// repository's tasks, by its folder in the task.
@@ -354,7 +354,7 @@ pub(crate) fn spec_of(state: &AppState, task: &Task) -> Spec {
         .filter_map(|checkout| {
             let project = state.config.project(&checkout.project_id).ok()?;
             let folder = Path::new(&checkout.path).file_name()?.to_string_lossy().to_string();
-            let (dir, rel) = if project.specs_in_app {
+            let (dir, rel) = if project.spec_commit == crate::config::SpecCommit::None {
                 let kept = state.config.folder().join("specs").join(spec::folder_name(&project.name)).join(&name);
                 (kept, None)
             } else {
@@ -592,7 +592,8 @@ mod tests {
                 store: None,
                 update_by: None,
                 spec_folder: None,
-                specs_in_app: !in_repo,
+                spec_toolset: None,
+                spec_commit: if in_repo { Default::default() } else { crate::config::SpecCommit::None },
                 remote: None,
                 repository_id: None,
                 check: None,
@@ -616,6 +617,7 @@ mod tests {
 
     fn task() -> Task {
         Task {
+            toolset: None,
             id: "t1".into(),
             name: "ACME-12 Refunds".into(),
             root: "/work/acme-12".into(),

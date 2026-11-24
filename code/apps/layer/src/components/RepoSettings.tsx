@@ -83,7 +83,7 @@ export function SpecsPicker({
   return (
     <select
       className="ui-field update-by"
-      value={p.specs_in_app ? "" : folder}
+      value={p.spec_commit === "none" ? "" : folder}
       title="Where a task's spec is kept: committed on its branch in this folder, or by the app, outside git"
       onChange={(e) => onChange(!e.target.value, e.target.value || folder)}
     >

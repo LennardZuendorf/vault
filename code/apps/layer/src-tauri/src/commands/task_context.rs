@@ -449,6 +449,7 @@ mod tests {
 
     fn task() -> Task {
         Task {
+            toolset: None,
             id: "t1".into(),
             name: "ACME-12 Refunds fail for split payments".into(),
             root: "/work/acme-12".into(),

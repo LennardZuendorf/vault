@@ -4,6 +4,9 @@
 export type SpecPart = "requirements" | "design" | "tasks";
 export type SpecKind = "feature" | "bugfix";
 
+/** What Commit spec puts in a repository: all of it, its own part, or nothing. */
+export type SpecCommit = "whole" | "own" | "none";
+
 /** One requirement. `repos`: the folders that meet it; none named, every one (SPEC-1). */
 export interface SpecRequirement {
   id: string;

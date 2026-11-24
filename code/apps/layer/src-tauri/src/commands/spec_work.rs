@@ -5,7 +5,7 @@ use std::path::Path;
 
 use tauri::State;
 
-use crate::config::Task;
+use crate::config::{SpecCommit, Task};
 use crate::error::{Error, Result};
 use crate::git;
 use crate::spec::{self, Kind, Part, Step};
@@ -196,14 +196,28 @@ pub async fn tell_spec_change(app: tauri::AppHandle, task_id: String, parts: Vec
     .await
 }
 
-/// Where a repository keeps specs (SPEC-1, SPEC-3): committed in it, under
-/// `folder`, or kept by the app.
+/// How a repository takes specs (SPEC-1, SPEC-3): the toolset Start work
+/// offers for it, what Commit spec puts in it (`none`: the app keeps the
+/// spec), and the folder it goes to.
 #[tauri::command]
-pub fn set_project_specs(state: State<AppState>, project_id: String, in_app: bool, folder: String) -> Result<()> {
+pub fn set_project_specs(
+    state: State<AppState>,
+    project_id: String,
+    toolset: Option<String>,
+    commit: SpecCommit,
+    folder: String,
+) -> Result<()> {
     let folder = spec::valid_folder(&folder).map_err(Error::Other)?;
+    let toolset = toolset.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    // The same rule a manifest's id follows, so a typo is refused here
+    // rather than saved as a toolset nothing can match.
+    if let Some(id) = toolset.as_deref().filter(|id| !spec::toolset::valid_id(id)) {
+        return Err(Error::Other(format!("{id:?} can't be a toolset's id: lowercase letters, digits, - or _")));
+    }
     state.config.update(|c| {
         if let Some(p) = c.projects.iter_mut().find(|p| p.id == project_id) {
-            p.specs_in_app = in_app;
+            p.spec_toolset = toolset;
+            p.spec_commit = commit;
             p.spec_folder = folder;
         }
     })

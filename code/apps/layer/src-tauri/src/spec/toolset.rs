@@ -143,13 +143,17 @@ pub fn find(id: &str, custom: &[Toolset]) -> Option<Toolset> {
     custom.iter().find(|t| t.id == id).cloned().or_else(|| builtin().into_iter().find(|t| t.id == id))
 }
 
+/// Whether `id` can name a toolset: it becomes a folder name in the config
+/// folder and is stored on tasks and repositories.
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
 /// Refuse a manifest that could write outside the spec folder, run nothing,
 /// or have steps the Spec tab would never list.
 pub fn validate(t: &Toolset) -> Result<(), String> {
     let label = if t.id.is_empty() { "toolset" } else { t.id.as_str() };
-    let id_ok =
-        !t.id.is_empty() && t.id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
-    if !id_ok {
+    if !valid_id(&t.id) {
         return Err(format!("{label}: the id must be lowercase letters, digits, - or _"));
     }
     if t.name.trim().is_empty() {

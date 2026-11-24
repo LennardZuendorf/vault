@@ -49,6 +49,7 @@ import type {
   AppliedAnswers,
   SpecApproved,
   SpecCheck,
+  SpecCommit,
   SpecKind,
   SpecPart,
   TaskSpec,
@@ -324,8 +325,12 @@ export const api = {
   /** Tell the task's running agents the spec changed (SPEC-14); how many were told. */
   tellSpecChange: (taskId: string, parts: SpecPart[]) =>
     invoke<number>("tell_spec_change", { taskId, parts }),
-  setProjectSpecs: (projectId: string, inApp: boolean, folder: string) =>
-    invoke<void>("set_project_specs", { projectId, inApp, folder }),
+  setProjectSpecs: (
+    projectId: string,
+    toolset: string | null,
+    commit: SpecCommit,
+    folder: string,
+  ) => invoke<void>("set_project_specs", { projectId, toolset, commit, folder }),
   requestPrDescription: (taskId: string, paneId: string) =>
     invoke<string>("request_pr_description", { taskId, paneId }),
   takePrDescription: (taskId: string) => invoke<PrDraft | null>("take_pr_description", { taskId }),

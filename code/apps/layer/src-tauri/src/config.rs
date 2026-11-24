@@ -29,7 +29,7 @@ pub use integrations::{
 };
 pub use layer_domain::TrackerKind;
 pub use phone::{PhoneConfig, PhoneDevice};
-pub use project::Project;
+pub use project::{Project, SpecCommit};
 pub use shared::Shared;
 pub use ui::UiPrefs;
 
@@ -81,6 +81,11 @@ pub struct Task {
     /// The epic this is a sub-task of (EPIC-7).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sub_task: Option<SubTaskOf>,
+    /// The spec toolset it was made with, by id: fixed when the task is made
+    /// (§19). None: the app's default, which is also what a task from before
+    /// toolsets uses (`commands::spec_copy::toolset_of`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolset: Option<String>,
 }
 
 /// Which epic a sub-task was filed from, and which of its sub-tasks it is:
@@ -288,6 +293,14 @@ pub struct AppConfig {
     /// The Henchman's standing orders and whom it leaves alone (§28).
     #[serde(default)]
     pub henchman: HenchmanConfig,
+    /// The spec toolset a task gets when nothing else says (Settings → Code).
+    /// None: `kiro`, so a config from before toolsets sees no change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_toolset: Option<String>,
+    /// Toolsets the user added, beside the three Layer ships. Never synced: a
+    /// manifest's install steps run on this Mac, so each Mac holds its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub toolsets: Vec<crate::spec::toolset::Toolset>,
 }
 
 impl AppConfig {
@@ -320,6 +333,7 @@ impl AppConfig {
                 continue;
             }
             self.tasks.push(Task {
+                toolset: None,
                 id: w.id.clone(),
                 name: w.name,
                 // The old layout had no task directory; the lone checkout is it.
@@ -742,5 +756,28 @@ mod tests {
         assert_eq!(tasks, 0);
         assert_eq!(store.with(|c| c.worktree_root.clone()), Some("/elsewhere".into()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn specs_in_app_true_reads_as_commit_none() {
+        let old = |flag: &str| -> Project {
+            serde_json::from_str(&format!(r#"{{"id":"p","name":"api","path":"/r/api","default_branch":"main"{flag}}}"#))
+                .unwrap()
+        };
+        assert_eq!(old(r#","specs_in_app":true"#).spec_commit, SpecCommit::None);
+        assert_eq!(old(r#","specs_in_app":false"#).spec_commit, SpecCommit::Whole);
+        assert_eq!(old("").spec_commit, SpecCommit::Whole);
+        assert_eq!(old(r#","spec_commit":"own""#).spec_commit, SpecCommit::Own);
+        // Written back, the old key is gone and the new one says the same.
+        let json = serde_json::to_value(old(r#","specs_in_app":true"#)).unwrap();
+        assert_eq!(json["spec_commit"], "none");
+        assert!(json.get("specs_in_app").is_none());
+    }
+
+    #[test]
+    fn a_config_without_toolsets_still_reads() {
+        let cfg: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.default_toolset, None);
+        assert!(cfg.toolsets.is_empty());
     }
 }

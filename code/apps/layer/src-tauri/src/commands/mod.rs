@@ -162,6 +162,7 @@ mod settings;
 mod slack;
 mod slack_bot;
 mod spec;
+mod spec_copy;
 mod spec_draft;
 mod spec_outside;
 mod spec_prompts;
@@ -244,7 +245,8 @@ mod tests {
             check: None,
             check_approved: None,
             spec_folder: None,
-            specs_in_app: false,
+            spec_toolset: None,
+            spec_commit: Default::default(),
             remote: None,
             repository_id: None,
         }
@@ -561,6 +563,7 @@ mod tests {
         p.path = clone.to_string_lossy().to_string();
         cfg.projects.push(p);
         cfg.tasks.push(Task {
+            toolset: None,
             id: "t1".into(),
             name: "T-1".into(),
             root: tasks_root.join("T-1").to_string_lossy().to_string(),

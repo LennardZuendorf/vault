@@ -425,6 +425,7 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     std::fs::create_dir_all(&root)?;
 
     let task = Task {
+        toolset: None,
         id: uuid::Uuid::new_v4().to_string(),
         name: req.name,
         root: root.to_string_lossy().to_string(),
@@ -884,10 +885,13 @@ fn delete_task_inner(state: &AppState, id: String, force: bool, finished: bool) 
         return Ok(results);
     }
 
-    // The app's own files go first, or the folder is never empty and lingers
-    // as an orphan under the worktree root. Anything else in there is the
-    // user's, so remove_dir refuses rather than taking it.
+    // The spec is the user's, not generated: it is kept in the config folder
+    // first, then goes with the folder, or the folder would linger as an
+    // orphan. A spec that could not be kept stays where it is and so does the
+    // task, which a second Delete finishes (the worktrees are already gone).
+    super::spec_copy::archive_spec(state, &task)?;
     if let Some(dir) = agent_file_dir(state, &task) {
+        super::spec_copy::remove_spec(state, &task);
         remove_generated(&dir);
     }
     let _ = std::fs::remove_dir(&task.root);
@@ -946,7 +950,8 @@ mod tests {
             check: None,
             check_approved: None,
             spec_folder: None,
-            specs_in_app: false,
+            spec_toolset: None,
+            spec_commit: Default::default(),
             remote: None,
             repository_id: None,
         }
@@ -1040,6 +1045,26 @@ mod tests {
         let store = state.config.project("api").unwrap().store.unwrap();
         assert_eq!(Path::new(&store).parent(), Some(root.join("worktrees/.repos").as_path()), "{store}");
         assert!(!root.join(".claude").exists() && !root.join("worktrees/.claude").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn deleting_a_task_keeps_its_spec_in_the_config_folder_and_leaves_no_folder_behind() {
+        let root = std::env::temp_dir().join(format!("vl-tasks-{}", uuid::Uuid::new_v4()));
+        let api = github_and_clone(&root, "api", &["main"]);
+        let state = state(&root, vec![project("api", &api, "main")]);
+        let task = task_on(&state, "api", "main");
+        let spec = Path::new(&task.root).join("spec");
+        std::fs::create_dir_all(spec.join("openspec/changes/x")).unwrap();
+        std::fs::write(spec.join("openspec/changes/x/tasks.md"), "- [ ] one\n").unwrap();
+
+        let rows = delete_task_inner(&state, task.id.clone(), true, false).unwrap();
+
+        assert!(rows.iter().all(|r| r.ok), "{rows:?}");
+        assert!(!Path::new(&task.root).exists(), "the folder went with the task");
+        let kept = root.join("specs/ACME-1-spec/openspec/changes/x/tasks.md");
+        assert_eq!(std::fs::read_to_string(kept).unwrap(), "- [ ] one\n");
+        assert!(state.config.task(&task.id).is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

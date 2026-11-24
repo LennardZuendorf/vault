@@ -429,6 +429,11 @@ pub(crate) fn chat_room(state: &AppState, id: &str) -> Result<PathBuf> {
 }
 
 /// Everything the app itself writes into a task folder.
+///
+/// `spec/` is not in it, and must not be: it is where the user and their
+/// agents write the task's spec, not something the app regenerates. Deleting
+/// a task keeps it first (`spec_copy::archive_spec`), and Clean up reports a
+/// folder holding one as holding something the app did not make.
 const GENERATED_FILES: &[&str] = &[
     "CLAUDE.md",
     "AGENTS.md",

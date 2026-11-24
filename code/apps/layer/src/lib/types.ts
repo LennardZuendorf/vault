@@ -10,6 +10,7 @@ import type {
   SlackBotConfig,
   SlackConfig,
 } from "./types-integrations";
+import type { SpecCommit } from "./types-spec";
 
 export interface Project {
   id: string;
@@ -30,8 +31,9 @@ export interface Project {
   check_approved?: string | null;
   /** Where specs are committed here (SPEC-1). Absent: `specs`. */
   spec_folder?: string | null;
-  /** Specs are kept by the app instead of committed here (SPEC-3). */
-  specs_in_app?: boolean;
+  /** The toolset Start work offers here, and what Commit spec puts here (`none`: the app keeps it, SPEC-3). */
+  spec_toolset?: string | null;
+  spec_commit?: SpecCommit;
 }
 
 /** How a registered repository is doing (REPO-5). */
@@ -114,6 +116,7 @@ export interface Task {
   epic?: boolean;
   /** The epic this task is a sub-task of, and its title there (EPIC-7). */
   sub_task?: SubTaskOf | null;
+  toolset?: string | null; // the spec toolset it was made with; absent: the app's default
 }
 
 /** The pull request a review task left from 0.5.0 is of. */

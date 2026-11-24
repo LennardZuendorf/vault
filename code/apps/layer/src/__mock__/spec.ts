@@ -11,6 +11,7 @@ import { emit } from "@tauri-apps/api/event";
 import { questions } from "../lib/questions";
 import type {
   RepoSpec,
+  SpecCommit,
   SpecKind,
   SpecPart,
   SpecProposal,
@@ -364,7 +365,7 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
     });
     const repos: RepoSpec[] = checkouts(taskId).map((c) => {
       const project = world.projects.find((p) => p.id === c.project_id);
-      const inRepo = !project?.specs_in_app;
+      const inRepo = project?.spec_commit !== "none";
       return {
         checkout_id: c.id,
         repo: c.project_name,
@@ -525,7 +526,8 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
     set_project_specs: (a) => {
       const p = world.projects.find((x) => x.id === a.projectId);
       if (p) {
-        p.specs_in_app = a.inApp as boolean;
+        p.spec_toolset = (a.toolset as string | null) ?? null;
+        p.spec_commit = a.commit as SpecCommit;
         p.spec_folder = (a.folder as string) === "specs" ? null : (a.folder as string);
       }
       return null;

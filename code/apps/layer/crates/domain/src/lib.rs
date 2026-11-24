@@ -40,6 +40,7 @@ pub use protocol::{
     TransactionResult,
 };
 pub use repository::{
-    Repository, RepositoryCreate, RepositoryPatch, UpdateBy, remote_key, repository_folder,
+    Repository, RepositoryCreate, RepositoryPatch, SpecCommit, UpdateBy, remote_key,
+    repository_folder,
 };
 pub use user::User;
