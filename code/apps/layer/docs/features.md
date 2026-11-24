@@ -1426,6 +1426,7 @@ Known gaps:
 | Agents: Henchman's agent, model and effort | Claude Code, Sonnet, Medium | HEN-15 |
 | Agents: Task folder location | `~/.villain-worktrees` | where task folders go |
 | Keep awake (the cup in the top bar) | off | STATE-7, PHONE-8 |
+| Code: Spec first | off | every agent is told to write the spec before any code (SPEC-27); the switch is not on the Code tab yet |
 | Browser: sites agents may use | none: this machine's pages only | BRW-3, BRW-11 |
 | Browser: saved sign-ins | none | BRW-18 |
 | Remote access: Tailscale | off | PHONE-1, PHONE-2 |
@@ -2186,17 +2187,30 @@ requirements it decided by hand, and finding that Redraft threw both away.
 
 ### Working to it
 
-- **SPEC-10** The context file (PANE-13) MUST name each repository's spec
-  folder and carry the approved requirements once, above the ticket, as
-  the user's own: they are what done means, they win where they and the
-  ticket disagree, what they put out of scope is left alone, and open
-  questions are asked rather than guessed. It says to change the spec
-  only with `spec_write` (SPEC-24). Past 8 KB they are cut, and point at
-  the files.
-- **SPEC-11** An opening prompt for a task with a spec (`task_prompt`: the
-  launch dialog, Start agent, handoffs) MUST end by pointing at the spec
-  folders by full path, so an agent started inside one repository finds
-  the others too.
+- **SPEC-10** The context file (PANE-13) MUST have a Spec section above the
+  ticket (not in a review's). It gives the absolute path of the working copy,
+  `<task>/spec/`, as the record to read before work and to edit directly
+  when the plan changes (`spec_write` does the same); the toolset's own
+  paragraph, with its paths filled in (OpenSpec is told to `cd` into the
+  spec folder; superpowers to save into `docs/superpowers/` under it); how
+  to tick a step (edit the box, or `spec_task` by file and position, as soon
+  as it is done); the four spec tools in one line each (SPEC-13); with two or
+  more repositories, the conventions of SPEC-1 (one spec for the task,
+  requirements naming their repositories, contracts written once, steps
+  under `## <repo>` with `(after <repo> <n>)`, no spec files in a worktree);
+  and the first 8 KB of the toolset's entry file, cut with a pointer to the
+  file: Kiro's `requirements.md` (or `bugfix.md`), OpenSpec's newest
+  change's `proposal.md`, superpowers' newest design, by modification time.
+  The context file is rewritten when the task's ticket or repositories
+  change, not when the spec does, so the entry file may be older than the
+  file: the section says so. It says
+  to change the spec only by writing it, never to wait for approval.
+- **SPEC-11** An opening prompt for a task whose spec folder holds files (every
+  route to an agent that builds one: `task_prompt`, so the launch dialog,
+  Start agent and handoffs, and Start work and the Henchman's Start)
+  MUST end by pointing at the spec folder by full path, so an agent started
+  inside one repository finds the whole spec.
+
 - **SPEC-12** Start agent on the tab MUST start an agent on the approved
   tasks: at the task folder for every repository, or in one repository
   for its own. Its prompt tells it to work through the steps in order,
@@ -2282,6 +2296,14 @@ requirements it decided by hand, and finding that Redraft threw both away.
   with why, and the others keep their commit. Open pull requests (PR-1)
   runs it first for the repositories whose committed copy is behind
   `spec/`.
+- **SPEC-27** With **Spec first** on (Settings → Code, off by default,
+  `set_spec_first`), every agent Layer starts MUST be told, in words only, to
+  write or update the spec in `<task>/spec/` before it changes any code:
+  `Write or update the spec in <path> before you change any code.` is the
+  first line of the context file's body, followed by "Then implement it step
+  by step, ticking each step.", and the last line of every opening prompt
+  (SPEC-11), also while the spec folder is still empty. A review task is
+  never told it. Nothing blocks an agent that ignores it.
 
 Code: `spec.rs` (the files, and what is read from them),
 `commands/spec.rs` (where the spec and its copies live, what was

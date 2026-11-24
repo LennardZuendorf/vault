@@ -95,6 +95,7 @@ const disconnected: Settings = {
   henchman: { agent_id: "claude", model: "sonnet", effort: "medium" },
   worktree_root: "/Users/you/.villain-worktrees",
   worktree_root_is_default: true,
+  spec_first: false,
   jira_connected: false,
   tracker: null,
   tracker_chosen: null,

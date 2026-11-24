@@ -297,6 +297,12 @@ pub struct AppConfig {
     /// None: `kiro`, so a config from before toolsets sees no change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_toolset: Option<String>,
+    /// Every agent Layer starts is told to write or update the spec before it
+    /// changes any code (Settings → Code). Off: a spec is written when the
+    /// user asks for one. Instructions only; nothing stops an agent that
+    /// ignores them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub spec_first: bool,
     /// Toolsets the user added, beside the three Layer ships. Never synced: a
     /// manifest's install steps run on this Mac, so each Mac holds its own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -782,6 +788,7 @@ mod tests {
         let cfg: AppConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(cfg.default_toolset, None);
         assert!(cfg.toolsets.is_empty());
+        assert!(!cfg.spec_first, "off until the user turns it on");
     }
 
     #[test]

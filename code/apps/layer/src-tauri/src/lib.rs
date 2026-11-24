@@ -437,6 +437,7 @@ pub fn run() {
             commands::check_repo_note,
             commands::delete_repo_note,
             commands::set_worktree_root,
+            commands::set_spec_first,
             commands::set_ui_prefs,
             commands::disconnect,
             commands::cursor_ide_installed,

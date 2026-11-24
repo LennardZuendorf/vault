@@ -381,6 +381,9 @@ const answer: Record<string, Answer> = {
   set_ui_prefs: (a) => {
     world.settings.ui = a.ui as typeof world.settings.ui;
   },
+  set_spec_first: (a) => {
+    world.settings.spec_first = a.on as boolean;
+  },
   take_notices: () => [],
   // Connecting checks the token against the site; here any token will do.
   grafana_connect: (a) => {

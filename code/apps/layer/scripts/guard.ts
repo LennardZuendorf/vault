@@ -723,7 +723,8 @@ const CEILINGS: Record<string, number> = {
   // Oxfmt broke these files' long lines and took them past the default, with
   // no new code: TicketsView 637, types 613.
   "src/components/tickets/TicketsView.tsx": 660,
-  "src/lib/types.ts": 640,
+  // Settings gained spec_first (SPEC-27), the one line that is the mirror of the backend.
+  "src/lib/types.ts": 645,
 };
 
 for (const f of files) {

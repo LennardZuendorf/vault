@@ -1,4 +1,4 @@
-The spec is an OpenSpec project in `{spec_dir}`. Run every `openspec` command from that folder.
+The spec is an OpenSpec project in `{spec_dir}`. Run every `openspec` command from that folder: `cd {spec_dir}` first, never from a repository's worktree.
 
 - Each change lives in `openspec/changes/<id>/`. Write `proposal.md` first (why and what changes), then `design.md`, then `tasks.md`.
 - Put delta specs under `openspec/changes/<id>/specs/<capability>/spec.md`, saying what the change adds, modifies or removes.

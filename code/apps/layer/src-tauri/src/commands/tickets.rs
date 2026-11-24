@@ -238,9 +238,11 @@ pub async fn start_work_on_ticket(
     if let Some(agent_id) = agent_id {
         let repos = task_repos(&state, &task);
         let prompt = ticket_prompt(&issue, &task, &repos, true);
-        let task_id = task.id.clone();
+        let (task_id, started) = (task.id.clone(), task.clone());
         let handle = app.clone();
         super::blocking(app.clone(), move |state| {
+            // The same ending every opening prompt gets: Spec first, if on.
+            let prompt = super::spec_work::with_spec_line(state, &started, prompt);
             start_agent(&handle, state, task_id, agent_id, None, Some(prompt), Resume::No, None, None, false)
         })
         .await?;

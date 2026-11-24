@@ -237,20 +237,34 @@ pub async fn task_prompt(
         }
         None => task_repos(&state, &task),
     };
-    // SPEC-5: wherever the agent starts, it is told where the spec is.
-    let spec = super::spec_work::prompt_line(&state, &task).map(|line| format!("\n\n{line}")).unwrap_or_default();
+    // SPEC-5, SPEC-11: wherever the agent starts, it is told where the spec is,
+    // and with Spec first on to write it before any code. The same line goes
+    // after every opening prompt, so it is added once, here, to whichever of
+    // the two this returns.
+    let with_spec = {
+        let (app, task) = (app.clone(), task.clone());
+        move |prompt: String| async move {
+            super::blocking(app, move |state| Ok(super::spec_work::with_spec_line(state, &task, prompt))).await
+        }
+    };
 
     if let Some(key) = task.issue_key.as_deref() {
         if let Ok(tracker) = super::tracker(&state) {
             if let Ok(issue) = tracker.ticket(key).await {
                 let prompt = ticket_prompt(&issue, &task, &repos, at_task_root);
                 keep_ticket(app, task, issue).await;
-                return Ok(prompt + &spec);
+                return with_spec(prompt).await;
             }
         }
     }
 
     // No ticket, or Jira unreachable: describe what we do know.
+    with_spec(plain_prompt(&task, &repos, at_task_root)).await
+}
+
+/// The opening prompt of a task whose ticket is not at hand: its name and
+/// link, where the repositories are, and what to do first.
+pub(crate) fn plain_prompt(task: &Task, repos: &[(String, String)], at_task_root: bool) -> String {
     let mut prompt = format!("Task: {}\n\n", task.name);
     if let Some(url) = &task.issue_url {
         prompt.push_str(&format!("Ticket: {url}\n\n"));
@@ -262,7 +276,7 @@ pub async fn task_prompt(
             repos.len(),
             task.branch,
         ));
-        for (folder, origin) in &repos {
+        for (folder, origin) in repos {
             prompt.push_str(&format!("  {folder}/  — {origin}\n"));
         }
         prompt.push('\n');
@@ -279,7 +293,7 @@ pub async fn task_prompt(
         "Start by exploring the relevant code, then implement the change. Ask before \
          making sweeping refactors.",
     );
-    Ok(prompt + &spec)
+    prompt
 }
 
 /// Where an agent is asked to leave a drafted pull request description.

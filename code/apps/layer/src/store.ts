@@ -178,6 +178,7 @@ export interface State {
   dropNotes: (taskId: string, ids: number[]) => void;
   editNote: (taskId: string, id: number, body: string) => void;
   refreshSettings: () => Promise<void>;
+  setSpecFirst: (on: boolean) => Promise<void>; // Spec first (SPEC-27), then the settings again
   /** `quiet` is a timer tick: no toast, and no spinner over a list already shown. */
   refreshIssues: (opts?: { quiet?: boolean }) => Promise<void>;
 }
@@ -635,6 +636,7 @@ export const useStore = create<State>((set, get) => {
       set((s) => (sameJson(s.prs[taskId], rows) ? s : { prs: { ...s.prs, [taskId]: rows } }));
     },
 
+    setSpecFirst: (on) => api.setSpecFirst(on).then(() => get().refreshSettings()),
     refreshSettings: async () => {
       const before = get().settings;
       // Kept when unchanged: this runs after every preference toggle, and a new

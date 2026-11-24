@@ -481,6 +481,7 @@ export interface Settings {
   henchman: HenchmanAgent;
   worktree_root: string;
   worktree_root_is_default: boolean;
+  spec_first: boolean; // agents are told to write the spec before any code (SPEC-27)
   jira_connected: boolean;
   /** Where tickets come from (TKT-15), or null while there is no tracker or it is not connected here. */
   tracker: TrackerKind | null;
