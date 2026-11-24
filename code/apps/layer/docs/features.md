@@ -2475,8 +2475,13 @@ allowed), never the agent doing the work. The prompts are in `commands/spec_prom
 - **SPEC-17** A task whose spec was kept the old way MUST have it moved into
   `spec/` the first time its spec is read or written (the Spec tab, an agent's
   spec tool, a draft; `spec_copy.rs`, `move_old_spec`, from `with_spec_moved`;
-  where it was is read by `commands/spec_old.rs`): what was approved in
-  `.spec-drafts/approved/`, with an unapproved draft over a file when the draft
+  where it was is read by `commands/spec_old.rs`), and before anything else makes
+  `spec/`, since a move is done only while the folder is absent: at the start of
+  every toolset install (SPEC-30), which a repository added to the task
+  starts, and when an agent is started (`spec_work.rs`, `for_agent_start`, from
+  `start_agent`), whose first file would make the folder. It is not done by the
+  context file's writer, which runs holding the config's read lock. What is moved
+  is what was approved in `.spec-drafts/approved/`, with an unapproved draft over a file when the draft
   is newer; else the first repository's `specs/<task>/` requirements and design
   and each repository's tasks, as a first-level `# <folder>` section of one
   `tasks.md`; else a `SPEC.md`, as `requirements.md`. What is moved is Kiro's

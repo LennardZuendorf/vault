@@ -286,7 +286,8 @@ pub(crate) fn start_agent(
     cols: Option<u16>,
     acp: bool,
 ) -> Result<PaneInfo> {
-    let task = state.config.task(&task_id)?;
+    // Before anything the agent could write: see `for_agent_start`.
+    let task = super::spec_work::for_agent_start(state, state.config.task(&task_id)?);
     let def = agents::find(&agent_id).ok_or_else(|| Error::NotFound(format!("agent {agent_id}")))?;
 
     let (mut cwd, scope, checkout_id) = resolve_scope(state, &task, checkout_id.as_deref())?;

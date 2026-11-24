@@ -23,6 +23,7 @@ use crate::spec::{self, glob};
 use super::panes::agent_file_dir;
 use super::spec_copy::{spec_dir, toolset_of, MOST_DEPTH, MOST_FILES};
 use super::spec_runner::{tail, Runner};
+use super::spec_work::with_spec_moved;
 use super::AppState;
 
 /// What an install wrote, in the task folder: `{ toolset, version, ok,
@@ -122,6 +123,12 @@ fn openspec_tools_for<'a>(agents: impl IntoIterator<Item = &'a str>) -> String {
 /// the first that fails. Never an error: how it went is in the state and in
 /// the record, and the task goes on either way.
 pub(crate) fn install(state: &AppState, task: &Task, runner: &dyn Runner) -> InstallState {
+    // First of all: an earlier build's spec is moved only while `spec/` is
+    // absent (SPEC-17), and the pin below and the install itself would make it,
+    // so a task given a repository (or its install retried) before its Spec
+    // tab was opened would lose its approved spec for good. The move also pins
+    // the task to Kiro, which is what it moves.
+    let task = &with_spec_moved(state, task).unwrap_or_else(|_| task.clone());
     let toolset = toolset_of(state, task);
     let mut out = InstallState {
         toolset: toolset.id.clone(),
@@ -716,6 +723,31 @@ mod tests {
     fn record(task: &Task) -> Record {
         let text = std::fs::read_to_string(Path::new(&task.root).join(INSTALL_RECORD)).unwrap();
         serde_json::from_str(&text).unwrap()
+    }
+
+    #[test]
+    fn an_old_tasks_approved_spec_is_moved_before_the_install_pins_a_toolset_and_makes_spec() {
+        let (root, state, task) = world(&["api"], "openspec");
+        // A task from before toolsets, while the app's default is another one.
+        state
+            .config
+            .update(|c| {
+                c.default_toolset = Some("openspec".into());
+                c.tasks.iter_mut().for_each(|t| t.toolset = None);
+            })
+            .unwrap();
+        let task = state.config.task(&task.id).unwrap();
+        put(&Path::new(&task.root).join(".spec-drafts/approved/requirements.md"), "# Approved\n");
+        let fake = Fake::default();
+
+        let done = install(&state, &task, &fake);
+
+        let dir = Path::new(&task.root);
+        assert_eq!(std::fs::read_to_string(dir.join("spec/requirements.md")).unwrap(), "# Approved\n");
+        assert_eq!(state.config.task(&task.id).unwrap().toolset.as_deref(), Some("kiro"), "what is moved is Kiro's");
+        assert!(fake.ran.borrow().is_empty(), "Kiro installs nothing, so the default's init did not run");
+        assert_eq!((done.toolset.as_str(), done.ok), ("kiro", true), "{done:?}");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

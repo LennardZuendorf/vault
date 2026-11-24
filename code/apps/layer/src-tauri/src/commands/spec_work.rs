@@ -47,6 +47,17 @@ pub(crate) fn with_spec_moved(state: &AppState, task: &Task) -> Result<Task> {
     Ok(task.clone())
 }
 
+/// `task` as an agent about to start in it should find it: its spec moved from
+/// where an earlier build kept it, when it has not been yet. The context file
+/// tells the agent to write `spec/` itself, and its first file would make the
+/// folder and end the move for good (SPEC-17). Best effort: an agent starts
+/// whatever the move says. Never from `write_task_context`, which `loops.rs`
+/// calls while holding the config's read lock, which the move takes the write
+/// of.
+pub(crate) fn for_agent_start(state: &AppState, task: Task) -> Task {
+    with_spec_moved(state, &task).unwrap_or(task)
+}
+
 /// The task's repositories as (folder, project name): what a step file and
 /// `spec_commit` call them.
 fn repositories(state: &AppState, task: &Task) -> Vec<(String, String)> {
@@ -479,6 +490,22 @@ mod tests {
 
     fn use_toolset(state: &AppState, id: &str) {
         state.config.update(|c| c.tasks.iter_mut().for_each(|t| t.toolset = Some(id.into()))).unwrap();
+    }
+
+    #[test]
+    fn an_agent_started_in_an_old_task_finds_the_approved_spec_before_it_writes_the_first_file() {
+        let (root, state, task) = world(&["api"]);
+        put(&root.join("tasks/T-1/.spec-drafts/approved/requirements.md"), "# Approved\n");
+
+        let task = for_agent_start(&state, task);
+        // The agent's own first file, written straight to the disk as its context
+        // file told it to, and not through a spec tool that would move the spec first.
+        put(&spec_at(&root, "design.md"), "# Design\n");
+        let task = with_spec_moved(&state, &task).unwrap();
+
+        assert_eq!(get(&spec_at(&root, "requirements.md")), "# Approved\n");
+        assert_eq!(task.toolset.as_deref(), Some("kiro"), "the task is returned as the move pinned it");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
