@@ -1,0 +1,9 @@
+{
+  "id": "kiro",
+  "name": "Kiro (Layer)",
+  "files": ["requirements.md", "bugfix.md", "design.md", "tasks.md"],
+  "steps": ["tasks.md"],
+  "install": [],
+  "commit_to": "specs/{task}",
+  "extras": ["draft", "check", "questions"]
+}
