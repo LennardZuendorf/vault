@@ -2112,7 +2112,16 @@ toolset.
   it owns, and those that belong to everyone), whether its committed copy is
   behind the working copy, and the toolset's install state. It saves an
   edit as a file write (`write_spec_file`), through the same lock and
-  refusals as an agent's `spec_write`.
+  refusals as an agent's `spec_write`. The files are a tree, as the toolset
+  lays them out, and each opens in an editor. The task's tabs are Agents,
+  Spec, Diff and Pull requests, in that order, and a task opens on Agents.
+  Commit spec shows what it did in each repository, a failed one named with
+  why; it is off while an editor holds text that is not saved, since it puts
+  the saved files into the repositories. A failed install shows its error
+  with Retry (`install_spec_toolset`). Kiro's Draft is off while an editor
+  holds unsaved text, which a draft would write over. Undo of a draft that
+  made its file deletes the file (`remove_spec_file`); it does not leave an
+  empty one.
 
 ### Agents and the files
 
@@ -2266,14 +2275,17 @@ requirements it decided by hand, and finding that Redraft threw both away.
   and from the moment it appears, so an agent's first write shows too. It
   MUST be pushed by the system's file events, never polled
   (`commands/spec_watch.rs`, the `watch_spec` command, called from
-  `Watchers.tsx`).
+  `Watchers.tsx`). An editor with unsaved text keeps it when its file
+  changes on disk, and says so, with **Load theirs** (take the file's text)
+  or **Save mine** (write over it): there is no merge.
 
 Code: `spec.rs` (the files, and what is read from them),
 `spec/toolset.rs`, `spec/owned.rs` (toolsets and steps owned by
 repositories), `commands/spec.rs` (the checks kept per repository),
 `commands/spec_copy.rs` (the working copy and moving an old spec),
 `commands/spec_old.rs` (where earlier builds kept one),
-`commands/spec_view.rs` (what the tab is shown, `write_spec_file`),
+`commands/spec_view.rs` (what the tab is shown, `write_spec_file`,
+`remove_spec_file`),
 `commands/spec_work.rs` (writing, ticking, prompts, the pull request's
 part, `spec_propose`'s pointer), `commands/spec_commit.rs` (Commit spec),
 `commands/spec_install.rs` and `spec_install_run.rs` (the toolset's install),
@@ -2281,7 +2293,8 @@ part, `spec_propose`'s pointer), `commands/spec_commit.rs` (Commit spec),
 `commands/spec_prompts.rs` (Kiro's Draft, Apply answers and Check),
 `commands/task_context.rs`, `git/only.rs` (committing only the spec),
 `mcp.rs` (the spec tools), `commands/open_prs.rs`, `SpecView.tsx`,
-`spec/SpecSide.tsx`, `spec/SpecQuestions.tsx`, `lib/specs.ts`,
+`spec/SpecTree.tsx`, `spec/SpecEditor.tsx`, `spec/SpecSide.tsx`,
+`spec/SpecQuestions.tsx`, `lib/specs.ts`, `lib/spec-edit.ts`,
 `lib/questions.ts`, `Watchers.tsx` (reading the spec again when an agent
 stops), `tickets/StartWorkDialog.tsx`, `ReposView.tsx` (the per-repository
 setting).

@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { editorText, requirementsPath, useSpecs } from "../lib/specs";
-import type { RepoResult, SpecKind, SpecPart, TaskView } from "../lib/types";
+import { requirementsPath, useSpecs } from "../lib/specs";
+import type { SpecKind, SpecPart, TaskView } from "../lib/types";
 import { useStore } from "../store";
+import { SpecEditor } from "./spec/SpecEditor";
 import { SpecQuestions } from "./spec/SpecQuestions";
 import { SpecSide } from "./spec/SpecSide";
-import { ErrorMessage, Spinner, useFailure } from "./ui";
+import { SpecTree } from "./spec/SpecTree";
+import { BusyLabel, ErrorMessage, Spinner, useFailure } from "./ui";
 
 const DRAFTS: { part: SpecPart; label: string }[] = [
   { part: "requirements", label: "Draft requirements" },
@@ -13,51 +15,43 @@ const DRAFTS: { part: SpecPart; label: string }[] = [
 ];
 
 /**
- * A task's spec (§19): the files its toolset keeps in `<task>/spec/`, each
- * opened in an editor and saved as a plain file write, the way an agent
- * writes it. Kiro's extras (Draft, Apply answers, Check against spec) show
- * only for a toolset that has them.
+ * A task's spec (§19): the files its toolset keeps in `<task>/spec/` as a
+ * tree, each opened in an editor and saved as a plain file write, the way an
+ * agent writes it, and followed live while an agent does. Beside them: how far
+ * each repository is through the steps, and Commit spec. Kiro's extras (Draft,
+ * Apply answers, Check against spec) show only for a toolset that has them.
  */
 export function SpecView({ task }: { task: TaskView }) {
   const state = useSpecs((s) => s.byTask[task.id]);
   const install = useSpecs((s) => s.install[task.id]);
   const load = useSpecs((s) => s.load);
-  const edit = useSpecs((s) => s.edit);
-  const save = useSpecs((s) => s.save);
-  const discard = useSpecs((s) => s.discard);
   const draft = useSpecs((s) => s.draft);
   const undo = useSpecs((s) => s.undo);
   const commitSpec = useSpecs((s) => s.commitSpec);
   const retryInstall = useSpecs((s) => s.retryInstall);
-  const pending = useSpecs((s) => s.pending);
-  const setPending = useSpecs((s) => s.setPending);
   const fail = useStore((s) => s.fail);
   const actions = useFailure();
   const [path, setPath] = useState<string | null>(null);
   const [kind, setKind] = useState<SpecKind>("feature");
-  const [committed, setCommitted] = useState<RepoResult[] | null>(null);
+  const [committing, setCommitting] = useState(false);
 
   const loaded = state?.loaded ?? false;
   useEffect(() => {
     if (!loaded) void load(task.id).catch(fail);
   }, [task.id, loaded, load, fail]);
-  // The agent Start work picked is no longer started from this tab.
-  useEffect(() => {
-    if (pending?.taskId === task.id) setPending(null);
-  }, [pending, task.id, setPending]);
 
   const spec = state?.spec ?? null;
   if (!loaded || !spec) return null;
 
   const edits = state?.edits ?? {};
+  const unsaved = Object.keys(edits).length > 0;
   const drafting = !!state?.drafting;
   const extras = spec.toolset.extras;
   const current =
     path && (spec.files.some((f) => f.path === path) || edits[path] !== undefined)
       ? path
-      : (spec.files[0]?.path ?? null);
-  const dirty = current !== null && edits[current] !== undefined;
-  const install_ = install ?? spec.install;
+      : (spec.files[0]?.path ?? Object.keys(edits)[0] ?? null);
+  const shown = install ?? spec.install;
 
   async function run(what: () => Promise<unknown>) {
     actions.clear();
@@ -68,20 +62,28 @@ export function SpecView({ task }: { task: TaskView }) {
     }
   }
 
+  async function commit() {
+    setCommitting(true);
+    await run(() => commitSpec(task.id));
+    setCommitting(false);
+  }
+
   return (
     <div className="spec">
       <div className="spec-bar">
         <b>{spec.toolset.name}</b>
         {spec.toolset.version && <span className="muted">{spec.toolset.version}</span>}
-        {install_?.running && (
+        {shown?.running && (
           <>
             <Spinner />
             <span className="muted">Installing…</span>
           </>
         )}
-        {install_ && !install_.running && !install_.ok && (
+        {shown && !shown.running && !shown.ok && (
           <>
-            <span className="spec-stale">Install failed: {install_.error}</span>
+            <span className="spec-failed">
+              Install failed: {shown.error ?? "it gave no reason"}.
+            </span>
             <button className="ui-button" onClick={() => void retryInstall(task.id).catch(fail)}>
               Retry
             </button>
@@ -90,23 +92,23 @@ export function SpecView({ task }: { task: TaskView }) {
         <span className="spacer" />
         <button
           className="ui-button"
-          title="Put the spec into each repository, as its setting says, and commit it there"
-          disabled={drafting}
-          onClick={() => void run(async () => setCommitted(await commitSpec(task.id)))}
+          title={
+            unsaved
+              ? "Save or discard your edits first: Commit spec puts what is saved into each repository."
+              : "Put the spec into each repository, as its setting says, and commit it there"
+          }
+          disabled={drafting || committing || unsaved}
+          onClick={() => void commit()}
         >
-          Commit spec
+          <BusyLabel busy={committing} idle="Commit spec" working="Committing…" />
         </button>
       </div>
-      {committed && (
-        <div className="muted">
-          {committed.map((r) => `${r.repo}: ${r.detail}`).join(" · ") || "No repositories."}
-        </div>
-      )}
       {extras.includes("draft") && (
         <div className="spec-bar">
           {spec.files.length === 0 && (
             <select
               className="ui-field"
+              aria-label="What the spec is for"
               value={kind}
               onChange={(e) => setKind(e.target.value as SpecKind)}
             >
@@ -118,7 +120,12 @@ export function SpecView({ task }: { task: TaskView }) {
             <button
               key={d.part}
               className="ui-button"
-              disabled={drafting}
+              disabled={drafting || unsaved}
+              title={
+                unsaved
+                  ? "Save or discard your edits first: a draft is written into the files, and unsaved text would be lost."
+                  : undefined
+              }
               onClick={() => void run(() => draft(task.id, d.part, kind))}
             >
               {d.label}
@@ -143,42 +150,20 @@ export function SpecView({ task }: { task: TaskView }) {
         </div>
       ) : (
         <div className="spec-body">
-          <div className="spec-repos">
-            {spec.files.map((f) => (
-              <button
-                key={f.path}
-                className={`spec-repo${f.path === current ? " active" : ""}`}
-                onClick={() => setPath(f.path)}
-              >
-                {f.path}
-                {edits[f.path] !== undefined && <span className="muted"> · unsaved</span>}
-              </button>
-            ))}
-          </div>
+          <SpecTree
+            paths={spec.files.map((f) => f.path)}
+            current={current}
+            edits={edits}
+            onPick={setPath}
+          />
           {current !== null && (
-            <div>
-              <div className="spec-bar">
-                <button
-                  className="ui-button ui-button-primary"
-                  disabled={!dirty || drafting}
-                  onClick={() => void run(() => save(task.id, current))}
-                >
-                  Save
-                </button>
-                {dirty && !drafting && (
-                  <button className="ui-button" onClick={() => discard(task.id, current)}>
-                    Discard changes
-                  </button>
-                )}
-              </div>
-              <textarea
-                className="ui-field spec-editor"
-                value={editorText(state, current)}
-                readOnly={drafting}
-                spellCheck={false}
-                onChange={(e) => edit(task.id, current, e.target.value)}
-              />
-            </div>
+            <SpecEditor
+              key={current}
+              task={task}
+              file={spec.files.find((f) => f.path === current)}
+              path={current}
+              readOnly={drafting}
+            />
           )}
           <SpecSide task={task} spec={spec}>
             {extras.includes("questions") && requirementsPath(spec) === current && (

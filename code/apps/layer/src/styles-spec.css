@@ -1,91 +1,10 @@
-/* A task's spec (§19): Start agent, the three files in turn (the tasks per
-   repository), the editor, and beside it the requirements and the tasks. */
+/* A task's spec (§19): the toolset's files as a tree, the editor, and beside
+   it the open questions and each repository's steps and Commit spec. */
 .spec {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-.spec-repos {
-  display: flex;
-  gap: 4px;
-  padding: 8px 14px 0;
-}
-.spec-repo {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: var(--radius-md);
-  background: transparent;
-  font-family: var(--font-mono);
-  font-size: var(--type-ui-small-size);
-}
-.spec-repo.active {
-  background: var(--selected);
-}
-.spec-repo .muted {
-  font-size: var(--type-ui-small-size);
-  color: var(--muted);
-}
-.spec-steps {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  flex-wrap: wrap;
-}
-.spec-step {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 10px;
-  border-radius: var(--radius-md);
-  background: transparent;
-}
-.spec-step.active {
-  background: var(--selected);
-}
-.spec-num {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: var(--type-ui-small-size);
-  color: var(--muted);
-}
-.spec-num.done {
-  color: var(--status-ok-ink);
-  background: color-mix(in srgb, var(--ok) var(--status-tint), transparent);
-}
-.spec-state {
-  font-size: var(--type-ui-small-size);
-  color: var(--muted);
-}
-.spec-state.approved {
-  color: var(--status-ok-ink);
-}
-.spec-state.draft,
-.spec-state.changed,
-.spec-state.out-of-date {
-  color: var(--status-warn-ink);
-}
-.spec-home {
-  font-family: var(--font-mono);
-  font-size: var(--type-ui-small-size);
-  max-width: 40%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.spec-tell {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  background: color-mix(in srgb, var(--warn) var(--status-tint), transparent);
 }
 .spec-bar {
   display: flex;
@@ -114,16 +33,91 @@
   background: transparent;
   box-shadow: none;
 }
-/* Its width is dragged (SPEC-8), by the grip on its left edge; a width kept
-   from a wider window still leaves the editor room. */
-.spec-grip {
-  width: 6px;
-  margin-right: -3px;
-  border-right: 0;
+/* The files, as the toolset lays them out: a folder is a heading, a file opens in the editor. */
+.spec-tree {
+  width: 220px;
+  min-width: 160px;
+  flex: none;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 8px 8px 14px;
 }
-.spec-grip:hover,
-body.dragging .spec-grip {
-  background: var(--line);
+.spec-dir {
+  padding: 6px 10px 2px;
+  font-family: var(--font-mono);
+  font-size: var(--type-ui-small-size);
+  color: var(--faint);
+  overflow-wrap: anywhere;
+}
+.spec-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: var(--type-ui-small-size);
+  text-align: left;
+}
+.spec-file:hover:not(.active) {
+  background: var(--hover);
+}
+.spec-file.active {
+  background: var(--selected);
+}
+.spec-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spec-file-mark {
+  flex: none;
+  font-size: 0.7em;
+  color: var(--muted);
+}
+.spec-file-mark.conflict {
+  color: var(--status-warn-ink);
+}
+.spec-editor-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.spec-editor-pane .spec-bar {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.spec-path {
+  font-family: var(--font-mono);
+  font-size: var(--type-ui-small-size);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The file changed under unsaved text: kept, and said so (SPEC-28). */
+.spec-conflict {
+  margin: 0 14px 4px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--warn) var(--status-tint), transparent);
+  line-height: 1.45;
+}
+.spec-failed {
+  color: var(--status-danger-ink);
+}
+.spec-repo-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 .spec-side {
   width: 330px;
@@ -154,48 +148,6 @@ body.dragging .spec-grip {
   margin: 0;
   line-height: 1.45;
 }
-.spec-reqs {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.spec-reqs li {
-  line-height: 1.45;
-}
-.spec-reqs b {
-  font-family: var(--font-mono);
-  font-size: var(--type-ui-small-size);
-  color: var(--faint);
-  margin-right: 6px;
-}
-.spec-verdict {
-  font-size: var(--type-ui-small-size);
-  font-weight: 700;
-  margin-right: 6px;
-  padding: 0 6px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--status-color, var(--muted)) var(--status-tint), transparent);
-}
-.spec-verdict.met {
-  color: var(--status-ok-ink);
-  --status-color: var(--ok);
-}
-.spec-verdict.not-met {
-  color: var(--status-danger-ink);
-  --status-color: var(--danger);
-}
-.spec-verdict.unclear {
-  color: var(--status-warn-ink);
-  --status-color: var(--warn);
-}
-.spec-check {
-  margin-top: 10px;
-  align-items: center;
-  gap: 8px;
-}
 .spec-stale {
   color: var(--status-warn-ink);
 }
@@ -223,70 +175,6 @@ body.dragging .spec-grip {
 }
 .spec-tasks li.done .mark {
   color: var(--status-ok-ink);
-}
-/* Start agent, once for the task, above its files (SPEC-12). */
-.spec-start-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  flex-wrap: wrap;
-  background: var(--panel);
-}
-.spec-start-bar select {
-  width: auto;
-  max-width: 260px;
-}
-.spec-working {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-size: var(--type-ui-small-size);
-}
-/* What needs the user first: specs from before, a copy changed outside the
-   app, an agent's proposal (SPEC-22, SPEC-24, SPEC-25). */
-.spec-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  background: color-mix(in srgb, var(--info) var(--status-tint), transparent);
-  line-height: 1.45;
-}
-.spec-banner > span {
-  flex: 1;
-}
-.spec-banner.warn {
-  background: color-mix(in srgb, var(--warn) 10%, transparent);
-}
-.spec-tag {
-  font-family: var(--font-mono);
-  font-size: var(--type-ui-small-size);
-  color: var(--muted);
-  margin-right: 6px;
-}
-.spec-checks {
-  display: flex;
-  flex-direction: column;
-}
-.spec-checks .spec-check {
-  margin-top: 8px;
-}
-.spec-start p {
-  max-width: 560px;
-}
-.spec-kind {
-  gap: 16px;
-  margin-bottom: 4px;
-}
-.spec-kind label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.spec-kind input {
-  width: auto;
 }
 /* Open questions beside the requirements (SPEC-19, SPEC-20). */
 .spec-questions {

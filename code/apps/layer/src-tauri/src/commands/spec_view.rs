@@ -15,7 +15,7 @@ use super::spec::{check_of, Check};
 use super::spec_commit::{changed_since_commit, repositories};
 use super::spec_copy::{list_files, read_file, spec_dir, toolset_of};
 use super::spec_install::{state_of, InstallState};
-use super::spec_work::{with_spec_moved, write_spec};
+use super::spec_work::{remove_spec, with_spec_moved, write_spec};
 use super::AppState;
 
 /// The toolset as the tab shows it: its name, and which extras it has. Not the
@@ -154,6 +154,13 @@ pub async fn write_spec_file(app: tauri::AppHandle, task_id: String, path: Strin
     super::blocking(app, move |state| write_spec(state, &state.config.task(&task_id)?, &path, &text)).await
 }
 
+/// Delete one file of the spec, for the Undo of a draft that made it: the
+/// same refusals as a write, and nothing when it is already gone.
+#[tauri::command]
+pub async fn remove_spec_file(app: tauri::AppHandle, task_id: String, path: String) -> Result<()> {
+    super::blocking(app, move |state| remove_spec(state, &state.config.task(&task_id)?, &path)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,6 +215,23 @@ mod tests {
 
         assert!(write_spec(&state, &task, "../escape.md", "x").is_err());
         assert!(write_spec(&state, &task, "notes.txt", "x").is_err());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_tab_removes_a_file_a_draft_made_and_nothing_else() {
+        let (root, state, task) = world(&["api"]);
+        let spec = root.join("tasks/T-1/spec");
+        put(&spec.join("design.md"), "# D\n");
+        put(&spec.join("notes.txt"), "not Kiro's");
+
+        remove_spec(&state, &task, "design.md").unwrap();
+        assert!(!spec.join("design.md").exists(), "the drafted file is gone, not emptied");
+        remove_spec(&state, &task, "design.md").expect("already gone is what was asked for");
+
+        assert!(remove_spec(&state, &task, "notes.txt").is_err(), "not a file Kiro keeps");
+        assert!(remove_spec(&state, &task, "../escape.md").is_err());
+        assert!(spec.join("notes.txt").exists());
         std::fs::remove_dir_all(&root).ok();
     }
 

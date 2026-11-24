@@ -13,7 +13,9 @@ import { emit } from "@tauri-apps/api/event";
  *   ?scenario=busy|empty|unlinked|tickets|reviews   which world (default busy)
  *   &view=work|tickets|reviews|chat|runs|repos
  *   &task=t-login          the selected task (none: the All agents overview)
- *   &tab=spec|terminals|diff|pr
+ *   &tab=terminals|spec|diff|pr
+ *   &toolset=openspec|superpowers   ACME-123's spec is that toolset's (§19); Kiro's otherwise
+ *   &install=failed|running         ACME-123's toolset install failed, or is still going
  *   &loop=checking|held|passed|gave_up   the task's agents on a loop (§21)
  *   &role=member          a member of the workspace, who sees its settings (SET-7)
  *   &tracker=github       the workspace's tickets are GitHub issues (TKT-15)
@@ -26,6 +28,7 @@ import { emit } from "@tauri-apps/api/event";
  *   __mock.emit("pty:activity", id)  deliver a backend event
  *   __mock.print(id, "text\r\n")     a pane prints, live to its terminal if shown
  *   __mock.world                     the data being served; edit it, then emit
+ *   __mock.spec.write(task, path, text)   an agent writes a file of the task's spec (SPEC-28)
  *
  * A command with no answer here logs "[mock] unanswered" and returns null.
  * That is the cue to add it to `answer` below.
@@ -55,7 +58,7 @@ import { limitAnswers } from "./limits";
 import { loopAnswers, seedLoop } from "./loop";
 import { profileAnswers } from "./profiles";
 import { runAnswers } from "./runs";
-import { specAnswers } from "./spec";
+import { specAnswers, specDisk } from "./spec";
 import { githubTracker } from "./tracker";
 import { ago, SCENARIOS } from "./world";
 
@@ -652,24 +655,8 @@ const answer: Record<string, Answer> = {
     "Continue ACME-123: Fix login race.\n\nWhat changed so far…\n\nThe last agent's terminal ended with…",
   // Specs (§19). A draft arrives in pieces, as the real one does.
   ...specAnswers(world),
-  // Installing a task's toolset (§19): done at once, nothing to fetch here.
-  install_spec_toolset: () => ({
-    toolset: "kiro",
-    version: null,
-    ok: true,
-    error: null,
-    running: false,
-  }),
   // Following the spec folder (§19): nothing is written to one here.
   watch_spec: () => null,
-  // Commit spec (§19): every repository took it.
-  commit_spec_cmd: (a) =>
-    (world.tasks.find((t) => t.id === a.taskId)?.checkouts ?? []).map((c) => ({
-      checkout_id: c.id,
-      repo: c.project_name,
-      ok: true,
-      detail: "committed 1a2b3c4",
-    })),
   // Epics (§26).
   ...epicAnswers(world, (a, taskId) => newPane(a, "agent", taskId)),
   // The run log (§22).
@@ -1310,6 +1297,8 @@ mockIPC(
   on: (cmd: string, fn: Answer) => overrides.set(cmd, fn),
   /** Each task's browser tab; edit one, then emit "browser:changed" with its task. */
   browsers,
+  /** An agent writing a file of a task's spec: `spec.write(task, path, text)`, and the tab follows. */
+  spec: specDisk,
   emit: (event: string, payload?: unknown) => emit(event, payload),
   print,
 };

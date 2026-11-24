@@ -81,7 +81,9 @@ harness is already served. Don't start a second server.
 | `scenario` | `busy` (everything connected, agents in every state), `empty` (first launch), `unlinked` (a task whose worktrees lost their repository), `tickets` (the PR sweep moved one ticket and wants a status chosen for another), `reviews` (a task with feedback on two PRs) | `busy` |
 | `view` | `work`, `tickets`, `reviews`, `chat`, `runs` (Usage), `repos` | `work` |
 | `task` | a task id from `src/__mock__/world.ts` (`t-login`, `t-audit`) | none, which is the All agents overview |
-| `tab` | `spec`, `terminals`, `diff`, `pr` | `terminals` |
+| `tab` | `terminals`, `spec`, `diff`, `pr` | `terminals` |
+| `toolset` | `openspec`, `superpowers`: ACME-123's spec is that toolset's (§19), laid out as its manifest says; Kiro's otherwise | Kiro |
+| `install` | `failed`, `running`: ACME-123's toolset install failed (Retry runs it, and writes the files), or is still going | done |
 | `loop` | `checking`, `held`, `passed`, `gave_up`: the selected task's agents on a loop (§21) | none |
 | `role` | `member`: a member of the workspace, not an admin, who sees its connections read-only (SET-7) | admin |
 | `theme` | a saved theme (SET-5): `night`, `day`, `tokyo-night`, `system`, … | the app's default |
@@ -98,6 +100,8 @@ __mock.on("github_open_prs", () => [{ checkout_id: "c-login-api", repo: "api", o
 __mock.world.panes[0].activity = "done"; __mock.emit("pty:activity", "pane-claude")
 __mock.emit("system-notify-click", "pane:t-login:pane-shell")   // a banner clicked (NOTE-4)
 __mock.print("pane-shell", "hello\r\n")    // a pane prints, live over its terminal's channel
+__mock.spec.write("t-login", "tasks.md", text)   // an agent writes a spec file: the Spec tab follows (SPEC-28)
+__mock.spec.commitFails = ["web"]             // Commit spec fails in web, and keeps api's
 ```
 
 - **The data** is in `src/__mock__/world.ts`, typed against `src/lib/types.ts`.

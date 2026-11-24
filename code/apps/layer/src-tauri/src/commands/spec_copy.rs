@@ -215,6 +215,21 @@ pub(crate) fn write_under(dir: &Path, rel: &str, text: &str) -> Result<()> {
     Ok(written?)
 }
 
+/// Delete one file of the spec: what Undo does to a draft that made the file,
+/// so it leaves no empty one behind. A file already gone is what was asked
+/// for. A folder is never removed, and neither is a link.
+pub(crate) fn remove_file(dir: &Path, t: &Toolset, rel: &str) -> Result<()> {
+    let path = target(dir, t, rel)?;
+    let _writing = WRITING.lock();
+    refuse_links(dir, rel)?;
+    match std::fs::symlink_metadata(&path) {
+        Ok(m) if m.is_file() => Ok(std::fs::remove_file(&path)?),
+        Ok(_) => Err(refused(format!("{rel} is not a file"))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
 // ---- Moving a spec from where it was kept before -------------------------
 
 /// A file's text, when it has any besides white space.

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useSpecs } from "../../lib/specs";
-import type { SpecView, TaskView } from "../../lib/types";
+import type { RepoResult, RepoSpecView, SpecView, TaskView } from "../../lib/types";
 import { useStore } from "../../store";
 import { Spinner } from "../ui";
 
@@ -8,9 +8,10 @@ const VERDICT_MARK: Record<string, string> = { met: "✓", "not met": "✗", unc
 
 /**
  * Beside the editor: what the file being edited needs first (`children`: the
- * open questions of the requirements), how far each repository is through the
- * spec's steps (SPEC-8), and where Commit spec stands for it. With Kiro's
- * Check against spec, each repository's last check.
+ * open questions of the requirements), and each repository's share of the
+ * spec: how far its steps are (SPEC-8) and where Commit spec stands for it,
+ * with what the last Commit spec did there. With Kiro's Check against spec,
+ * each repository's last check.
  */
 export function SpecSide({
   task,
@@ -22,6 +23,7 @@ export function SpecSide({
   children?: ReactNode;
 }) {
   const checking = useSpecs((s) => s.byTask[task.id]?.checking ?? null);
+  const committed = useSpecs((s) => s.byTask[task.id]?.committed ?? null);
   const check = useSpecs((s) => s.check);
   const fail = useStore((s) => s.fail);
   const checks = spec.toolset.extras.includes("check") && !task.epic;
@@ -34,14 +36,26 @@ export function SpecSide({
         <ul className="spec-tasks">
           {spec.repos.map((r) => {
             const busy = checking?.includes(r.checkout_id) ?? false;
+            const complete = r.total > 0 && r.done === r.total;
+            const result = committed?.find((c) => c.checkout_id === r.checkout_id);
             return (
-              <li key={r.checkout_id} className={r.total > 0 && r.done === r.total ? "done" : ""}>
-                <span className="mark">{r.total > 0 && r.done === r.total ? "✓" : "○"}</span>
-                <span>
-                  {r.folder}: {r.total === 0 ? "no steps" : `${r.done} of ${r.total} done`}
-                  {r.commit !== "none" && r.changed_since_commit && " · changed since committed"}
-                  {r.commit === "none" && " · kept by the app"}
-                </span>
+              <li key={r.checkout_id} className={complete ? "done" : ""}>
+                <span className="mark">{complete ? "✓" : "○"}</span>
+                <div className="spec-repo-text">
+                  <span>
+                    {r.folder}: {r.total === 0 ? "no steps" : `${r.done} of ${r.total} done`}
+                  </span>
+                  <CommitLine r={r} result={result} />
+                  {r.check && !busy && (
+                    <span className={`muted${r.check.stale ? " spec-stale" : ""}`}>
+                      {r.check.stale
+                        ? "Checked before the latest commits"
+                        : `Checked at ${r.check.sha.slice(0, 7)}`}
+                      {": "}
+                      {r.check.results.map((v) => `${v.id} ${VERDICT_MARK[v.verdict]}`).join(" ")}
+                    </span>
+                  )}
+                </div>
                 {checks && (
                   <button
                     className="ui-button"
@@ -53,15 +67,6 @@ export function SpecSide({
                   </button>
                 )}
                 {busy && <Spinner />}
-                {r.check && !busy && (
-                  <span className={`muted${r.check.stale ? " spec-stale" : ""}`}>
-                    {r.check.stale
-                      ? "Checked before the latest commits"
-                      : `Checked at ${r.check.sha.slice(0, 7)}`}
-                    {": "}
-                    {r.check.results.map((v) => `${v.id} ${VERDICT_MARK[v.verdict]}`).join(" ")}
-                  </span>
-                )}
               </li>
             );
           })}
@@ -69,4 +74,23 @@ export function SpecSide({
       </section>
     </aside>
   );
+}
+
+/** Where Commit spec stands for one repository: what it did just now, or what it would do. */
+function CommitLine({ r, result }: { r: RepoSpecView; result: RepoResult | undefined }) {
+  if (r.commit === "none") return <span className="muted">Kept by the app, not committed.</span>;
+  if (result && !result.ok) {
+    return <span className="spec-failed">{sentence(`Not committed: ${result.detail}`)}</span>;
+  }
+  if (result) return <span className="muted">{sentence(result.detail)}</span>;
+  return (
+    <span className="muted">
+      {r.changed_since_commit ? "Not in its last commit. Commit spec puts it there." : "Committed."}
+    </span>
+  );
+}
+
+function sentence(text: string): string {
+  const capital = text.charAt(0).toUpperCase() + text.slice(1);
+  return /[.!?]$/.test(capital) ? capital : `${capital}.`;
 }

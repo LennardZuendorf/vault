@@ -17,7 +17,7 @@ use crate::spec::{self, glob};
 
 use super::spec::check_of;
 use super::spec_commit::commit_spec;
-use super::spec_copy::{list_files, move_old_spec, read_file, spec_dir, toolset_of, write_file};
+use super::spec_copy::{list_files, move_old_spec, read_file, remove_file, spec_dir, toolset_of, write_file};
 use super::AppState;
 
 /// Every edit of a spec file, a tick or a whole new text, from an agent or
@@ -136,6 +136,15 @@ pub(crate) fn update_spec(
     let text = make(now.as_deref())?;
     write_file(&dir, &t, path, &text)?;
     Ok((now, text))
+}
+
+/// Delete one file of `task`'s spec, under the lock every write takes: the
+/// Spec tab's Undo of a draft that made the file.
+pub(crate) fn remove_spec(state: &AppState, task: &Task, path: &str) -> Result<()> {
+    let task = with_spec_moved(state, task)?;
+    let (t, dir) = (toolset_of(state, &task), spec_dir(state, &task));
+    let _one = EDITING.lock();
+    remove_file(&dir, &t, path)
 }
 
 /// What a spec tool answers, and the task whose spec it changed, so the

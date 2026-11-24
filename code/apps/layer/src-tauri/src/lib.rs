@@ -382,6 +382,7 @@ pub fn run() {
             commands::apply_spec_answers,
             commands::read_spec,
             commands::write_spec_file,
+            commands::remove_spec_file,
             commands::install_spec_toolset,
             commands::watch_spec,
             commands::commit_spec_cmd,

@@ -24,7 +24,7 @@ import type {
   WaitingPane,
 } from "./lib/types";
 
-export const TABS = ["spec", "terminals", "diff", "pr"] as const;
+export const TABS = ["terminals", "spec", "diff", "pr"] as const;
 export const VIEWS = ["henchman", "work", "tickets", "chat", "repos", "reviews", "runs"] as const;
 export type Tab = (typeof TABS)[number];
 export type View = (typeof VIEWS)[number];

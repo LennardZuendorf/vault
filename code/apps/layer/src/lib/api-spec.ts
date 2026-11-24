@@ -23,6 +23,9 @@ export const specApi = {
   /** Replace one file of the spec, as an agent's `spec_write` does. */
   writeSpecFile: (taskId: string, path: string, text: string) =>
     invoke<void>("write_spec_file", { taskId, path, text }),
+  /** Delete one file of the spec: Undo of a draft that made it, so no empty file is left. */
+  removeSpecFile: (taskId: string, path: string) =>
+    invoke<void>("remove_spec_file", { taskId, path }),
   /** Kiro's Draft: one part for the whole task, streamed as `spec:draft`, then written into its file. */
   draftSpec: (taskId: string, part: SpecPart, kind: SpecKind | null, requestId: string) =>
     invoke<Drafted>("draft_spec", { taskId, part, kind, requestId }),

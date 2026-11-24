@@ -1,14 +1,19 @@
 /**
- * Specs (§19) for the mock harness: the files of a Kiro spec in each task's
+ * Specs (§19) for the mock harness: the files of a spec in each task's
  * `spec/` folder, held in memory. ACME-123 has a spec under way for api and
- * web, with a check; ACME-130 has requirements drafted and half answered
- * (SPEC-19). Draft streams a file in a line at a time, as `spec:draft`; Apply
- * answers and Check answer from the requirements. Parsing is rough, as far
- * as the seeded texts need; `spec/owned.rs` is the real thing.
+ * web, with a check: Kiro's by default, OpenSpec's or superpowers' with
+ * `?toolset=` (`spec-worlds.ts`), and `?install=failed|running` shows the
+ * install it would be made with. ACME-130 has requirements drafted and half
+ * answered (SPEC-19). Draft streams a file in a line at a time, as
+ * `spec:draft`; Apply answers and Check answer from the requirements.
+ * `__mock.spec.write(task, path, text)` is an agent writing a file. Parsing is
+ * rough, as far as the seeded texts need; `spec/owned.rs` is the real thing.
  */
 import { emit } from "@tauri-apps/api/event";
 import { questions } from "../lib/questions";
 import type {
+  InstallState,
+  RepoResult,
   RepoSpecView,
   SpecCommit,
   SpecPart,
@@ -16,6 +21,7 @@ import type {
   SpecVerdict,
   SpecView,
 } from "../lib/types";
+import { WORLDS, type ToolsetWorld } from "./spec-worlds";
 import type { World } from "./world";
 
 type Check = { sha: string; at: number; results: SpecVerdict[]; stale: boolean };
@@ -184,22 +190,32 @@ function requirements(text: string) {
   );
 }
 
-/** A step file's steps, each with the repository whose `# heading` it is under. */
+/**
+ * A step file's steps, each with the repository that owns it: the nearest
+ * heading above (any level) that is exactly a folder's name or tags one
+ * (`## 2. API [api]`), or a `[folder]` tag on the step's own line.
+ */
 function steps(text: string, folders: string[]): SpecStep[] {
   let owner: string | null = null;
   const found: SpecStep[] = [];
+  const tagged = (line: string) => folders.find((f) => line.includes(`[${f}]`)) ?? null;
   for (const line of text.split("\n")) {
-    const heading = line.match(/^#\s+(.+)$/)?.[1].trim();
-    if (heading && folders.includes(heading)) owner = heading;
-    const m = line.match(/^- \[([ xX])\] (?:(\d+)\. )?(.+)$/);
-    if (m)
+    const heading = line.match(/^#{1,6}\s+(.+)$/)?.[1].trim();
+    if (heading) {
+      const named = folders.find((f) => f === heading) ?? tagged(heading);
+      if (named) owner = named;
+    }
+    const m = line.match(/^\s*- \[([ xX])\] (?:(\d+(?:\.\d+)*)\.? )?(.+)$/);
+    if (m) {
+      const own = tagged(m[3]) ?? owner;
       found.push({
         position: found.length + 1,
         label: m[2] ?? "",
         text: m[3].trim(),
         done: m[1] !== " ",
-        repos: owner ? [owner] : [],
+        repos: own ? [own] : [],
       });
+    }
   }
   return found;
 }
@@ -215,8 +231,32 @@ async function stream(requestId: unknown, path: string, text: string, pause = 40
   return sent;
 }
 
+/** An agent writing a file of a task's spec, for the console: the tab follows it (SPEC-28). */
+export const specDisk = {
+  /** Repositories whose Commit spec fails, by folder (`["web"]`); the others keep theirs. */
+  commitFails: [] as string[],
+  write: (_taskId: string, _path: string, _text: string): void => {},
+  remove: (_taskId: string, _path: string): void => {},
+};
+
+const KIRO: ToolsetWorld = {
+  toolset: {
+    id: "kiro",
+    name: "Kiro (Layer)",
+    version: null,
+    extras: ["draft", "check", "questions"],
+  },
+  holdsSteps: (path) => path === "tasks.md",
+  files: {},
+};
+
 export function specAnswers(world: World): Record<string, (a: Record<string, unknown>) => unknown> {
+  const params = new URLSearchParams(location.search);
   const kept = new Map<string, Record<string, string>>();
+  const installs = new Map<string, InstallState>();
+  // ACME-123's toolset; every other task is Kiro's.
+  const worldOf = (taskId: string): ToolsetWorld =>
+    (taskId === "t-login" ? WORLDS[params.get("toolset") ?? ""] : undefined) ?? KIRO;
   const checks = new Map<string, Check>();
   const files = (taskId: string) => {
     let f = kept.get(taskId);
@@ -233,22 +273,42 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
     return f["bugfix.md"] ?? f["requirements.md"] ?? "";
   };
 
+  const installing = params.get("install");
+  const seeded = (taskId: string) =>
+    Object.assign(
+      files(taskId),
+      worldOf(taskId) === KIRO
+        ? { "requirements.md": API_REQUIREMENTS, "design.md": API_DESIGN, "tasks.md": TASKS }
+        : worldOf(taskId).files,
+    );
+  const installState = (ok: boolean, running: boolean, error: string | null = null) => ({
+    toolset: worldOf("t-login").toolset.id,
+    version: worldOf("t-login").toolset.version,
+    ok,
+    error,
+    running,
+  });
   if (task("t-login")) {
-    Object.assign(files("t-login"), {
-      "requirements.md": API_REQUIREMENTS,
-      "design.md": API_DESIGN,
-      "tasks.md": TASKS,
-    });
-    checks.set("t-login:c-login-api", {
-      sha: "a1b2c3d4",
-      at: Date.now() - 600_000,
-      stale: true,
-      results: [
-        { id: "R-1", verdict: "met", evidence: "src/auth/session.ts:41, session.test.ts" },
-        { id: "R-2", verdict: "not met", evidence: "no retry in login.ts yet" },
-        { id: "R-3", verdict: "unclear", evidence: "the 409 body is not sent yet" },
-      ],
-    });
+    // An install that has not finished, or failed, has written nothing yet.
+    if (installing === "failed") {
+      installs.set("t-login", installState(false, false, "npx: command not found"));
+    } else if (installing === "running") {
+      installs.set("t-login", installState(false, true));
+    } else {
+      seeded("t-login");
+    }
+    // Check against spec is Kiro's extra.
+    if (worldOf("t-login") === KIRO)
+      checks.set("t-login:c-login-api", {
+        sha: "a1b2c3d4",
+        at: Date.now() - 600_000,
+        stale: true,
+        results: [
+          { id: "R-1", verdict: "met", evidence: "src/auth/session.ts:41, session.test.ts" },
+          { id: "R-2", verdict: "not met", evidence: "no retry in login.ts yet" },
+          { id: "R-3", verdict: "unclear", evidence: "the 409 body is not sent yet" },
+        ],
+      });
   }
   if (task("t-audit")) files("t-audit")["requirements.md"] = AUDIT_DRAFT;
 
@@ -261,7 +321,7 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
       .map((path) => ({
         path,
         text: f[path],
-        steps: path === "tasks.md" ? steps(f[path], folders) : [],
+        steps: worldOf(taskId).holdsSteps(path) ? steps(f[path], folders) : [],
       }));
     const repos: RepoSpecView[] = checkouts(taskId).map((c) => {
       const project = world.projects.find((p) => p.id === c.project_id);
@@ -275,29 +335,82 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
         commit: (project?.spec_commit ?? "whole") as SpecCommit,
         done: own.filter((s) => s.done).length,
         total: own.length,
-        changed_since_commit: list.length > 0 && project?.spec_commit !== "none",
+        changed_since_commit:
+          list.length > 0 && project?.spec_commit !== "none" && !committed.has(`${taskId}:${c.id}`),
         check: checks.get(`${taskId}:${c.id}`) ?? null,
       };
     });
     return structuredClone({
-      toolset: {
-        id: "kiro",
-        name: "Kiro (Layer)",
-        version: null,
-        extras: ["draft", "check", "questions"],
-      },
+      toolset: worldOf(taskId).toolset,
       dir: `~/.villain-worktrees/${t?.branch ?? taskId}/spec`,
       files: list,
       repos,
-      install: null,
+      install: installs.get(taskId) ?? null,
     });
+  };
+  /** Repositories whose spec was committed since it last changed, as `task:checkout`. */
+  const committed = new Set<string>();
+  const written = (taskId: string) => {
+    for (const key of committed) if (key.startsWith(`${taskId}:`)) committed.delete(key);
+  };
+  specDisk.write = (taskId, path, text) => {
+    files(taskId)[path] = text;
+    written(taskId);
+    void emit("spec:changed", taskId);
+  };
+  specDisk.remove = (taskId, path) => {
+    delete files(taskId)[path];
+    written(taskId);
+    void emit("spec:changed", taskId);
   };
 
   return {
     read_spec: (a) => view(a.taskId as string),
     write_spec_file: (a) => {
       files(a.taskId as string)[a.path as string] = a.text as string;
+      written(a.taskId as string);
       return null;
+    },
+    remove_spec_file: (a) => {
+      delete files(a.taskId as string)[a.path as string];
+      written(a.taskId as string);
+      return null;
+    },
+    // Retry: the install runs a moment, then has written the toolset's files.
+    install_spec_toolset: (a) => {
+      const taskId = a.taskId as string;
+      const running = installState(false, true);
+      installs.set(taskId, running);
+      setTimeout(() => {
+        seeded(taskId);
+        const ok = installState(true, false);
+        installs.set(taskId, ok);
+        void emit("spec:install", { taskId, state: ok });
+      }, 1200);
+      return running;
+    },
+    // Commit spec: each repository's own mode decides; one in
+    // `__mock.spec.commitFails` fails, the others keep theirs (SPEC-6).
+    commit_spec_cmd: (a) => {
+      const taskId = a.taskId as string;
+      return checkouts(taskId).map((c): RepoResult => {
+        const mode = world.projects.find((p) => p.id === c.project_id)?.spec_commit ?? "whole";
+        if (specDisk.commitFails.includes(c.project_name)) {
+          return {
+            checkout_id: c.id,
+            repo: c.project_name,
+            ok: false,
+            detail: "the pre-commit hook refused it",
+          };
+        }
+        if (mode !== "none") committed.add(`${taskId}:${c.id}`);
+        return {
+          checkout_id: c.id,
+          repo: c.project_name,
+          ok: true,
+          detail: mode === "none" ? "kept by the app" : "committed 1a2b3c4",
+        };
+      });
     },
     draft_spec: async (a) => {
       const taskId = a.taskId as string;

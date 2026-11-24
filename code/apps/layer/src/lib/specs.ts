@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api } from "./api";
+import { mergeDisk } from "./spec-edit";
 import type {
   AppliedAnswers,
   InstallState,
@@ -8,6 +9,17 @@ import type {
   SpecPart,
   SpecView,
 } from "./types";
+
+/**
+ * What an editor holds where it is not what its file holds: the text, what the
+ * file held when the editing began, and whether the file has changed since
+ * (`conflict`: an agent wrote it, SPEC-28).
+ */
+export interface Edit {
+  text: string;
+  base: string;
+  conflict: boolean;
+}
 
 /**
  * Each task's spec as the Spec tab holds it (§19). The spec is the files in
@@ -19,13 +31,15 @@ export interface SpecState {
   loaded: boolean;
   spec: SpecView | null;
   /** What each editor holds where it is not what the file holds, by path. */
-  edits: Record<string, string>;
+  edits: Record<string, Edit>;
   /** A Kiro draft or Apply answers being streamed in, and its request. */
   drafting: { requestId: string } | null;
   /** Repositories whose check is running (SPEC-15). */
   checking: string[];
   /** What the last draft or Apply answers replaced, for Undo (SPEC-20). */
   last: { path: string; before: string | null; results: AppliedAnswers | null } | null;
+  /** What the last Commit spec did in each repository, until the spec changes again. */
+  committed: RepoResult[] | null;
 }
 
 interface Specs {
@@ -36,12 +50,12 @@ interface Specs {
   /** Install the toolset again, for a task whose install failed. */
   retryInstall: (taskId: string) => Promise<void>;
   /** Commit spec: a row per repository, a failed one named with why. */
-  commitSpec: (taskId: string, repos?: string[]) => Promise<RepoResult[]>;
+  commitSpec: (taskId: string) => Promise<void>;
   load: (taskId: string) => Promise<void>;
   edit: (taskId: string, path: string, text: string) => void;
   /** Write what an editor holds into its file. */
   save: (taskId: string, path: string) => Promise<void>;
-  /** Let go of what an editor holds. */
+  /** Let go of what an editor holds: the file's text is shown again (Load theirs). */
   discard: (taskId: string, path: string) => void;
   /** Kiro's Draft: one part of the spec for the whole task. */
   draft: (taskId: string, part: SpecPart, kind: SpecKind | null) => Promise<void>;
@@ -54,9 +68,6 @@ interface Specs {
   chunk: (requestId: string, path: string, text: string) => void;
   /** An agent wrote or ticked, or one stopped (`spec:changed`). */
   changed: (taskId: string) => void;
-  /** The agent Start work picked, until Task 10's Start work rewires it (SPEC-18). */
-  pending: { taskId: string; agentId: string | null } | null;
-  setPending: (p: { taskId: string; agentId: string | null } | null) => void;
 }
 
 /** The file a Kiro spec's requirements are in: a bug's analysis, or else the requirements. */
@@ -67,7 +78,7 @@ export function requirementsPath(spec: SpecView | null | undefined): string | nu
 
 /** What an editor shows: the edit, else the file. */
 export function editorText(state: SpecState | undefined, path: string): string {
-  return state?.edits[path] ?? state?.spec?.files.find((f) => f.path === path)?.text ?? "";
+  return state?.edits[path]?.text ?? state?.spec?.files.find((f) => f.path === path)?.text ?? "";
 }
 
 /** The tab's badge: steps done of all, or else how many files there are. */
@@ -86,6 +97,7 @@ const EMPTY: SpecState = {
   drafting: null,
   checking: [],
   last: null,
+  committed: null,
 };
 
 export const useSpecs = create<Specs>((set, get) => {
@@ -94,11 +106,13 @@ export const useSpecs = create<Specs>((set, get) => {
       byTask: { ...s.byTask, [taskId]: { ...(s.byTask[taskId] ?? EMPTY), ...part } },
     }));
   const state = (taskId: string) => get().byTask[taskId] ?? EMPTY;
-  const without = (edits: Record<string, string>, path: string) => {
+  const without = (edits: Record<string, Edit>, path: string) => {
     const rest = { ...edits };
     delete rest[path];
     return rest;
   };
+  /** Reads started and answered in order, so a slow answer cannot put back an older spec. */
+  const reads = new Map<string, number>();
 
   /** A run that writes into a file, its text streamed into the editor first. */
   async function streamed(taskId: string, run: (requestId: string) => Promise<string>) {
@@ -119,27 +133,49 @@ export const useSpecs = create<Specs>((set, get) => {
   return {
     byTask: {},
     install: {},
-    installed: (taskId, state) => set((s) => ({ install: { ...s.install, [taskId]: state } })),
+    installed: (taskId, installState) => {
+      set((s) => ({ install: { ...s.install, [taskId]: installState } }));
+      // A finished install may have written files into the spec.
+      if (!installState.running) get().changed(taskId);
+    },
     retryInstall: async (taskId) => {
       get().installed(taskId, await api.installSpecToolset(taskId));
     },
-    commitSpec: (taskId, repos) => api.commitSpec(taskId, repos ?? null),
+    commitSpec: async (taskId) => {
+      const committed = await api.commitSpec(taskId);
+      put(taskId, { committed });
+      await get().load(taskId);
+    },
     load: async (taskId) => {
+      const mine = (reads.get(taskId) ?? 0) + 1;
+      reads.set(taskId, mine);
       const spec = await api.readSpec(taskId);
-      put(taskId, { loaded: true, spec });
+      if (reads.get(taskId) !== mine) return;
+      const now = state(taskId);
+      // A draft under way writes into the editors itself.
+      const edits = now.drafting ? now.edits : reconcile(now.edits, spec);
+      put(taskId, { loaded: true, spec, edits });
     },
     edit: (taskId, path, text) => {
-      const file = state(taskId).spec?.files.find((f) => f.path === path);
-      const same = file !== undefined && file.text === text;
-      put(taskId, {
-        edits: same ? without(state(taskId).edits, path) : { ...state(taskId).edits, [path]: text },
-        last: null,
-      });
+      const now = state(taskId);
+      const disk = now.spec?.files.find((f) => f.path === path)?.text;
+      const edits =
+        disk === text
+          ? without(now.edits, path)
+          : {
+              ...now.edits,
+              [path]: {
+                text,
+                base: now.edits[path]?.base ?? disk ?? "",
+                conflict: now.edits[path]?.conflict ?? false,
+              },
+            };
+      put(taskId, { edits, last: null });
     },
     save: async (taskId, path) => {
-      const text = state(taskId).edits[path];
-      if (text === undefined) return;
-      await api.writeSpecFile(taskId, path, text);
+      const edit = state(taskId).edits[path];
+      if (!edit) return;
+      await api.writeSpecFile(taskId, path, edit.text);
       put(taskId, { edits: without(state(taskId).edits, path) });
       await get().load(taskId);
     },
@@ -172,7 +208,9 @@ export const useSpecs = create<Specs>((set, get) => {
     undo: async (taskId) => {
       const last = state(taskId).last;
       if (!last) return;
-      await api.writeSpecFile(taskId, last.path, last.before ?? "");
+      // A draft that made the file leaves none behind, not an empty one.
+      if (last.before === null) await api.removeSpecFile(taskId, last.path);
+      else await api.writeSpecFile(taskId, last.path, last.before);
       put(taskId, { last: null, edits: without(state(taskId).edits, last.path) });
       await get().load(taskId);
     },
@@ -182,15 +220,37 @@ export const useSpecs = create<Specs>((set, get) => {
       );
       if (!entry) return;
       const [taskId, s] = entry;
-      put(taskId, { edits: { ...s.edits, [path]: text } });
+      const disk = s.spec?.files.find((f) => f.path === path)?.text ?? "";
+      put(taskId, { edits: { ...s.edits, [path]: { text, base: disk, conflict: false } } });
     },
     changed: (taskId) => {
-      if (state(taskId).loaded)
+      if (state(taskId).loaded) {
+        put(taskId, { committed: null });
         void get()
           .load(taskId)
           .catch(() => {});
+      }
     },
-    pending: null,
-    setPending: (pending) => set({ pending }),
   };
 });
+
+/**
+ * The editors once the files are read again: each keeps its text, and says so
+ * when its file is no longer what the editing began from (`mergeDisk`). An
+ * editor whose text is now the file's has nothing left to keep. Unchanged
+ * edits are the same objects, so nothing re-renders for them.
+ */
+function reconcile(edits: Record<string, Edit>, spec: SpecView): Record<string, Edit> {
+  let next = edits;
+  for (const [path, edit] of Object.entries(edits)) {
+    const disk = spec.files.find((f) => f.path === path)?.text ?? "";
+    if (disk === edit.text) {
+      next = { ...next };
+      delete next[path];
+      continue;
+    }
+    const { conflict } = mergeDisk({ text: edit.text, dirty: true, base: edit.base }, disk);
+    if (conflict !== edit.conflict) next = { ...next, [path]: { ...edit, conflict } };
+  }
+  return next;
+}

@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import { suggestBase } from "../../lib/derive";
 import { read, write } from "../../lib/persist";
-import { useSpecs } from "../../lib/specs";
 import { branchStem } from "../../lib/tracker";
 import type { AgentStatus, Ticket, Project } from "../../lib/types";
 import { useStore } from "../../store";
@@ -28,7 +27,6 @@ export function StartWorkDialog({
   const refreshPanes = useStore((s) => s.refreshPanes);
   const select = useStore((s) => s.select);
   const setTab = useStore((s) => s.setTab);
-  const setPendingSpec = useSpecs((s) => s.setPending);
   // Starting fails in the dialog, above its buttons (NOTE-6).
   const failure = useFailure();
   const { clear } = failure;
@@ -145,7 +143,6 @@ export function StartWorkDialog({
       await Promise.all([refreshTasks(), refreshPanes(), refreshIssues()]);
       select(task.id);
       if (spec) {
-        setPendingSpec({ taskId: task.id, agentId: epic ? null : agentId || null });
         setTab("spec");
       }
       // The task is selected and its ticket's card moved: nothing more to say (NOTE-7).
