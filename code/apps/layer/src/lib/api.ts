@@ -1,5 +1,6 @@
 import type { Operation, TrackerKind } from "@layer/types";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { specApi } from "./api-spec";
 import type {
   AcpVersion,
   AcpView,
@@ -46,14 +47,6 @@ import type {
   SlackConfig,
   GrafanaDatasource,
   StartTo,
-  AppliedAnswers,
-  Drafted,
-  InstallState,
-  SpecCheck,
-  SpecCommit,
-  SpecKind,
-  SpecPart,
-  SpecView,
   Started,
   Synced,
   Task,
@@ -90,6 +83,7 @@ import type {
 import type { RunLog } from "./types-runs";
 
 export const api = {
+  ...specApi,
   // projects
   listProjects: () => invoke<Project[]>("list_projects"),
   addProjects: (paths: string[], group?: string | null) =>
@@ -293,35 +287,6 @@ export const api = {
       description: args.description,
       kind: args.kind,
     }),
-  /** The task's spec: the toolset's files with their steps, each repository's share, the install. */
-  readSpec: (taskId: string) => invoke<SpecView>("read_spec", { taskId }),
-  /** Replace one file of the spec, as an agent's `spec_write` does. */
-  writeSpecFile: (taskId: string, path: string, text: string) =>
-    invoke<void>("write_spec_file", { taskId, path, text }),
-  /** Kiro's Draft: one part for the whole task, streamed as `spec:draft`, then written into its file. */
-  draftSpec: (taskId: string, part: SpecPart, kind: SpecKind | null, requestId: string) =>
-    invoke<Drafted>("draft_spec", { taskId, part, kind, requestId }),
-  /** Kiro's Apply answers: the answered open questions built into the requirements file (SPEC-20). */
-  applySpecAnswers: (taskId: string, requestId: string) =>
-    invoke<AppliedAnswers>("apply_spec_answers", { taskId, requestId }),
-  /** Kiro's Check against spec, for one repository (SPEC-15). */
-  checkSpec: (taskId: string, checkoutId: string) =>
-    invoke<SpecCheck>("check_spec", { taskId, checkoutId }),
-  /** Install the task's spec toolset again, after a failure; announced as `spec:install`. */
-  installSpecToolset: (taskId: string) => invoke<InstallState>("install_spec_toolset", { taskId }),
-  watchSpec: (taskId: string | null) => invoke<void>("watch_spec", { taskId }),
-  /**
-   * Commit spec: put the task's `spec/` into each repository per its
-   * `spec_commit` and commit it there. `repos` limits it to those folders.
-   */
-  commitSpec: (taskId: string, repos: string[] | null = null) =>
-    invoke<RepoResult[]>("commit_spec_cmd", { taskId, repos }),
-  setProjectSpecs: (
-    projectId: string,
-    toolset: string | null,
-    commit: SpecCommit,
-    folder: string,
-  ) => invoke<void>("set_project_specs", { projectId, toolset, commit, folder }),
   requestPrDescription: (taskId: string, paneId: string) =>
     invoke<string>("request_pr_description", { taskId, paneId }),
   takePrDescription: (taskId: string) => invoke<PrDraft | null>("take_pr_description", { taskId }),
