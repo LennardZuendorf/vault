@@ -9,7 +9,7 @@ import { useLair } from "./lib/henchman-lair";
 import { useOrders } from "./lib/henchman-orders";
 import { useSpecs } from "./lib/specs";
 import { useTheme } from "./lib/theme";
-import type { SpecPart, Target } from "./lib/types";
+import type { InstallState, SpecPart, Target } from "./lib/types";
 import type { HenchmanLair } from "./lib/types-henchman";
 import { startWorkspaceSync, useSession } from "./lib/workspace-sync";
 import { exitIsNews, useStore } from "./store";
@@ -358,9 +358,14 @@ export function Watchers() {
         .chunk(e.payload.request_id, e.payload.part, e.payload.checkout_id, e.payload.text);
     });
     const q = listen<string>("spec:changed", (e) => useSpecs.getState().changed(e.payload));
+    // A task's toolset being installed in the background, and how it went.
+    const r = listen<{ taskId: string; state: InstallState }>("spec:install", (e) =>
+      useSpecs.getState().installed(e.payload.taskId, e.payload.state),
+    );
     return () => {
       void p.then((un) => un());
       void q.then((un) => un());
+      void r.then((un) => un());
     };
   }, []);
 

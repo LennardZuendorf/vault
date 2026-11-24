@@ -7,6 +7,19 @@ export type SpecKind = "feature" | "bugfix";
 /** What Commit spec puts in a repository: all of it, its own part, or nothing. */
 export type SpecCommit = "whole" | "own" | "none";
 
+/**
+ * How installing a task's spec toolset stands (`commands/spec_install.rs`):
+ * what the Spec tab shows as a line and a dot. `running`: it is under way
+ * now, and `ok` is not yet its answer.
+ */
+export interface InstallState {
+  toolset: string;
+  version: string | null;
+  ok: boolean;
+  error: string | null;
+  running: boolean;
+}
+
 /** One requirement. `repos`: the folders that meet it; none named, every one (SPEC-1). */
 export interface SpecRequirement {
   id: string;

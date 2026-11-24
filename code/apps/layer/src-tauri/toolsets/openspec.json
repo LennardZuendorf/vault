@@ -6,7 +6,15 @@
   "steps": ["openspec/changes/*/tasks.md"],
   "install": [
     {
-      "run": ["npx", "-y", "@fission-ai/openspec@{version}", "init", "--tools", "{openspec_tools}", "."],
+      "run": [
+        "npx",
+        "-y",
+        "@fission-ai/openspec@{version}",
+        "init",
+        "--tools",
+        "{openspec_tools}",
+        "."
+      ],
       "cwd": "spec",
       "timeout_secs": 300
     }

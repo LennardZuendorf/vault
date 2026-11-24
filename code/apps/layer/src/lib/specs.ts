@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api } from "./api";
 import type {
   AppliedAnswers,
+  InstallState,
   SpecKind,
   SpecPart,
   SpecPartView,
@@ -39,6 +40,11 @@ export interface SpecFile {
 
 interface Specs {
   byTask: Record<string, SpecState>;
+  /** How each task's toolset install stands, as last announced (`spec:install`). */
+  install: Record<string, InstallState>;
+  installed: (taskId: string, state: InstallState) => void;
+  /** Install the toolset again, for a task whose install failed. */
+  retryInstall: (taskId: string) => Promise<void>;
   load: (taskId: string) => Promise<void>;
   edit: (taskId: string, file: SpecFile, text: string) => void;
   /** Draft one file: requirements or design for the task, or every repository's tasks. */
@@ -184,6 +190,11 @@ export const useSpecs = create<Specs>((set, get) => {
 
   return {
     byTask: {},
+    install: {},
+    installed: (taskId, state) => set((s) => ({ install: { ...s.install, [taskId]: state } })),
+    retryInstall: async (taskId) => {
+      get().installed(taskId, await api.installSpecToolset(taskId));
+    },
     load: async (taskId) => {
       const spec = await api.readSpec(taskId);
       // An edit under way here wins over the draft kept on disk, which is

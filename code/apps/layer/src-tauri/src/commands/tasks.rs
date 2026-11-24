@@ -505,6 +505,8 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     // The folder describes itself from the moment it exists, so an agent
     // started by hand in it is no worse off than one the app launched.
     let _ = write_task_context(state, &task);
+    // Its toolset goes in once the worktrees are there, and in the background.
+    super::spec_install::start(&task.id);
 
     Ok(task)
 }
@@ -565,6 +567,8 @@ pub(crate) fn add_repo(state: &AppState, task_id: &str, project_id: &str) -> Res
     // The folder gained a sibling, so the description of it is now wrong.
     if let Ok(task) = state.config.task(task_id) {
         let _ = write_task_context(state, &task);
+        // A task that had no folder until now has no install yet.
+        super::spec_install::start_unless_installed(state, &task);
     }
 
     let told = tell_agents(

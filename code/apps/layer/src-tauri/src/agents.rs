@@ -786,6 +786,20 @@ pub fn auto_mode_args(def: &AgentDef) -> &'static [&'static str] {
     }
 }
 
+/// What lets an agent started inside a worktree see the skills a toolset
+/// installed in the task folder above it (§19). Claude Code looks for
+/// `.claude/skills/` in its working directory and its parents only up to the
+/// repository root, which is the worktree, and loads those of a directory
+/// added with `--add-dir` (code.claude.com/docs/en/skills, "Load skills in
+/// monorepos and subdirectories"). The option takes any number of
+/// directories, so these go last: a prompt after it would be read as one.
+pub fn task_folder_args(def: &AgentDef, folder: &Path) -> Vec<String> {
+    match def.integration {
+        Integration::Claude => vec!["--add-dir".into(), folder.to_string_lossy().into()],
+        _ => Vec::new(),
+    }
+}
+
 /// Argv and any text that must be typed in after start-up.
 pub fn launch_args(def: &AgentDef, prompt: Option<&str>) -> (Vec<String>, Option<String>) {
     let mut args: Vec<String> = def.base_args.iter().map(|s| s.to_string()).collect();
@@ -1125,6 +1139,15 @@ mod tests {
         assert_eq!(auto_mode_args(find("claude").unwrap()), ["--permission-mode", "auto"]);
         for a in AGENTS.iter().filter(|a| a.id != "claude") {
             assert!(auto_mode_args(a).is_empty(), "{}", a.id);
+        }
+    }
+
+    #[test]
+    fn claude_code_is_shown_the_task_folder_for_its_skills_and_no_other_cli_is() {
+        let folder = Path::new("/tasks/T-1");
+        assert_eq!(task_folder_args(find("claude").unwrap(), folder), ["--add-dir", "/tasks/T-1"]);
+        for a in AGENTS.iter().filter(|a| a.id != "claude") {
+            assert!(task_folder_args(a, folder).is_empty(), "{}", a.id);
         }
     }
 }

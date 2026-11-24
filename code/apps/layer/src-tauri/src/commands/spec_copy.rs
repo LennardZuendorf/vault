@@ -35,8 +35,8 @@ const DEFAULT_TOOLSET: &str = "kiro";
 
 /// Walks stop here, so a spec folder that grew a `node_modules` of its own
 /// (an install's output) cannot make a listing take minutes.
-const MOST_FILES: usize = 5000;
-const MOST_DEPTH: usize = 16;
+pub(crate) const MOST_FILES: usize = 5000;
+pub(crate) const MOST_DEPTH: usize = 16;
 
 /// Every write and every move takes this one lock. Two agents saving at once
 /// then write one after the other, and a move checks that the folder is

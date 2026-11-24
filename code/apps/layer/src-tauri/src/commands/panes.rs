@@ -337,6 +337,13 @@ pub(crate) fn start_agent(
     if state.config.with(|c| c.ui.agents_auto_mode) {
         args.extend(agents::auto_mode_args(def).iter().map(|a| a.to_string()));
     }
+    // Started in a worktree, it cannot see the skills a toolset installed in
+    // the task folder above it unless told to look there. Last: see the doc.
+    if own.is_none() {
+        if let Some(folder) = agent_file_dir(state, &task) {
+            args.extend(agents::task_folder_args(def, &folder));
+        }
+    }
 
     let pane = state.ptys.spawn(
         app,
@@ -430,7 +437,9 @@ pub(crate) fn chat_room(state: &AppState, id: &str) -> Result<PathBuf> {
 
 /// Everything the app itself writes into a task folder.
 ///
-/// `spec/` is not in it, and must not be: it is where the user and their
+/// A spec toolset's install is in it by its record (`INSTALL_RECORD`), which
+/// `remove_generated` reads to take what was installed. `spec/` is not in it,
+/// and must not be: it is where the user and their
 /// agents write the task's spec, not something the app regenerates. Deleting
 /// a task keeps it first (`spec_copy::archive_spec`), and Clean up reports a
 /// folder holding one as holding something the app did not make.
@@ -450,6 +459,7 @@ const GENERATED_FILES: &[&str] = &[
     FIRST_PROMPT,
     crate::loops::CHECKS_FILE,
     super::henchman_tools::MESSAGE_FILE,
+    super::spec_install::INSTALL_RECORD,
 ];
 
 /// An opening prompt too long to type, for a CLI that takes it typed.
@@ -499,6 +509,8 @@ pub(crate) fn is_generated(rel: &str) -> bool {
 /// (DISK-2), and when Clean up finds a folder no task uses. Anything else
 /// in there is the user's, and stays.
 pub(crate) fn remove_generated(dir: &Path) {
+    // First, while the record that lists them is still there.
+    super::spec_install::remove_written(dir);
     for name in GENERATED_FILES.iter().chain(LEFT_BY_OTHERS) {
         let _ = std::fs::remove_file(dir.join(name));
     }

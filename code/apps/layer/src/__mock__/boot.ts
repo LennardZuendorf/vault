@@ -650,6 +650,14 @@ const answer: Record<string, Answer> = {
     "Continue ACME-123: Fix login race.\n\nWhat changed so far…\n\nThe last agent's terminal ended with…",
   // Specs (§19). A draft arrives in pieces, as the real one does.
   ...specAnswers(world),
+  // Installing a task's toolset (§19): done at once, nothing to fetch here.
+  install_spec_toolset: () => ({
+    toolset: "kiro",
+    version: null,
+    ok: true,
+    error: null,
+    running: false,
+  }),
   // Epics (§26).
   ...epicAnswers(world, (a, taskId) => newPane(a, "agent", taskId)),
   // The run log (§22).

@@ -47,6 +47,7 @@ import type {
   GrafanaDatasource,
   StartTo,
   AppliedAnswers,
+  InstallState,
   SpecApproved,
   SpecCheck,
   SpecCommit,
@@ -319,6 +320,8 @@ export const api = {
     invoke<AppliedAnswers>("apply_spec_answers", { taskId, requestId }),
   checkSpec: (taskId: string, checkoutId: string) =>
     invoke<SpecCheck>("check_spec", { taskId, checkoutId }),
+  /** Install the task's spec toolset again, after a failure; announced as `spec:install`. */
+  installSpecToolset: (taskId: string) => invoke<InstallState>("install_spec_toolset", { taskId }),
   /** What Start agent adds to the opening prompt: work through the tasks (SPEC-12). */
   specWorkPrompt: (taskId: string, checkoutId: string | null) =>
     invoke<string>("spec_work_prompt", { taskId, checkoutId }),
