@@ -31,33 +31,43 @@ export function HenchmanView() {
   // Off in Settings (HEN-16): the tab is the lair alone. On until settings say.
   const off = useStore((s) => s.settings?.henchman_on === false);
   const toggleSettings = useStore((s) => s.toggleSettings);
+  // Its saved conversation would not come back (HEN-2): kept, and a new one
+  // is offered beside the error.
+  const [stuck, setStuck] = useState(false);
 
-  async function wake() {
+  /** Wake it, where it left off unless `fresh`. */
+  async function wake(fresh = false) {
     // One not put back at launch (PANE-7) comes back with its conversation.
     // Forgotten and replaced, it began a new one at every restart that left
     // it waiting.
     const left = useStore.getState().waiting.filter(isWaitingHenchman);
-    const back = left[left.length - 1];
+    const back = fresh ? undefined : left[left.length - 1];
     if (waking || (!back && !agent)) return;
     setWaking(true);
     failure.clear();
     try {
       const forget = (ids: string[]) =>
         Promise.all(ids.map((id) => api.forgetWaitingPane(id).catch(() => {})));
-      await forget(left.filter((w) => w !== back).map((w) => w.id));
       if (back) {
-        // One that cannot come back is let go, so the next click wakes a
-        // new one instead of failing again.
-        await api.reopenWaitingPane(back.id).catch(async (e: unknown) => {
-          await forget([back.id]);
-          throw e;
-        });
+        // Kept until it is back. Let go at any failure, the pane limit
+        // reached or its CLI missing for a moment lost the conversation, and
+        // the next click began a new one.
+        await api.reopenWaitingPane(back.id);
+        await forget(left.filter((w) => w !== back).map((w) => w.id));
       } else if (agent) {
         await api.spawnHenchman(agent.id);
+        // Started over: none waits to be woken in place of this one.
+        await forget(left.map((w) => w.id));
       }
+      setStuck(false);
       await Promise.all([refreshPanes(), useStore.getState().refreshWaiting()]);
     } catch (e) {
+      setStuck(back !== undefined);
       failure.fail(e);
+      await useStore
+        .getState()
+        .refreshWaiting()
+        .catch(() => {});
     } finally {
       setWaking(false);
     }
@@ -113,6 +123,11 @@ export function HenchmanView() {
                     : "No agent that talks over ACP"}
             </button>
             <ErrorMessage>{failure.error}</ErrorMessage>
+            {stuck && agent && asleep.length > 0 && !waking && (
+              <button className="ui-link" onClick={() => void wake(true)}>
+                Start a new conversation with {agent.name} instead
+              </button>
+            )}
           </div>
         )}
       </div>

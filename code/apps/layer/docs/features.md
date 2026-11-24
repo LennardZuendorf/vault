@@ -3613,7 +3613,10 @@ Slack come later.
   waiting. One that waits all the same is woken from its tab where it
   left off, in its own conversation. Its saved record stays until it is
   back: taken off first, an app that quit while it was starting forgot
-  its conversation. Before, it came back in the order
+  its conversation. One that fails to come back keeps waiting, and its
+  tab offers a new conversation beside the error: let go at any failure,
+  the pane limit reached or its CLI missing for a moment lost the
+  conversation. Before, it came back in the order
   it was opened: with twelve agents open at a quit it waited, and Wake
   forgot it and began a new conversation. One that fails to come back at
   launch waits too, and the user is told: counted down like other panes
