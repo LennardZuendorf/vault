@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub use layer_domain::SpecCommit;
 
 /// `spec_commit` as written now (`"own"`), or as `specs_in_app` was.
-fn commit_or_flag<'de, D: Deserializer<'de>>(d: D) -> Result<SpecCommit, D::Error> {
+pub(super) fn commit_or_flag<'de, D: Deserializer<'de>>(d: D) -> Result<SpecCommit, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Either {

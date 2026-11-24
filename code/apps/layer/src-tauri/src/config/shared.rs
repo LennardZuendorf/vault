@@ -56,6 +56,25 @@ pub struct Held {
     pub settings: Value,
 }
 
+impl Shared {
+    /// Say `specs_in_app` as `spec_commit` in the changes still queued: the
+    /// workspace refuses a key it does not know, so an update an earlier
+    /// build queued would never be taken. True when one was rewritten.
+    pub fn rename_specs_in_app(&mut self) -> bool {
+        let mut changed = false;
+        for op in &mut self.outbox {
+            let Some(data) = op.get_mut("data").and_then(Value::as_object_mut) else { continue };
+            let Some(old) = data.remove("specs_in_app") else { continue };
+            changed = true;
+            if !data.contains_key("spec_commit") {
+                let commit = if old.as_bool() == Some(true) { "none" } else { "whole" };
+                data.insert("spec_commit".into(), Value::from(commit));
+            }
+        }
+        changed
+    }
+}
+
 /// A repository of the workspace's that is not on this Mac.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Elsewhere {
@@ -73,7 +92,7 @@ pub struct Elsewhere {
     pub spec_folder: Option<String>,
     #[serde(default)]
     pub spec_toolset: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "specs_in_app", deserialize_with = "super::project::commit_or_flag")]
     pub spec_commit: SpecCommit,
     /// Who added it, by name, when the workspace says.
     #[serde(default)]
@@ -646,5 +665,19 @@ mod tests {
         change(&mut cfg, |c| c.jira = Some(acme_jira("me@acme.example")));
         assert_eq!(cfg.shared.connections.get("jira"), Some(&id));
         assert!(cfg.shared.outbox.is_empty(), "{:?}", cfg.shared.outbox);
+    }
+
+    #[test]
+    fn a_not_on_this_mac_record_with_specs_in_app_reads_as_commit_none() {
+        let old = |flag: &str| -> Elsewhere {
+            serde_json::from_str(&format!(
+                r#"{{"id":"r","remote_key":"github.com/acme/api","name":"api","default_branch":"main"{flag}}}"#
+            ))
+            .unwrap()
+        };
+        assert_eq!(old(r#","specs_in_app":true"#).spec_commit, SpecCommit::None);
+        assert_eq!(old(r#","specs_in_app":false"#).spec_commit, SpecCommit::Whole);
+        assert_eq!(old("").spec_commit, SpecCommit::Whole);
+        assert_eq!(old(r#","spec_commit":"own""#).spec_commit, SpecCommit::Own);
     }
 }

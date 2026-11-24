@@ -325,7 +325,7 @@ fn apply(state: &AppState, remote: Remote, ids: &[String]) -> Vec<Cleaned> {
             let done = if p.item.verdict == Verdict::Blocked {
                 Err(Error::Other(p.item.detail.clone()))
             } else {
-                remove(&p.action)
+                remove(&p.action, state.config.folder())
             };
             results.push(Cleaned {
                 id: p.item.id.clone(),
@@ -337,9 +337,13 @@ fn apply(state: &AppState, remote: Remote, ids: &[String]) -> Vec<Cleaned> {
     results
 }
 
-fn remove(action: &Action) -> Result<()> {
+fn remove(action: &Action, config_folder: &Path) -> Result<()> {
     match action {
         Action::Folder(dir, worktrees, everything) => {
+            // A task dropped with its repository leaves its folder, and with
+            // it a spec nobody committed: kept first, or this is where it is
+            // lost. When it cannot be kept, nothing in the folder is removed.
+            super::spec_copy::archive_leftover(config_folder, dir)?;
             for (owner, wt) in worktrees {
                 git::remove_worktree(owner, &wt.to_string_lossy(), false)?;
             }
@@ -638,6 +642,44 @@ mod tests {
                 && succeeded(&done, &found, "store_branch", "review/api-5")
         );
         assert!(!crate::git::branch_exists(&store, "DONE-1") && crate::git::branch_exists(&store, "AHEAD-1"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_leftover_folder_holding_a_spec_keeps_the_spec_when_it_goes() {
+        let (root, cfg) = setup();
+        let state = state(&root, cfg);
+        let left = root.join("tasks/ACME-7");
+        std::fs::create_dir_all(left.join("spec/openspec/changes/x")).unwrap();
+        std::fs::write(left.join("spec/openspec/changes/x/tasks.md"), "- [ ] one\n").unwrap();
+
+        let found = items(&state);
+        assert_eq!(verdict(&found, "folder", "ACME-7"), Some(Verdict::Risky), "the spec is not the app's");
+        let ids: Vec<String> = found.iter().filter(|i| i.kind == "folder").map(|i| i.id.clone()).collect();
+        let done = apply(&state, Remote::default(), &ids);
+
+        assert!(succeeded(&done, &found, "folder", "ACME-7"), "{done:?}");
+        assert!(!left.exists());
+        let kept = state.config.folder().join("specs/ACME-7/openspec/changes/x/tasks.md");
+        assert_eq!(std::fs::read_to_string(kept).unwrap(), "- [ ] one\n");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_leftover_folder_whose_spec_cannot_be_kept_is_left_whole() {
+        let (root, cfg) = setup();
+        let state = state(&root, cfg);
+        let left = root.join("tasks/ACME-8");
+        let deep = (0..20).map(|n| format!("d{n}")).collect::<Vec<_>>().join("/");
+        std::fs::create_dir_all(left.join("spec").join(&deep)).unwrap();
+        std::fs::write(left.join("spec").join(&deep).join("x.md"), "deep").unwrap();
+
+        let found = items(&state);
+        let ids: Vec<String> = found.iter().filter(|i| i.kind == "folder").map(|i| i.id.clone()).collect();
+        let done = apply(&state, Remote::default(), &ids);
+
+        assert!(!succeeded(&done, &found, "folder", "ACME-8"));
+        assert!(left.join("spec").join(&deep).join("x.md").is_file(), "nothing was removed");
         std::fs::remove_dir_all(&root).ok();
     }
 }

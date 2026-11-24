@@ -338,28 +338,38 @@ pub(crate) fn move_old_spec(state: &AppState, task: &Task) -> Result<bool> {
 /// this Mac (SPEC-3). It copies and leaves the folder: removing it is the
 /// caller's, once this has succeeded. A spec already kept there (a task with
 /// no folder of its own) or without a file is not copied. A name taken by
-/// another task's archive gets `-2`, `-3`, and so on. Links are not followed.
+/// another task's archive gets `-2`, `-3`, and so on.
 pub(crate) fn archive_spec(state: &AppState, task: &Task) -> Result<()> {
     let Some(src) = working_dir(state, task) else { return Ok(()) };
-    if !std::fs::symlink_metadata(&src).is_ok_and(|m| m.is_dir()) {
+    archive_folder(state.config.folder(), &src, &spec::folder_name(&task.branch))
+}
+
+/// The same for a spec in a task folder no task uses any more (Clean up):
+/// `dir/spec`, kept under the folder's own name.
+pub(crate) fn archive_leftover(config_folder: &Path, dir: &Path) -> Result<()> {
+    let name = dir.file_name().map(|n| spec::folder_name(&n.to_string_lossy())).unwrap_or_else(|| "task".into());
+    archive_folder(config_folder, &dir.join(WORKING), &name)
+}
+
+/// Copy the files of the spec folder `src` into `<config folder>/specs/<name>/`.
+/// It fails, and keeps nothing, when it cannot take all of it: the caller
+/// removes the folder next, and what was not copied would be gone.
+fn archive_folder(config_folder: &Path, src: &Path, name: &str) -> Result<()> {
+    if !std::fs::symlink_metadata(src).is_ok_and(|m| m.is_dir()) {
         return Ok(());
     }
     let _writing = WRITING.lock();
-    let kept = state.config.folder().join("specs");
+    let kept = config_folder.join("specs");
     // `kept` is made by the first file copied into it, so a spec with no file
     // leaves nothing behind.
     let stage = kept.join(format!(".archiving-{}", uuid::Uuid::new_v4()));
-    let copied = copy_files(&src, &stage, 0);
-    let result = match copied {
+    let result = match copy_files(src, &stage, 0, &mut 0) {
         Ok(0) => Ok(()),
-        Ok(_) => {
-            let name = spec::folder_name(&task.branch);
-            (1..100)
-                .map(|n| if n == 1 { kept.join(&name) } else { kept.join(format!("{name}-{n}")) })
-                .find(|p| std::fs::symlink_metadata(p).is_err())
-                .ok_or_else(|| refused(format!("there are 99 saved specs called {name} already")))
-                .and_then(|to| Ok(std::fs::rename(&stage, to)?))
-        }
+        Ok(_) => (1..100)
+            .map(|n| if n == 1 { kept.join(name) } else { kept.join(format!("{name}-{n}")) })
+            .find(|p| std::fs::symlink_metadata(p).is_err())
+            .ok_or_else(|| refused(format!("there are 99 saved specs called {name} already")))
+            .and_then(|to| Ok(std::fs::rename(&stage, to)?)),
         Err(e) => Err(e),
     };
     // A stage that was not renamed away is a partial copy.
@@ -369,31 +379,41 @@ pub(crate) fn archive_spec(state: &AppState, task: &Task) -> Result<()> {
 
 /// Take `task`'s spec folder out of its task folder, once `archive_spec` kept
 /// it. Never the config folder's copy, and a link is removed, not followed.
-pub(crate) fn remove_spec(state: &AppState, task: &Task) {
-    let Some(dir) = working_dir(state, task) else { return };
+pub(crate) fn remove_spec(state: &AppState, task: &Task) -> Result<()> {
+    let Some(dir) = working_dir(state, task) else { return Ok(()) };
     match std::fs::symlink_metadata(&dir) {
-        Ok(m) if m.is_dir() => {
-            let _ = std::fs::remove_dir_all(&dir);
-        }
-        Ok(_) => {
-            let _ = std::fs::remove_file(&dir);
-        }
-        Err(_) => {}
+        Ok(m) if m.is_dir() => Ok(std::fs::remove_dir_all(&dir)?),
+        Ok(_) => Ok(std::fs::remove_file(&dir)?),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
     }
 }
 
 /// Copy the regular files under `from` into `to`, making the folders they
-/// need and no others; how many were copied.
-fn copy_files(from: &Path, to: &Path, depth: usize) -> Result<usize> {
+/// need and no others; how many were copied. Links are not followed and not
+/// copied, and a `node_modules` is not kept: it is what an install writes and
+/// can be written again. A folder nested deeper than `MOST_DEPTH`, or more
+/// than `MOST_FILES` files, is an error, not a silent gap in the copy.
+fn copy_files(from: &Path, to: &Path, depth: usize, total: &mut usize) -> Result<usize> {
     let mut copied = 0;
     for entry in std::fs::read_dir(from)?.flatten() {
         let kind = entry.file_type()?;
         let into = to.join(entry.file_name());
-        if kind.is_dir() && depth < MOST_DEPTH {
-            copied += copy_files(&entry.path(), &into, depth + 1)?;
+        if kind.is_dir() {
+            if entry.file_name() == "node_modules" {
+                continue;
+            }
+            if depth >= MOST_DEPTH {
+                return Err(refused(format!("{} is nested too deeply to keep", entry.path().display())));
+            }
+            copied += copy_files(&entry.path(), &into, depth + 1, total)?;
         } else if kind.is_file() {
+            if *total >= MOST_FILES {
+                return Err(refused(format!("{} holds more than {MOST_FILES} files to keep", from.display())));
+            }
             std::fs::create_dir_all(to)?;
             std::fs::copy(entry.path(), &into)?;
+            *total += 1;
             copied += 1;
         }
     }
@@ -779,7 +799,7 @@ mod tests {
         assert!(!kept.join("link.md").exists(), "a link is not followed");
         assert!(spec.join("requirements.md").is_file(), "archiving copies; deleting is the caller's");
 
-        remove_spec(&state, &task);
+        remove_spec(&state, &task).unwrap();
         assert!(!spec.exists());
 
         // A later task with the same branch name does not overwrite it.
@@ -802,6 +822,51 @@ mod tests {
         put(&root.join("specs/api/T-1/requirements.md"), "kept");
         archive_spec(&state, &old).unwrap();
         assert!(!root.join("specs/T-1").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_spec_too_deep_or_too_big_to_keep_stops_the_delete_and_is_left_alone() {
+        let (root, state, task) = world(&["api"]);
+        let spec = root.join("tasks/T-1/spec");
+        put(&spec.join("requirements.md"), "reqs");
+        let deep = (0..=MOST_DEPTH + 1).map(|n| format!("d{n}")).collect::<Vec<_>>().join("/");
+        put(&spec.join(&deep).join("x.md"), "deep");
+
+        let err = archive_spec(&state, &task).unwrap_err().to_string();
+        assert!(err.contains("nested too deeply"), "{err}");
+        assert!(!root.join("specs").join("T-1").exists(), "no half-copy is kept");
+        assert!(std::fs::read_dir(root.join("specs")).map(|mut d| d.next().is_none()).unwrap_or(true));
+        assert!(spec.join(&deep).join("x.md").is_file(), "nothing was removed");
+
+        std::fs::remove_dir_all(spec.join("d0")).unwrap();
+        for n in 0..=MOST_FILES {
+            put(&spec.join(format!("openspec/changes/c/{n}.md")), "");
+        }
+        let err = archive_spec(&state, &task).unwrap_err().to_string();
+        assert!(err.contains("more than"), "{err}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn an_installs_node_modules_is_not_kept_with_the_spec() {
+        let (root, state, task) = world(&["api"]);
+        let spec = root.join("tasks/T-1/spec");
+        put(&spec.join("requirements.md"), "reqs");
+        put(&spec.join("node_modules/pkg/index.js"), "x");
+        archive_spec(&state, &task).unwrap();
+        assert!(root.join("specs/T-1/requirements.md").is_file());
+        assert!(!root.join("specs/T-1/node_modules").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_leftover_folders_spec_is_kept_under_the_folders_name() {
+        let (root, _, _) = world(&["api"]);
+        let left = root.join("tasks/ACME-7");
+        put(&left.join("spec/requirements.md"), "reqs");
+        archive_leftover(&root, &left).unwrap();
+        assert_eq!(get(&root.join("specs/ACME-7/requirements.md")), "reqs");
         std::fs::remove_dir_all(&root).ok();
     }
 }

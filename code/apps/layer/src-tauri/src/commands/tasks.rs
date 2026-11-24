@@ -891,7 +891,7 @@ fn delete_task_inner(state: &AppState, id: String, force: bool, finished: bool) 
     // task, which a second Delete finishes (the worktrees are already gone).
     super::spec_copy::archive_spec(state, &task)?;
     if let Some(dir) = agent_file_dir(state, &task) {
-        super::spec_copy::remove_spec(state, &task);
+        super::spec_copy::remove_spec(state, &task)?;
         remove_generated(&dir);
     }
     let _ = std::fs::remove_dir(&task.root);
@@ -1065,6 +1065,25 @@ mod tests {
         let kept = root.join("specs/ACME-1-spec/openspec/changes/x/tasks.md");
         assert_eq!(std::fs::read_to_string(kept).unwrap(), "- [ ] one\n");
         assert!(state.config.task(&task.id).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_spec_that_cannot_be_kept_stops_the_delete_and_stays_with_its_task() {
+        let root = std::env::temp_dir().join(format!("vl-tasks-{}", uuid::Uuid::new_v4()));
+        let api = github_and_clone(&root, "api", &["main"]);
+        let state = state(&root, vec![project("api", &api, "main")]);
+        let task = task_on(&state, "api", "main");
+        let deep = (0..20).map(|n| format!("d{n}")).collect::<Vec<_>>().join("/");
+        let spec = Path::new(&task.root).join("spec").join(&deep);
+        std::fs::create_dir_all(&spec).unwrap();
+        std::fs::write(spec.join("x.md"), "deep").unwrap();
+
+        let err = delete_task_inner(&state, task.id.clone(), true, false).unwrap_err().to_string();
+
+        assert!(err.contains("nested too deeply"), "{err}");
+        assert!(spec.join("x.md").is_file(), "what could not be copied was not deleted");
+        assert!(state.config.task(&task.id).is_ok(), "the task stays, for a second try");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

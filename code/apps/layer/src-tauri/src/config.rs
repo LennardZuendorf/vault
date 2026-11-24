@@ -315,7 +315,10 @@ impl AppConfig {
             return false;
         }
         let from = self.version;
-        let bumped = from != SCHEMA_VERSION;
+        // Done whatever the version: a change queued by an earlier build of
+        // this version still carries the old key.
+        let renamed = self.shared.rename_specs_in_app();
+        let bumped = from != SCHEMA_VERSION || renamed;
         self.version = SCHEMA_VERSION;
         if from < 4 {
             // Each ran in loops before anything asked; it goes on doing so,
@@ -779,5 +782,27 @@ mod tests {
         let cfg: AppConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(cfg.default_toolset, None);
         assert!(cfg.toolsets.is_empty());
+    }
+
+    #[test]
+    fn a_queued_change_with_specs_in_app_is_sent_as_spec_commit() {
+        let mut cfg: AppConfig = serde_json::from_value(serde_json::json!({
+            "shared": { "outbox": [
+                { "action": "update", "model": "Repository", "id": "a", "data": { "specs_in_app": true } },
+                { "action": "update", "model": "Repository", "id": "b", "data": { "specs_in_app": false, "check_command": "x" } },
+                { "action": "create", "model": "Repository", "id": "c",
+                  "data": { "name": "c", "specs_in_app": true, "spec_commit": "own" } },
+                { "action": "delete", "model": "Repository", "id": "d" }
+            ] }
+        }))
+        .unwrap();
+        assert!(cfg.migrate(), "the file is written back");
+
+        let data = |i: usize| cfg.shared.outbox[i]["data"].clone();
+        assert_eq!(data(0), serde_json::json!({ "spec_commit": "none" }));
+        assert_eq!(data(1), serde_json::json!({ "spec_commit": "whole", "check_command": "x" }));
+        assert_eq!(data(2)["spec_commit"], "own", "a key already there wins");
+        assert!(data(2).get("specs_in_app").is_none());
+        assert!(!cfg.migrate(), "the second time there is nothing to do");
     }
 }
