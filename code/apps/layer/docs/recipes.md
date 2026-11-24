@@ -272,10 +272,12 @@ Layer only when everyone should have it.
    shell string. Pin the version of anything it fetches or runs.
 2. **Write the paragraph**, `src-tauri/toolsets/<id>.md`: what agents are told
    about the toolset, in the context file's Spec section (SPEC-10). Write
-   `{spec_dir}` where the working copy's absolute path goes, and say where its
-   files are saved, by that path, so a skill or tool never writes into a
-   repository's worktree. Say how its steps are grouped for several
-   repositories (`## <repo>` headings or `[repo]` tags, SPEC-34).
+   `{spec_dir}` where the working copy's absolute path goes (and `{version}`
+   where its pinned version goes), and say where its files are saved, by that
+   path, so a skill or tool never writes into a repository's worktree. A
+   command it runs must be one agents can run: say how to run it if it is not
+   on the PATH. Say how its steps are grouped for several repositories (a
+   first-level `# <repo>` heading or `[repo]` tags, SPEC-34).
 3. **List it** in `builtin()` in `src-tauri/src/spec/toolset.rs`, a pair of
    `include_str!`. The order there is the order of every pick list. Settings,
    Start work and the Repos view read the list; nothing else names it.

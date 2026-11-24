@@ -281,6 +281,33 @@ mod tests {
     }
 
     #[test]
+    fn what_openspec_init_leaves_beside_its_project_is_never_committed() {
+        // `init` in spec/ writes each tool's skills and commands there too.
+        let (root, state, task) = repos(&["api"], "openspec");
+        spec_file(&root, "openspec/changes/a/proposal.md", "Why\n");
+        spec_file(&root, "openspec/config.yaml", "schema: spec-driven\n");
+        for rel in [
+            ".claude/skills/openspec-propose/SKILL.md",
+            ".agents/skills/openspec-propose/SKILL.md",
+            ".opencode/commands/opsx-propose.md",
+            ".gemini/skills/openspec-propose/SKILL.md",
+            ".claude/commands/opsx/propose.md",
+        ] {
+            spec_file(&root, rel, "a skill\n");
+        }
+
+        let rows = commit_spec(&state, &task, None);
+
+        assert!(rows.iter().all(|r| r.ok), "{rows:?}");
+        let api = worktree(&root, "api");
+        assert_eq!(touched(&api), ["openspec/changes/a/proposal.md"], "config.yaml is not Markdown, and no skill is");
+        for dot in [".claude", ".agents", ".opencode", ".gemini"] {
+            assert!(!api.join(dot).exists(), "{dot} stays in the task's spec folder");
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn kiro_files_go_under_the_tasks_spec_folder() {
         let (root, state, task) = repos(&["api", "web"], "kiro");
         state

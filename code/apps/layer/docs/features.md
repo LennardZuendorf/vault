@@ -2083,15 +2083,24 @@ requirements, then design, then tasks.
     to install; all three extras. The files and their shape are SPEC-1.
   - **OpenSpec** (`openspec`, pinned `1.14.3`): `openspec/**/*.md`; steps in
     `openspec/changes/*/tasks.md`; installed by
-    `npx -y @fission-ai/openspec@1.14.3 init --tools <ids> .` in `spec/`.
+    `npx -y @fission-ai/openspec@1.14.3 init --tools <ids> .` in `spec/`. Its
+    `init` writes the chosen tools' skills and commands (`.claude/`, `.agents/`,
+    `.opencode/`, `.gemini/`) under `spec/` too, where no agent CLI looks for
+    skills (SPEC-32 shows the task folder's) and Commit spec does not copy them
+    (they are not in `files`): they are inert, and agents use OpenSpec through
+    the commands its paragraph gives.
   - **superpowers** (`superpowers`, pinned `7.0.2`): `docs/superpowers/**/*.md`;
     steps in `docs/superpowers/plans/*.md`; installed by fetching
     `https://github.com/obra/superpowers` at `v7.0.2` and copying its skills.
 
   The paragraphs of OpenSpec and of superpowers tell the agent where to save:
-  `openspec` commands are run from `spec/`, and superpowers' design and plan are
-  saved under `spec/docs/superpowers/` by absolute path, so neither writes into
-  a repository's worktree.
+  OpenSpec's commands are run from `spec/` as
+  `npx -y @fission-ai/openspec@<version> <command>` (`openspec` is not on the
+  PATH; the paragraph's `{version}` is filled in, like `{spec_dir}`), and
+  they say not to archive a change, which happens in each repository after it
+  merges (known gaps); superpowers' design and plan are saved under
+  `spec/docs/superpowers/` by absolute path, so neither writes into a
+  repository's worktree.
 - **SPEC-27** The user MUST be able to add toolsets of their own, in
   Settings → Code, as the JSON list of their manifests
   (`commands/spec_settings.rs`, `set_custom_toolsets`, `SpecSettings.tsx`).
@@ -2298,12 +2307,13 @@ requirements, then design, then tasks.
   Spec section after the epic's and before the ticket (not in a review's). It
   gives the absolute path of the working copy as the record to read before work
   and to edit directly when the plan changes (`spec_write` does the same), saying
-  nothing needs approving first; the toolset's paragraph, with `{spec_dir}`
-  filled in; how to tick a step (SPEC-33); the four spec tools in a line each
+  nothing needs approving first; the toolset's paragraph, with `{spec_dir}` and
+  `{version}` filled in; how to tick a step (SPEC-33); the four spec tools in a line each
   (SPEC-13); with two or more repositories, the conventions for them (one spec
   for the task; requirements naming their repositories in square brackets;
   contracts written once in the design, naming provider and users; steps under a
-  heading named for the repository, or tagged `[repo]`, with `(after <repo> <n>)`;
+  first-level `# <repo>` heading named for the repository, or tagged `[repo]`,
+  with `(after <repo> <n>)`;
   Commit spec copies each repository its part and no spec file is written in a
   worktree); and the first 8 KB of the toolset's entry file, its headings
   lowered two levels, cut with a pointer to the file: Kiro's `requirements.md`
@@ -2405,9 +2415,10 @@ allowed), never the agent doing the work. The prompts are in `commands/spec_prom
   - `tasks.md`: `- [ ] 3. Call the refund endpoint (R-3, C-1; after api 2)`, each
     naming the requirements and contracts it serves and, when it needs one done
     first, another repository's step. With several repositories each one's steps
-    are under a heading that is its folder's name (`# api`, first level, which
-    Draft writes, or `## api`), which is how a step file says whose steps are
-    whose (SPEC-34).
+    are under a heading that is its folder's name, first level (`# api`, which
+    Draft writes): a second-level one (`## api`) is read too (SPEC-34) but ends
+    at the file's own `## Tasks`, so agents are told `# api`. That is how a step
+    file says whose steps are whose.
 - **SPEC-5** Draft (`draft_spec`, the tab's three Draft buttons) MUST be one run
   per file, streamed into the editor as `spec:draft` and then written into the
   file as any edit is, returning the text it replaced for **Undo** (a draft that
@@ -2570,7 +2581,12 @@ Known gaps:
   it wrote before.
 - OpenSpec's `archive` step (merging a change's deltas into `openspec/specs/`)
   happens in each repository, after the change merges, outside Layer. Layer
-  neither runs nor shows it.
+  neither runs nor shows it, and its paragraph tells agents not to run it.
+- OpenSpec's `init`, run in `spec/`, writes its skills and commands for the
+  agent CLIs under `spec/.claude/`, `.agents/`, `.opencode/` and `.gemini/`, not
+  in the task folder where SPEC-32 shows skills. They are never read by an agent
+  and never committed; a spec kept when its task is deleted (SPEC-3) keeps them
+  too. Agents use OpenSpec through the `npx` commands of its paragraph.
 - Checks kept in `.spec-drafts/` by earlier builds are not moved: the first
   check after the move is the first one.
 - Clean up of a task folder no task uses counts every file its install recorded

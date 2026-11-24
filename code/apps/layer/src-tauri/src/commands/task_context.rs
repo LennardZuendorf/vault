@@ -343,7 +343,7 @@ fn spec_section(t: &Toolset, dir: &Path, folders: &[String], entry: Option<(Stri
     );
     let paragraph = t.agents_md.trim();
     if !paragraph.is_empty() {
-        md.push_str(&paragraph.replace("{spec_dir}", &at));
+        md.push_str(&paragraph.replace("{spec_dir}", &at).replace("{version}", t.version.as_deref().unwrap_or("")));
         md.push_str("\n\n");
     }
     if !t.steps.is_empty() {
@@ -381,8 +381,9 @@ fn spec_section(t: &Toolset, dir: &Path, folders: &[String], entry: Option<(Stri
                 "- Requirements name the repositories that meet them in square brackets, `[{a}, {b}]`.\n",
                 "- Contracts between repositories (endpoints, events, schemas) are written once, in ",
                 "the design, each naming the repository that provides it and those that use it.\n",
-                "- Step files group steps under `## <repo>` headings, by the repositories' folder names (or ",
-                "tag a step `[repo]`). A step that waits on another repository's says ",
+                "- Step files group steps under a first-level `# <repo>` heading, by the repositories' ",
+                "folder names (a second-level one ends at the file's own `## Tasks`), or tag a step ",
+                "`[repo]`. A step that waits on another repository's says ",
                 "`(after <repo> <n>)`, as `(after {a} 2)`.\n",
                 "- Commit spec copies each repository its part; do not write spec files inside a ",
                 "repository's worktree.\n\n",
@@ -643,7 +644,8 @@ mod tests {
         let two = section("kiro", &["api", "web"]);
         assert!(two.contains("One spec for the task"), "{two}");
         assert!(two.contains("[api, web]"));
-        assert!(two.contains("## <repo>") && two.contains("`[repo]`"));
+        // First level: a second-level heading ends at the step file's own `## Tasks`.
+        assert!(two.contains("under a first-level `# <repo>` heading") && two.contains("`[repo]`"), "{two}");
         assert!(two.contains("(after <repo> <n>)"));
         assert!(two.contains("do not write spec files inside a repository's worktree"));
 
@@ -657,7 +659,19 @@ mod tests {
     fn openspec_is_told_to_run_from_the_spec_folder() {
         let md = section("openspec", &["api"]);
         assert!(md.contains("cd /work/acme-12/spec"), "{md}");
-        assert!(md.contains("openspec validate"));
+        assert!(md.contains("validate <id>"));
+    }
+
+    #[test]
+    fn openspec_commands_are_the_pinned_npx_ones_since_it_is_not_on_the_path() {
+        let md = section("openspec", &["api"]);
+        let npx = "npx -y @fission-ai/openspec@1.14.3";
+        assert!(md.contains(&format!("{npx} validate <id>")), "{md}");
+        assert!(!md.contains("{version}"), "the version is filled in: {md}");
+        assert!(!md.contains("`openspec validate") && !md.contains("openspec archive <id>"), "{md}");
+        // Archiving is each repository's, after its change merges.
+        assert!(md.contains("Do not archive"), "{md}");
+        assert!(!md.contains("archive the change with"), "{md}");
     }
 
     #[test]
