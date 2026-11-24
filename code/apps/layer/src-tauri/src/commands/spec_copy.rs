@@ -9,9 +9,6 @@
 //! are refused. Linux and macOS agents do make links (an install, a skill),
 //! and a write through one would land wherever it points.
 
-// Later tasks call most of this; until then only the tests and the delete do.
-#![allow(dead_code)]
-
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -24,7 +21,7 @@ use crate::spec::toolset::{self, Toolset};
 use crate::spec::{self, glob, Kind, Part};
 
 use super::panes::agent_file_dir;
-use super::spec::{spec_of, APPROVED, LEGACY_FILE};
+use super::spec_old::{old_of, APPROVED, LEGACY_FILE};
 use super::AppState;
 
 /// The spec's folder in the task folder.
@@ -237,13 +234,16 @@ fn newer(approved: &Path, draft: &Path) -> Option<String> {
     }
 }
 
-/// Each repository's tasks as one `tasks.md`: a `## <folder>` section per
-/// repository, which is how a step file says whose steps are whose.
+/// Each repository's tasks as one `tasks.md`: a first-level `# <folder>`
+/// section per repository, which is how a step file says whose steps are
+/// whose. First level, because a repository's own `tasks.md` has second-level
+/// headings of its own (`## Tasks`, an epic's sub-tasks), and a heading of the
+/// same level would end the repository's section at the first of them.
 fn merged(sections: Vec<(String, String)>) -> Option<String> {
     (!sections.is_empty()).then(|| {
         sections
             .iter()
-            .map(|(folder, text)| format!("## {folder}\n\n{}\n", text.trim_end()))
+            .map(|(folder, text)| format!("# {folder}\n\n{}\n", text.trim_end()))
             .collect::<Vec<_>>()
             .join("\n")
     })
@@ -253,8 +253,8 @@ fn merged(sections: Vec<(String, String)>) -> Option<String> {
 /// builds kept it: what was approved with the drafts written since; else the
 /// repositories' own copies; else the single `SPEC.md` (SPEC-17).
 fn old_files(state: &AppState, task: &Task, dest: &Path) -> Vec<(String, String)> {
-    let spec = spec_of(state, task);
-    let kind = spec.kind();
+    let old = old_of(state, task);
+    let kind = old.kind();
     let (requirements, design, tasks) =
         (Part::Requirements.file(kind), Part::Design.file(kind), Part::Tasks.file(kind));
     let mut out: Vec<(String, String)> = Vec::new();
@@ -264,18 +264,18 @@ fn old_files(state: &AppState, task: &Task, dest: &Path) -> Vec<(String, String)
         }
     };
 
-    if let Some(drafts) = &spec.drafts {
+    if let Some(drafts) = &old.drafts {
         let approved = drafts.join(APPROVED);
         // A draft is saved under the plain name, whether the spec is a bug's or not.
         let draft_requirements = drafts.join(Part::Requirements.file(Kind::Feature));
         keep(&mut out, requirements, newer(&approved.join(requirements), &draft_requirements));
         keep(&mut out, design, newer(&approved.join(design), &drafts.join(design)));
-        let sections = spec
-            .homes
+        let sections = old
+            .copies
             .iter()
-            .filter_map(|h| {
-                let text = newer(&approved.join(&h.folder).join(tasks), &drafts.join(&h.folder).join(tasks))?;
-                Some((h.folder.clone(), text))
+            .filter_map(|c| {
+                let text = newer(&approved.join(&c.folder).join(tasks), &drafts.join(&c.folder).join(tasks))?;
+                Some((c.folder.clone(), text))
             })
             .collect();
         keep(&mut out, tasks, merged(sections));
@@ -285,11 +285,11 @@ fn old_files(state: &AppState, task: &Task, dest: &Path) -> Vec<(String, String)
     }
 
     // The first repository's requirements and design, and each one's tasks.
-    let copies: Vec<_> = spec.homes.iter().filter(|h| h.dir != dest).collect();
-    let first = |file: &str| copies.iter().find_map(|h| read_text(&h.dir.join(file)));
+    let copies: Vec<_> = old.copies.iter().filter(|c| c.dir != dest).collect();
+    let first = |file: &str| copies.iter().find_map(|c| read_text(&c.dir.join(file)));
     keep(&mut out, requirements, first(requirements));
     keep(&mut out, design, first(design));
-    let sections = copies.iter().filter_map(|h| Some((h.folder.clone(), read_text(&h.dir.join(tasks))?))).collect();
+    let sections = copies.iter().filter_map(|c| Some((c.folder.clone(), read_text(&c.dir.join(tasks))?))).collect();
     keep(&mut out, tasks, merged(sections));
     if !out.is_empty() {
         return out;
@@ -433,7 +433,7 @@ fn copy_files(from: &Path, to: &Path, depth: usize, total: &mut usize) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::spec::{APPROVED, DRAFTS};
+    use crate::commands::spec_old::{APPROVED, DRAFTS};
     use crate::commands::spec_world::{get, put, world};
 
     fn named(id: &str) -> Toolset {
@@ -595,7 +595,7 @@ mod tests {
 
         let spec = task_root.join("spec");
         assert_eq!(get(&spec.join("requirements.md")), "## Requirements\n- R-1: x\n");
-        assert_eq!(get(&spec.join("tasks.md")), "## api\n\n- [ ] 1. Do it\n");
+        assert_eq!(get(&spec.join("tasks.md")), "# api\n\n- [ ] 1. Do it\n");
         assert_eq!(state.config.task("t1").unwrap().toolset.as_deref(), Some("kiro"), "its files are Kiro's");
         assert!(task_root.join(DRAFTS).is_dir(), "the old folder stays for one release");
         std::fs::remove_dir_all(&root).ok();
@@ -632,10 +632,31 @@ mod tests {
         assert!(move_old_spec(&state, &task).unwrap());
 
         let spec = root.join("tasks/T-1/spec");
-        assert_eq!(get(&spec.join("tasks.md")), "## api\n\n- [ ] 1. Endpoint\n\n## web\n\n- [ ] 1. Screen\n");
+        assert_eq!(get(&spec.join("tasks.md")), "# api\n\n- [ ] 1. Endpoint\n\n# web\n\n- [ ] 1. Screen\n");
         assert_eq!(get(&spec.join("requirements.md")), "api requirements", "the first repository's copy");
         assert_eq!(get(&spec.join("design.md")), "web design", "the first copy that has one");
         assert!(wt("api").join("tasks.md").is_file(), "the repository's copy is left alone");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_moved_two_repository_tasks_file_gives_each_repository_only_its_own_steps() {
+        use crate::spec::owned::{own_part, owned_steps};
+        let (root, state, task) = world(&["api", "web"]);
+        let wt = |f: &str| root.join("tasks/T-1").join(f).join("specs/T-1");
+        put(&wt("api").join("tasks.md"), "## Tasks\n\n- [ ] 1. Endpoint\n- [x] 2. Test it\n");
+        put(&wt("web").join("tasks.md"), "## Tasks\n\n- [ ] 1. Screen (after api 1)\n");
+        assert!(move_old_spec(&state, &task).unwrap());
+
+        let text = get(&root.join("tasks/T-1/spec/tasks.md"));
+        let folders = vec!["api".to_string(), "web".to_string()];
+        let steps = owned_steps(&text, &folders);
+        let of = |f: &str| steps.iter().filter(|s| s.repos == [f]).count();
+        assert_eq!((steps.len(), of("api"), of("web")), (3, 2, 1), "{steps:?}");
+        let api = own_part(&text, "api", &folders);
+        assert!(api.contains("Endpoint") && api.contains("Test it") && !api.contains("Screen"), "{api}");
+        let web = own_part(&text, "web", &folders);
+        assert!(web.contains("Screen") && !web.contains("Endpoint"), "{web}");
         std::fs::remove_dir_all(&root).ok();
     }
 

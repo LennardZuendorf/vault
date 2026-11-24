@@ -47,13 +47,13 @@ import type {
   GrafanaDatasource,
   StartTo,
   AppliedAnswers,
+  Drafted,
   InstallState,
-  SpecApproved,
   SpecCheck,
   SpecCommit,
   SpecKind,
   SpecPart,
-  TaskSpec,
+  SpecView,
   Started,
   Synced,
   Task,
@@ -293,31 +293,18 @@ export const api = {
       description: args.description,
       kind: args.kind,
     }),
-  readSpec: (taskId: string) => invoke<TaskSpec>("read_spec", { taskId }),
-  /** Keep what the editor holds for one file (tasks: one checkout's); null lets it go (SPEC-6). */
-  saveSpecDraft: (taskId: string, part: SpecPart, checkoutId: string | null, text: string | null) =>
-    invoke<void>("save_spec_draft", { taskId, part, checkoutId, text }),
-  /** Approve files of the spec: written into every repository (tasks into their own), and committed there. */
-  approveSpec: (
-    taskId: string,
-    texts: { part: SpecPart; checkout_id: string | null; text: string }[],
-    kind: SpecKind | null,
-  ) => invoke<SpecApproved>("approve_spec", { taskId, texts, kind }),
-  /** Write what was approved back over one repository's copy changed outside the app (SPEC-22). */
-  putBackSpec: (taskId: string, part: SpecPart, checkoutId: string) =>
-    invoke<TaskSpec>("put_back_spec", { taskId, part, checkoutId }),
-  /** Turn down a change an agent proposed, and tell it (SPEC-24). */
-  turnDownSpecProposal: (taskId: string, part: SpecPart, checkoutId: string | null) =>
-    invoke<TaskSpec>("turn_down_spec_proposal", { taskId, part, checkoutId }),
-  /** Draft one file for the whole task, streamed as `spec:draft`: tasks are every repository's at once. */
+  /** The task's spec: the toolset's files with their steps, each repository's share, the install. */
+  readSpec: (taskId: string) => invoke<SpecView>("read_spec", { taskId }),
+  /** Replace one file of the spec, as an agent's `spec_write` does. */
+  writeSpecFile: (taskId: string, path: string, text: string) =>
+    invoke<void>("write_spec_file", { taskId, path, text }),
+  /** Kiro's Draft: one part for the whole task, streamed as `spec:draft`, then written into its file. */
   draftSpec: (taskId: string, part: SpecPart, kind: SpecKind | null, requestId: string) =>
-    invoke<void>("draft_spec", { taskId, part, kind, requestId }),
-  /** Merge the specs each repository had of its own into drafts of one (SPEC-25). */
-  mergeSpecs: (taskId: string, requestId: string) =>
-    invoke<void>("merge_specs", { taskId, requestId }),
-  /** Build the answered open questions into the requirements, streamed as `spec:draft` (SPEC-20). */
+    invoke<Drafted>("draft_spec", { taskId, part, kind, requestId }),
+  /** Kiro's Apply answers: the answered open questions built into the requirements file (SPEC-20). */
   applySpecAnswers: (taskId: string, requestId: string) =>
     invoke<AppliedAnswers>("apply_spec_answers", { taskId, requestId }),
+  /** Kiro's Check against spec, for one repository (SPEC-15). */
   checkSpec: (taskId: string, checkoutId: string) =>
     invoke<SpecCheck>("check_spec", { taskId, checkoutId }),
   /** Install the task's spec toolset again, after a failure; announced as `spec:install`. */
@@ -329,12 +316,6 @@ export const api = {
    */
   commitSpec: (taskId: string, repos: string[] | null = null) =>
     invoke<RepoResult[]>("commit_spec_cmd", { taskId, repos }),
-  /** What Start agent adds to the opening prompt: work through the tasks (SPEC-12). */
-  specWorkPrompt: (taskId: string, checkoutId: string | null) =>
-    invoke<string>("spec_work_prompt", { taskId, checkoutId }),
-  /** Tell the task's running agents the spec changed (SPEC-14); how many were told. */
-  tellSpecChange: (taskId: string, parts: SpecPart[]) =>
-    invoke<number>("tell_spec_change", { taskId, parts }),
   setProjectSpecs: (
     projectId: string,
     toolset: string | null,

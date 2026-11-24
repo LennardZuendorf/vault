@@ -9,7 +9,7 @@ import { useLair } from "./lib/henchman-lair";
 import { useOrders } from "./lib/henchman-orders";
 import { useSpecs } from "./lib/specs";
 import { useTheme } from "./lib/theme";
-import type { InstallState, SpecPart, Target } from "./lib/types";
+import type { InstallState, Target } from "./lib/types";
 import type { HenchmanLair } from "./lib/types-henchman";
 import { startWorkspaceSync, useSession } from "./lib/workspace-sync";
 import { exitIsNews, selectedTask, useStore } from "./store";
@@ -330,8 +330,7 @@ export function Watchers() {
   // An agent's own hooks said what it is doing now. Its row, its dot and the
   // count on the Work tab follow straight away rather than at the next poll.
   // An agent that stops may have edited the spec's files: its task's spec,
-  // if the tab has read it, is read again to show what changed outside the
-  // app (SPEC-22).
+  // if the tab has read it, is read again to show what it wrote.
   useEffect(() => {
     const p = listen<string>("pty:activity", async (e) => {
       await refreshPanes().catch(() => {});
@@ -347,15 +346,8 @@ export function Watchers() {
   // A spec being drafted (SPEC-5), into whichever task's editors asked for
   // it, shown or not; and a step an agent ticked (SPEC-13).
   useEffect(() => {
-    const p = listen<{
-      request_id: string;
-      part: SpecPart;
-      checkout_id: string | null;
-      text: string;
-    }>("spec:draft", (e) => {
-      useSpecs
-        .getState()
-        .chunk(e.payload.request_id, e.payload.part, e.payload.checkout_id, e.payload.text);
+    const p = listen<{ request_id: string; path: string; text: string }>("spec:draft", (e) => {
+      useSpecs.getState().chunk(e.payload.request_id, e.payload.path, e.payload.text);
     });
     const q = listen<string>("spec:changed", (e) => useSpecs.getState().changed(e.payload));
     // A task's toolset being installed in the background, and how it went.

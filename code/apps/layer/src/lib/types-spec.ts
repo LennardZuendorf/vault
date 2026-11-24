@@ -1,11 +1,11 @@
-/** A task's spec (§19), mirrored from `commands/spec.rs`. */
-
-/** One of a spec's files, in the order they are drafted and approved (SPEC-4). */
-export type SpecPart = "requirements" | "design" | "tasks";
-export type SpecKind = "feature" | "bugfix";
+/** A task's spec (§19), mirrored from `commands/spec_view.rs`, `spec_draft.rs` and `spec_install.rs`. */
 
 /** What Commit spec puts in a repository: all of it, its own part, or nothing. */
 export type SpecCommit = "whole" | "own" | "none";
+
+/** One part of a Kiro spec, for Draft (SPEC-5). */
+export type SpecPart = "requirements" | "design" | "tasks";
+export type SpecKind = "feature" | "bugfix";
 
 /**
  * How installing a task's spec toolset stands (`commands/spec_install.rs`):
@@ -20,23 +20,32 @@ export interface InstallState {
   running: boolean;
 }
 
-/** One requirement. `repos`: the folders that meet it; none named, every one (SPEC-1). */
-export interface SpecRequirement {
+/** The toolset as the tab shows it. `extras`: what only some toolsets have (Kiro's three). */
+export interface SpecToolset {
   id: string;
-  repos: string[];
-  text: string;
+  name: string;
+  version: string | null;
+  extras: ("draft" | "check" | "questions")[];
 }
 
 /**
- * One step of `tasks.md`. `serves`: the requirements it names; `after`:
- * other repositories' steps it waits for, as `api 2`.
+ * One `- [ ]` step. `position` is how it is addressed (1-based over every
+ * checkbox of its file); `repos` are the folders that own it, none meaning
+ * every repository.
  */
 export interface SpecStep {
-  number: number;
+  position: number;
+  label: string;
   text: string;
   done: boolean;
-  serves: string[];
-  after: string[];
+  repos: string[];
+}
+
+/** One file of the spec, with its steps when the toolset keeps steps in it. */
+export interface SpecFileView {
+  path: string;
+  text: string;
+  steps: SpecStep[];
 }
 
 export interface SpecVerdict {
@@ -53,72 +62,40 @@ export interface SpecCheck {
   stale: boolean;
 }
 
-/** A repository's copy that is not what was approved (SPEC-22). `text` is "" when it is gone. */
-export interface SpecOutside {
-  checkout_id: string;
-  folder: string;
-  text: string;
-}
-
-/** A change an agent proposed with `spec_propose` (SPEC-24); its text is the file's draft. */
-export interface SpecProposal {
-  why: string;
-  by: string;
-  pane_id: string | null;
-  at: number;
-}
-
-/** One file of the spec: the task's requirements or design (`checkout_id` null), or one repository's tasks. */
-export interface SpecPartView {
-  part: SpecPart;
-  checkout_id: string | null;
-  file: string;
-  approved: string | null;
-  draft: string | null;
-  /** Approved, but an earlier file was approved since (SPEC-7). */
-  stale: boolean;
-  outside: SpecOutside[];
-  proposal: SpecProposal | null;
-}
-
 /** One repository's share of the spec. */
-export interface RepoSpec {
+export interface RepoSpecView {
   checkout_id: string;
   repo: string;
   folder: string;
-  /** Where its copy is kept: `api/specs/ACME-1-x` in the repository, or a path in the app's folder. */
-  home: string;
-  in_repo: boolean;
-  steps: SpecStep[];
+  commit: SpecCommit;
+  /** Steps ticked of all the repository owns, or that belong to everyone. */
+  done: number;
+  total: number;
+  /** What Commit spec would write now is not what its last commit holds. */
+  changed_since_commit: boolean;
   check: SpecCheck | null;
 }
 
-/** What Apply answers did to the requirements, by id (SPEC-20). */
+export interface SpecView {
+  toolset: SpecToolset;
+  /** The working copy, where agents and the user edit. */
+  dir: string;
+  files: SpecFileView[];
+  repos: RepoSpecView[];
+  install: InstallState | null;
+}
+
+/** What a draft wrote, and what the file held before it (null: nothing), for Undo. */
+export interface Drafted {
+  path: string;
+  before: string | null;
+}
+
+/** What Apply answers did to the requirements, by id, and what the file held before (SPEC-20). */
 export interface AppliedAnswers {
+  path: string;
+  before: string;
   changed: string[];
   added: string[];
   removed: string[];
-}
-
-export interface TaskSpec {
-  kind: SpecKind;
-  /** Requirements, design, then each repository's tasks. */
-  parts: SpecPartView[];
-  requirements: SpecRequirement[];
-  repos: RepoSpec[];
-  /** A `SPEC.md` from before, to start the requirements from (SPEC-17). */
-  legacy: string | null;
-  /** The repositories have specs of their own from before, to merge (SPEC-25). */
-  split: boolean;
-}
-
-/** One repository the spec could not be written or committed in (SPEC-6). */
-export interface SpecRepoFailure {
-  folder: string;
-  error: string;
-}
-
-export interface SpecApproved {
-  spec: TaskSpec;
-  failed: SpecRepoFailure[];
 }

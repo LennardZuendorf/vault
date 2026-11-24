@@ -15,7 +15,6 @@ import { emit } from "@tauri-apps/api/event";
  *   &task=t-login          the selected task (none: the All agents overview)
  *   &tab=spec|terminals|diff|pr
  *   &loop=checking|held|passed|gave_up   the task's agents on a loop (§21)
- *   &spec=split            ACME-123 with a spec per repository from before (SPEC-25)
  *   &role=member          a member of the workspace, who sees its settings (SET-7)
  *   &tracker=github       the workspace's tickets are GitHub issues (TKT-15)
  *   &theme=night|day|tokyo-night|cursor-dark|cursor-light|ayu-dark|ayu-light|system   the saved theme (SET-5)

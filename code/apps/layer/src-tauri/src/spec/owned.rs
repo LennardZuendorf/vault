@@ -2,9 +2,6 @@
 //! OpenSpec's `changes/*/tasks.md`, a superpowers plan) and which repository
 //! owns each. Nothing here touches the disk.
 
-// Later tasks call all of this; until then nothing outside the tests does.
-#![allow(dead_code)]
-
 use super::{checkbox, list_item};
 
 /// One `- [ ]` step.

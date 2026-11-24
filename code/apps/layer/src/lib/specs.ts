@@ -6,37 +6,26 @@ import type {
   RepoResult,
   SpecKind,
   SpecPart,
-  SpecPartView,
-  SpecRepoFailure,
-  TaskSpec,
+  SpecView,
 } from "./types";
 
 /**
- * Each task's spec as the Spec tab holds it (§19). Kept here rather than in
- * the tab, so an edit or a draft under way survives switching tabs or
- * tasks; and what an editor holds is kept as a draft in the task folder
- * too, so quitting loses nothing (SPEC-6).
- *
- * A spec is one per task: its requirements and design are the task's
- * (`checkoutId` null), and each repository has its own tasks.
+ * Each task's spec as the Spec tab holds it (§19). The spec is the files in
+ * the task's `spec/` folder, which agents write too, so what is kept here is
+ * what was read, and the text of an editor not yet saved. A draft is streamed
+ * into the editor, and written into the file by the backend when it is done.
  */
 export interface SpecState {
   loaded: boolean;
-  spec: TaskSpec | null;
-  /** What each editor holds where it is not what is approved, by `slotKey`. */
+  spec: SpecView | null;
+  /** What each editor holds where it is not what the file holds, by path. */
   edits: Record<string, string>;
-  /** A draft being streamed in: which file, or a merge of specs from before. */
-  drafting: { requestId: string; part: SpecPart | "merge" } | null;
+  /** A Kiro draft or Apply answers being streamed in, and its request. */
+  drafting: { requestId: string } | null;
   /** Repositories whose check is running (SPEC-15). */
   checking: string[];
-  /** What Apply answers last did, and what the editor held before it, for Undo (SPEC-20). */
-  applied: { results: AppliedAnswers; before: string | undefined } | null;
-}
-
-/** One file of the spec, as the tab names it. */
-export interface SpecFile {
-  part: SpecPart;
-  checkoutId: string | null;
+  /** What the last draft or Apply answers replaced, for Undo (SPEC-20). */
+  last: { path: string; before: string | null; results: AppliedAnswers | null } | null;
 }
 
 interface Specs {
@@ -49,72 +38,45 @@ interface Specs {
   /** Commit spec: a row per repository, a failed one named with why. */
   commitSpec: (taskId: string, repos?: string[]) => Promise<RepoResult[]>;
   load: (taskId: string) => Promise<void>;
-  edit: (taskId: string, file: SpecFile, text: string) => void;
-  /** Draft one file: requirements or design for the task, or every repository's tasks. */
+  edit: (taskId: string, path: string, text: string) => void;
+  /** Write what an editor holds into its file. */
+  save: (taskId: string, path: string) => Promise<void>;
+  /** Let go of what an editor holds. */
+  discard: (taskId: string, path: string) => void;
+  /** Kiro's Draft: one part of the spec for the whole task. */
   draft: (taskId: string, part: SpecPart, kind: SpecKind | null) => Promise<void>;
-  /** Merge the specs each repository had of its own into drafts of one (SPEC-25). */
-  merge: (taskId: string) => Promise<void>;
-  /** Approve files as their editors hold them; the repositories that failed are returned. */
-  approve: (
-    taskId: string,
-    files: SpecFile[],
-    kind?: SpecKind | null,
-    texts?: Record<string, string>,
-  ) => Promise<SpecRepoFailure[]>;
-  putBack: (taskId: string, part: SpecPart, checkoutId: string) => Promise<void>;
-  turnDown: (taskId: string, file: SpecFile) => Promise<void>;
   check: (taskId: string, checkoutId: string) => Promise<void>;
-  /** Build the answered open questions into the requirements (SPEC-20). */
+  /** Kiro's Apply answers: the answered open questions built into the requirements. */
   applyAnswers: (taskId: string) => Promise<void>;
-  /** Put back what the requirements editor held before Apply answers. */
-  undoAnswers: (taskId: string) => void;
-  /** A piece of a draft under way (`spec:draft`): the file's whole draft so far. */
-  chunk: (requestId: string, part: SpecPart, checkoutId: string | null, text: string) => void;
-  /** An agent ticked a step or proposed a change, or one stopped (`spec:changed`, SPEC-22). */
+  /** Write back what the last draft or Apply answers replaced. */
+  undo: (taskId: string) => Promise<void>;
+  /** A piece of a draft under way (`spec:draft`): its file's whole text so far. */
+  chunk: (requestId: string, path: string, text: string) => void;
+  /** An agent wrote or ticked, or one stopped (`spec:changed`). */
   changed: (taskId: string) => void;
-  /** The agent Start work picked, for the Spec tab to start once the spec is agreed (SPEC-18). */
+  /** The agent Start work picked, until Task 10's Start work rewires it (SPEC-18). */
   pending: { taskId: string; agentId: string | null } | null;
   setPending: (p: { taskId: string; agentId: string | null } | null) => void;
 }
 
-export const slotKey = (part: SpecPart, checkoutId: string | null) =>
-  part === "tasks" ? `tasks:${checkoutId ?? ""}` : part;
-
-/** One file's view in a spec. */
-export function partView(
-  spec: TaskSpec | null | undefined,
-  part: SpecPart,
-  checkoutId: string | null,
-): SpecPartView | undefined {
-  return spec?.parts.find(
-    (p) => p.part === part && (part !== "tasks" || p.checkout_id === checkoutId),
-  );
+/** The file a Kiro spec's requirements are in: a bug's analysis, or else the requirements. */
+export function requirementsPath(spec: SpecView | null | undefined): string | null {
+  const has = (p: string) => spec?.files.some((f) => f.path === p) ?? false;
+  return has("bugfix.md") ? "bugfix.md" : has("requirements.md") ? "requirements.md" : null;
 }
 
-/** What is approved of one file, or "". */
-export function approvedText(
-  spec: TaskSpec | null | undefined,
-  part: SpecPart,
-  checkoutId: string | null,
-): string {
-  return partView(spec, part, checkoutId)?.approved ?? "";
+/** What an editor shows: the edit, else the file. */
+export function editorText(state: SpecState | undefined, path: string): string {
+  return state?.edits[path] ?? state?.spec?.files.find((f) => f.path === path)?.text ?? "";
 }
 
-/** What an editor shows: the edit, else what is approved. */
-export function editorText(
-  state: SpecState | undefined,
-  part: SpecPart,
-  checkoutId: string | null,
-): string {
-  return state?.edits[slotKey(part, checkoutId)] ?? approvedText(state?.spec, part, checkoutId);
-}
-
-/** The tab's badge: steps done of all, or else how many requirements. */
-export function specProgress(spec: TaskSpec | null): string | null {
-  const steps = (spec?.repos ?? []).flatMap((r) => r.steps);
-  if (steps.length > 0) return `${steps.filter((s) => s.done).length}/${steps.length}`;
-  const reqs = spec?.requirements.length ?? 0;
-  return reqs > 0 ? String(reqs) : null;
+/** The tab's badge: steps done of all, or else how many files there are. */
+export function specProgress(spec: SpecView | null): string | null {
+  const total = (spec?.repos ?? []).reduce((n, r) => n + r.total, 0);
+  const done = (spec?.repos ?? []).reduce((n, r) => n + r.done, 0);
+  if (total > 0) return `${done}/${total}`;
+  const files = spec?.files.length ?? 0;
+  return files > 0 ? String(files) : null;
 }
 
 const EMPTY: SpecState = {
@@ -123,46 +85,8 @@ const EMPTY: SpecState = {
   edits: {},
   drafting: null,
   checking: [],
-  applied: null,
+  last: null,
 };
-
-/** Drafts are written a moment after typing stops, not at every key. */
-const saving = new Map<
-  string,
-  { timer: ReturnType<typeof setTimeout>; write: () => Promise<void> }
->();
-
-function keep(taskId: string, file: SpecFile, text: string | null) {
-  const key = `${taskId}:${slotKey(file.part, file.checkoutId)}`;
-  clearTimeout(saving.get(key)?.timer);
-  const write = () => {
-    saving.delete(key);
-    return api.saveSpecDraft(taskId, file.part, file.checkoutId, text).catch(() => {});
-  };
-  saving.set(key, { timer: setTimeout(() => void write(), 600), write });
-}
-
-/**
- * Write now what is waiting to be written. A run that reads the drafts
- * (a redraft, Apply answers) would otherwise miss an answer picked a
- * moment before.
- */
-async function flush(taskId: string) {
-  const waiting = [...saving.entries()].filter(([key]) => key.startsWith(`${taskId}:`));
-  await Promise.all(
-    waiting.map(([, w]) => {
-      clearTimeout(w.timer);
-      return w.write();
-    }),
-  );
-}
-
-/** The edits a freshly read spec brings: its drafts. */
-function draftsOf(spec: TaskSpec): Record<string, string> {
-  const edits: Record<string, string> = {};
-  for (const p of spec.parts) if (p.draft !== null) edits[slotKey(p.part, p.checkout_id)] = p.draft;
-  return edits;
-}
 
 export const useSpecs = create<Specs>((set, get) => {
   const put = (taskId: string, part: Partial<SpecState>) =>
@@ -170,20 +94,21 @@ export const useSpecs = create<Specs>((set, get) => {
       byTask: { ...s.byTask, [taskId]: { ...(s.byTask[taskId] ?? EMPTY), ...part } },
     }));
   const state = (taskId: string) => get().byTask[taskId] ?? EMPTY;
+  const without = (edits: Record<string, string>, path: string) => {
+    const rest = { ...edits };
+    delete rest[path];
+    return rest;
+  };
 
-  /** A run streamed into the editors; a failed one puts back what they held (SPEC-5). */
-  async function streamed(
-    taskId: string,
-    part: SpecPart | "merge",
-    run: (requestId: string) => Promise<void>,
-  ) {
-    await flush(taskId);
+  /** A run that writes into a file, its text streamed into the editor first. */
+  async function streamed(taskId: string, run: (requestId: string) => Promise<string>) {
     const before = state(taskId).edits;
     const requestId = `spec-${crypto.randomUUID()}`;
-    put(taskId, { drafting: { requestId, part }, applied: null });
+    put(taskId, { drafting: { requestId }, last: null });
     try {
-      await run(requestId);
-      put(taskId, { drafting: null });
+      const path = await run(requestId);
+      // The file holds it now.
+      put(taskId, { drafting: null, edits: without(state(taskId).edits, path) });
       await get().load(taskId);
     } catch (e) {
       put(taskId, { drafting: null, edits: before });
@@ -201,55 +126,30 @@ export const useSpecs = create<Specs>((set, get) => {
     commitSpec: (taskId, repos) => api.commitSpec(taskId, repos ?? null),
     load: async (taskId) => {
       const spec = await api.readSpec(taskId);
-      // An edit under way here wins over the draft kept on disk, which is
-      // at most a moment behind it.
-      put(taskId, { loaded: true, spec, edits: { ...draftsOf(spec), ...state(taskId).edits } });
+      put(taskId, { loaded: true, spec });
     },
-    edit: (taskId, file, text) => {
-      const key = slotKey(file.part, file.checkoutId);
-      const edits = { ...state(taskId).edits };
-      const same =
-        text.trim() === approvedText(state(taskId).spec, file.part, file.checkoutId).trim();
-      if (same) delete edits[key];
-      else edits[key] = text;
-      // Undo after a change of the user's own would throw that away too.
-      put(taskId, file.part === "requirements" ? { edits, applied: null } : { edits });
-      keep(taskId, file, same ? null : text);
-    },
-    draft: (taskId, part, kind) =>
-      streamed(taskId, part, (requestId) => api.draftSpec(taskId, part, kind, requestId)),
-    merge: (taskId) => streamed(taskId, "merge", (requestId) => api.mergeSpecs(taskId, requestId)),
-    approve: async (taskId, files, kind = null, texts) => {
-      const s = state(taskId);
-      const body = files.map((f) => {
-        const key = slotKey(f.part, f.checkoutId);
-        clearTimeout(saving.get(`${taskId}:${key}`)?.timer);
-        return {
-          part: f.part,
-          checkout_id: f.checkoutId,
-          text: texts?.[key] ?? editorText(s, f.part, f.checkoutId),
-        };
+    edit: (taskId, path, text) => {
+      const file = state(taskId).spec?.files.find((f) => f.path === path);
+      const same = file !== undefined && file.text === text;
+      put(taskId, {
+        edits: same ? without(state(taskId).edits, path) : { ...state(taskId).edits, [path]: text },
+        last: null,
       });
-      const { spec, failed } = await api.approveSpec(taskId, body, kind);
-      const edits = { ...state(taskId).edits };
-      for (const f of files) delete edits[slotKey(f.part, f.checkoutId)];
-      put(
-        taskId,
-        files.some((f) => f.part === "requirements")
-          ? { spec, edits, applied: null }
-          : { spec, edits },
-      );
-      return failed;
     },
-    putBack: async (taskId, part, checkoutId) => {
-      put(taskId, { spec: await api.putBackSpec(taskId, part, checkoutId) });
+    save: async (taskId, path) => {
+      const text = state(taskId).edits[path];
+      if (text === undefined) return;
+      await api.writeSpecFile(taskId, path, text);
+      put(taskId, { edits: without(state(taskId).edits, path) });
+      await get().load(taskId);
     },
-    turnDown: async (taskId, file) => {
-      const spec = await api.turnDownSpecProposal(taskId, file.part, file.checkoutId);
-      const edits = { ...state(taskId).edits };
-      delete edits[slotKey(file.part, file.checkoutId)];
-      put(taskId, { spec, edits });
-    },
+    discard: (taskId, path) => put(taskId, { edits: without(state(taskId).edits, path) }),
+    draft: (taskId, part, kind) =>
+      streamed(taskId, async (requestId) => {
+        const done = await api.draftSpec(taskId, part, kind, requestId);
+        put(taskId, { last: { path: done.path, before: done.before, results: null } });
+        return done.path;
+      }),
     check: async (taskId, checkoutId) => {
       put(taskId, { checking: [...state(taskId).checking, checkoutId] });
       try {
@@ -260,30 +160,29 @@ export const useSpecs = create<Specs>((set, get) => {
       }
     },
     applyAnswers: async (taskId) => {
-      const before = state(taskId).edits.requirements;
-      const got: { results?: AppliedAnswers } = {};
-      await streamed(taskId, "requirements", async (requestId) => {
-        got.results = await api.applySpecAnswers(taskId, requestId);
+      // The run reads the file, so what the editor holds goes into it first.
+      const path = requirementsPath(state(taskId).spec);
+      if (path) await get().save(taskId, path);
+      await streamed(taskId, async (requestId) => {
+        const done = await api.applySpecAnswers(taskId, requestId);
+        put(taskId, { last: { path: done.path, before: done.before, results: done } });
+        return done.path;
       });
-      if (got.results) put(taskId, { applied: { results: got.results, before } });
     },
-    undoAnswers: (taskId) => {
-      const s = state(taskId);
-      if (!s.applied) return;
-      get().edit(
-        taskId,
-        { part: "requirements", checkoutId: null },
-        s.applied.before ?? approvedText(s.spec, "requirements", null),
-      );
-      put(taskId, { applied: null });
+    undo: async (taskId) => {
+      const last = state(taskId).last;
+      if (!last) return;
+      await api.writeSpecFile(taskId, last.path, last.before ?? "");
+      put(taskId, { last: null, edits: without(state(taskId).edits, last.path) });
+      await get().load(taskId);
     },
-    chunk: (requestId, part, checkoutId, text) => {
+    chunk: (requestId, path, text) => {
       const entry = Object.entries(get().byTask).find(
         ([, s]) => s.drafting?.requestId === requestId,
       );
       if (!entry) return;
       const [taskId, s] = entry;
-      put(taskId, { edits: { ...s.edits, [slotKey(part, checkoutId)]: text } });
+      put(taskId, { edits: { ...s.edits, [path]: text } });
     },
     changed: (taskId) => {
       if (state(taskId).loaded)

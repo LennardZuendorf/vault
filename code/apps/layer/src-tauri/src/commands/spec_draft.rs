@@ -1,5 +1,12 @@
-//! Drafting a spec's files and checking the work against it (§19): each a
-//! fresh one-shot run, never the agent doing the work.
+//! Kiro's extras (§19): drafting a spec's files, applying the answers to its
+//! open questions, and checking the work against it. Each a fresh one-shot
+//! run, never the agent doing the work, and each only for a toolset that lists
+//! the extra in its manifest.
+//!
+//! They read and write the working copy's files like anything else that
+//! touches the spec: a draft is written into the file (`write_spec`) and what
+//! it replaced is returned, so the tab can offer Undo. Nothing is held back
+//! as a draft elsewhere.
 //!
 //! Every file is drafted in one run for the whole task, however many
 //! repositories it touches (SPEC-5): the requirements, so the split of the
@@ -18,26 +25,55 @@ use crate::config::Task;
 use crate::error::{Error, Result};
 use crate::oneshot::{oneshot, Oneshot};
 use crate::shellenv;
+use crate::spec::owned::own_part;
+use crate::spec::toolset::{Extra, Toolset};
 use crate::spec::{self, Kind, Part};
 
 use super::jira::{review_context, reviewed_repos, task_repos};
 use super::panes::agent_file_dir;
-use super::spec::{spec_of, Check, Slot, Spec, Verdict};
-use super::spec_prompts::{
-    answers_prompt, check_prompt, design_prompt, merge_prompt, requirements_prompt, tasks_prompt,
-};
+use super::spec::{keep_check, Check, Verdict};
+use super::spec_commit::{repositories, Repo};
+use super::spec_copy::{read_file, spec_dir, toolset_of};
+use super::spec_prompts::{answers_prompt, check_prompt, design_prompt, requirements_prompt, tasks_prompt};
 use super::spec_view::CheckView;
+use super::spec_work::{with_spec_moved, write_spec};
 use super::task_context::TICKET_FILE;
+use super::AppState;
 
+/// A piece of a draft under way, as the tab's editor shows it: the whole text
+/// of the file so far.
 #[derive(Clone, Serialize)]
 struct SpecDraftChunk<'a> {
     request_id: &'a str,
-    part: Part,
-    /// Whose tasks; None for the task's requirements and design.
-    checkout_id: Option<&'a str>,
-    /// The whole of this file's draft so far.
+    /// The file being drafted, relative to the spec folder.
+    path: &'a str,
     text: &'a str,
 }
+
+/// What a draft did: the file it wrote and what that file held before (None
+/// when there was none), for Undo.
+#[derive(Debug, Serialize)]
+pub struct Drafted {
+    pub path: String,
+    pub before: Option<String>,
+}
+
+/// What Apply answers did to the requirements (SPEC-20), by id, and what the
+/// file held before, for Undo.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AppliedAnswers {
+    pub path: String,
+    pub before: String,
+    pub changed: Vec<String>,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+}
+
+/// How a run is made: its prompt, where it stands, whether it may read the
+/// files there, and a hand for the text as it streams in. The app's is
+/// `claude -p`; tests give the model's answer.
+type RunFn<'a> = dyn FnMut(&str, &Path, bool, &mut dyn FnMut(&str)) -> Result<String> + 'a;
+type Run<'a> = &'a mut RunFn<'a>;
 
 /// Sonnet without thinking: what a ticket means is a judgement Haiku makes
 /// thinly, and thinking would leave the user watching an empty editor.
@@ -49,17 +85,68 @@ fn claude() -> Result<String> {
     shellenv::which("claude").ok_or_else(|| Error::NotFound("claude is not on your PATH".into()))
 }
 
+/// The run the app makes.
+fn real(program: String) -> Box<RunFn<'static>> {
+    Box::new(move |prompt, dir, read, on_delta| oneshot(&program, dir, how(read), prompt, on_delta))
+}
+
+fn home_dir() -> PathBuf {
+    std::env::home_dir().unwrap_or_else(std::env::temp_dir)
+}
+
+/// The toolset of `task`, when it has `extra`: these are Kiro's, and another
+/// toolset has its own way of drafting. Checked before anything is run.
+fn require(state: &AppState, task: &Task, extra: Extra) -> Result<Toolset> {
+    let t = toolset_of(state, task);
+    if t.extras.contains(&extra) {
+        return Ok(t);
+    }
+    let what = match extra {
+        Extra::Draft => "Draft",
+        Extra::Check => "Check against spec",
+        Extra::Questions => "Apply answers",
+    };
+    Err(Error::Other(format!("{} has no {what}: it is an extra of Kiro's toolset", t.name)))
+}
+
+/// A file of the spec, or None when it is not there yet.
+fn text_of(dir: &Path, t: &Toolset, rel: &str) -> Result<Option<String>> {
+    match read_file(dir, t, rel) {
+        Ok(text) => Ok(Some(text)),
+        Err(Error::NotFound(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Feature or bug: a spec with a `bugfix.md` is a bug's, else a feature's. A
+/// requirements file that is there decides it, so a draft never makes a second.
+fn kind_of(dir: &Path, t: &Toolset, asked: Option<Kind>) -> Result<Kind> {
+    for kind in [Kind::Bugfix, Kind::Feature] {
+        if text_of(dir, t, Part::Requirements.file(kind))?.is_some() {
+            return Ok(kind);
+        }
+    }
+    Ok(asked.unwrap_or_default())
+}
+
+/// The requirements as they are written now, and their file.
+fn requirements_of(dir: &Path, t: &Toolset) -> Result<Option<(&'static str, String)>> {
+    let rel = Part::Requirements.file(kind_of(dir, t, None)?);
+    Ok(text_of(dir, t, rel)?.map(|text| (rel, text)))
+}
+
 /// Where a run that reads code stands: the task folder, which holds every
 /// repository's worktree, or the one worktree of a task without one.
-fn reading_dir(state: &super::AppState, task: &Task, spec: &Spec) -> PathBuf {
+fn reading_dir(state: &AppState, task: &Task, repos: &[Repo]) -> PathBuf {
     agent_file_dir(state, task)
-        .or_else(|| spec.homes.first().map(|h| PathBuf::from(&h.checkout.path)))
+        .or_else(|| repos.first().map(|r| PathBuf::from(&r.checkout.path)))
         .unwrap_or_else(std::env::temp_dir)
 }
 
 /// Draft one file of the spec (SPEC-5), streamed as `spec:draft` into its
-/// editor and kept as its draft once done: the requirements or the design
-/// of the task, or every repository's tasks. Nothing is approved.
+/// editor and then written into the file: the requirements (a bug's analysis,
+/// when the spec is a bug's or `kind` says so for the first draft), the design,
+/// or every repository's tasks. Returns what the file held before.
 #[tauri::command]
 pub async fn draft_spec(
     app: AppHandle,
@@ -67,7 +154,11 @@ pub async fn draft_spec(
     part: Part,
     kind: Option<Kind>,
     request_id: String,
-) -> Result<()> {
+) -> Result<Drafted> {
+    {
+        let state = app.state::<AppState>();
+        require(&state, &state.config.task(&task_id)?, Extra::Draft)?;
+    }
     let program = claude()?;
     let emitter = app.clone();
     // An epic's tasks go to the tickets already under it first (EPIC-4).
@@ -75,7 +166,7 @@ pub async fn draft_spec(
     // second ticket for each.
     let under: Vec<(String, String)> = match part {
         Part::Tasks => {
-            let task = app.state::<super::AppState>().config.task(&task_id)?;
+            let task = app.state::<AppState>().config.task(&task_id)?;
             match (task.epic, task.issue_key.as_deref()) {
                 (true, Some(key)) => super::epics::tickets_under(&app, &task)
                     .await
@@ -90,248 +181,233 @@ pub async fn draft_spec(
         _ => Vec::new(),
     };
     super::blocking(app, move |state| {
-        let task = state.config.task(&task_id)?;
-        let spec = spec_of(state, &task);
-        if spec.homes.is_empty() {
-            return Err(Error::Other("this task has no repositories to write a spec for".into()));
-        }
-        let say = |part: Part, checkout: Option<&str>, text: &str| {
-            let _ = emitter
-                .emit("spec:draft", SpecDraftChunk { request_id: &request_id, part, checkout_id: checkout, text });
+        let say = |path: &str, text: &str| {
+            let _ = emitter.emit("spec:draft", SpecDraftChunk { request_id: &request_id, path, text });
         };
-        let folders: Vec<String> = spec.homes.iter().map(|h| h.folder.clone()).collect();
-        let reqs_slot = Slot::shared(Part::Requirements);
-        match part {
-            Part::Requirements => {
-                let kind = kind.unwrap_or_else(|| spec.kind());
-                spec.set_kind(kind)?;
-                let ticket =
-                    agent_file_dir(state, &task).and_then(|d| std::fs::read_to_string(d.join(TICKET_FILE)).ok());
-                // What the user answered on the draft before is decided:
-                // a redraft from the ticket alone asked it all again and
-                // threw the answers away (SPEC-5).
-                let decided = spec.latest(&reqs_slot).map(|t| spec::answered(&t)).unwrap_or_default();
-                let prompt =
-                    requirements_prompt(&task, kind, &folders, &task_repos(state, &task), ticket.as_deref(), &decided);
-                let mut so_far = String::new();
-                let out = oneshot(&program, home_dir(), how(false), &prompt, |delta| {
-                    so_far.push_str(delta);
-                    say(part, None, &so_far);
-                })?;
-                if out.trim().is_empty() {
-                    return Err(Error::Other("claude returned no requirements".into()));
-                }
-                spec.save_draft(&reqs_slot, Some(&out))?;
-            }
-            Part::Design => {
-                let reqs =
-                    spec.latest(&reqs_slot).ok_or_else(|| Error::Other("approve the requirements first".into()))?;
-                let old = spec.approved(&Slot::shared(Part::Design));
-                let prompt = design_prompt(spec.kind(), &folders, &reqs, old.as_deref());
-                let mut so_far = String::new();
-                let out = oneshot(&program, reading_dir(state, &task, &spec), how(true), &prompt, |delta| {
-                    so_far.push_str(delta);
-                    say(part, None, &so_far);
-                })?;
-                if out.trim().is_empty() {
-                    return Err(Error::Other("claude returned an empty design".into()));
-                }
-                spec.save_draft(&Slot::shared(Part::Design), Some(&out))?;
-            }
-            Part::Tasks => {
-                let reqs =
-                    spec.latest(&reqs_slot).ok_or_else(|| Error::Other("approve the requirements first".into()))?;
-                let design = spec.latest(&Slot::shared(Part::Design)).unwrap_or_else(|| "None.".into());
-                let old: Vec<(String, String)> = spec
-                    .homes
-                    .iter()
-                    .filter_map(|h| Some((h.folder.clone(), spec.approved(&Slot::tasks(&h.folder))?)))
-                    .collect();
-                let prompt = tasks_prompt(&folders, &reqs, &design, &old, task.epic.then_some(under.as_slice()));
-                let id_of = |folder: &str| spec.home(folder).map(|h| h.checkout.id.clone());
-                let mut so_far = String::new();
-                let out = oneshot(&program, home_dir(), how(false), &prompt, |delta| {
-                    so_far.push_str(delta);
-                    for (folder, text) in by_repo(&so_far, &folders) {
-                        say(part, id_of(&folder).as_deref(), &text);
-                    }
-                })?;
-                let split = by_repo(&out, &folders);
-                if split.iter().all(|(_, t)| spec::steps(t).is_empty()) {
-                    return Err(Error::Other("claude returned no steps".into()));
-                }
-                let requirements = spec::requirements(&reqs);
-                for (folder, text) in split {
-                    let slot = Slot::tasks(&folder);
-                    // Done stays done, and a step left without its
-                    // requirements is marked, not dropped (SPEC-7).
-                    let text = match spec.approved(&slot) {
-                        Some(old) => {
-                            let mine: Vec<_> = requirements.iter().filter(|r| r.names(&folder)).cloned().collect();
-                            spec::sync_steps(&old, &text, &mine)
-                        }
-                        None => text,
-                    };
-                    say(part, id_of(&folder).as_deref(), &text);
-                    spec.save_draft(&slot, Some(&text))?;
-                }
-            }
-        }
-        Ok(())
+        draft_inner(state, &state.config.task(&task_id)?, part, kind, &under, &say, &mut *real(program))
     })
     .await
 }
 
-fn home_dir() -> PathBuf {
-    std::env::home_dir().unwrap_or_else(std::env::temp_dir)
+fn draft_inner(
+    state: &AppState,
+    task: &Task,
+    part: Part,
+    kind: Option<Kind>,
+    under: &[(String, String)],
+    say: &dyn Fn(&str, &str),
+    run: Run,
+) -> Result<Drafted> {
+    let t = require(state, task, Extra::Draft)?;
+    let task = &with_spec_moved(state, task)?;
+    let dir = spec_dir(state, task);
+    let repos = repositories(state, task);
+    if repos.is_empty() {
+        return Err(Error::Other("this task has no repositories to write a spec for".into()));
+    }
+    let folders: Vec<String> = repos.iter().map(|r| r.folder.clone()).collect();
+    let kind = kind_of(&dir, &t, kind)?;
+    let wanted = || Error::Other("write the requirements first".into());
+    let (rel, out) = match part {
+        Part::Requirements => {
+            let rel = Part::Requirements.file(kind);
+            let ticket = agent_file_dir(state, task).and_then(|d| std::fs::read_to_string(d.join(TICKET_FILE)).ok());
+            // What the user answered on the draft before is decided: a
+            // redraft from the ticket alone asked it all again and threw the
+            // answers away (SPEC-5).
+            let decided = text_of(&dir, &t, rel)?.map(|text| spec::answered(&text)).unwrap_or_default();
+            let prompt =
+                requirements_prompt(task, kind, &folders, &task_repos(state, task), ticket.as_deref(), &decided);
+            let mut so_far = String::new();
+            let out = run(&prompt, &home_dir(), false, &mut |delta| {
+                so_far.push_str(delta);
+                say(rel, &so_far);
+            })?;
+            if out.trim().is_empty() {
+                return Err(Error::Other("claude returned no requirements".into()));
+            }
+            (rel, out)
+        }
+        Part::Design => {
+            let (_, reqs) = requirements_of(&dir, &t)?.ok_or_else(wanted)?;
+            let old = text_of(&dir, &t, "design.md")?;
+            let prompt = design_prompt(kind, &folders, &reqs, old.as_deref());
+            let mut so_far = String::new();
+            let out = run(&prompt, &reading_dir(state, task, &repos), true, &mut |delta| {
+                so_far.push_str(delta);
+                say("design.md", &so_far);
+            })?;
+            if out.trim().is_empty() {
+                return Err(Error::Other("claude returned an empty design".into()));
+            }
+            ("design.md", out)
+        }
+        Part::Tasks => {
+            let (_, reqs) = requirements_of(&dir, &t)?.ok_or_else(wanted)?;
+            let design = text_of(&dir, &t, "design.md")?.unwrap_or_else(|| "None.".into());
+            let old_file = text_of(&dir, &t, "tasks.md")?.unwrap_or_default();
+            // What each repository has of the file now, for the run to keep.
+            let old: Vec<(String, String)> = folders
+                .iter()
+                .map(|f| (f.clone(), without_heading(&own_part(&old_file, f, &folders), f)))
+                .filter(|(_, own)| !spec::steps(own).is_empty())
+                .collect();
+            let prompt = tasks_prompt(&folders, &reqs, &design, &old, task.epic.then_some(under));
+            let mut so_far = String::new();
+            let out = run(&prompt, &home_dir(), false, &mut |delta| {
+                so_far.push_str(delta);
+                say("tasks.md", &sectioned(&folders, &by_repo(&so_far, &folders), &[]));
+            })?;
+            let split = by_repo(&out, &folders);
+            if split.iter().all(|(_, t)| spec::steps(t).is_empty()) {
+                return Err(Error::Other("claude returned no steps".into()));
+            }
+            let requirements = spec::requirements(&reqs);
+            // Done stays done, and a step left without its requirements is
+            // marked, not dropped (SPEC-7).
+            let kept: Vec<(String, String)> = split
+                .into_iter()
+                .map(|(folder, text)| {
+                    let before = old.iter().find(|(f, _)| *f == folder).map(|(_, own)| own.as_str());
+                    let mine: Vec<_> = requirements.iter().filter(|r| r.names(&folder)).cloned().collect();
+                    let text = match before {
+                        Some(before) => spec::sync_steps(before, &text, &mine),
+                        None => text,
+                    };
+                    (folder, text)
+                })
+                .collect();
+            ("tasks.md", sectioned(&folders, &kept, &old))
+        }
+    };
+    say(rel, &out);
+    let before = text_of(&dir, &t, rel)?;
+    write_spec(state, task, rel, &out)?;
+    Ok(Drafted { path: rel.to_string(), before })
 }
 
-/// What Apply answers did to the requirements (SPEC-20), by id.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct AppliedAnswers {
-    pub changed: Vec<String>,
-    pub added: Vec<String>,
-    pub removed: Vec<String>,
+/// `text` without the `# <folder>` line that opens a repository's section.
+fn without_heading(text: &str, folder: &str) -> String {
+    let text = text.trim_start();
+    match text.split_once('\n') {
+        Some((first, rest))
+            if first.trim().strip_prefix("# ").is_some_and(|h| h.trim().eq_ignore_ascii_case(folder)) =>
+        {
+            rest.trim_start().to_string()
+        }
+        _ => text.to_string(),
+    }
+}
+
+/// The tasks of every repository as one `tasks.md`: with one repository, its
+/// text; with more, a first-level `# <folder>` section each, which is how a
+/// step file says whose steps are whose (a second-level heading, like the
+/// `## Tasks` inside each, would end the section). A repository the run left
+/// out keeps what it had (`before`).
+fn sectioned(folders: &[String], drafted: &[(String, String)], before: &[(String, String)]) -> String {
+    let text_of =
+        |folder: &String| drafted.iter().chain(before).find(|(f, _)| f == folder).map(|(_, t)| t.trim().to_string());
+    if let [only] = folders {
+        return format!("{}\n", text_of(only).unwrap_or_default());
+    }
+    let parts: Vec<String> = folders
+        .iter()
+        .filter_map(|f| text_of(f).filter(|t| !t.is_empty()).map(|t| format!("# {f}\n\n{t}\n")))
+        .collect();
+    parts.join("\n")
 }
 
 /// Build the answered open questions into the requirements (SPEC-20): one
-/// run over them as the editor holds them (the tab saves them first).
-/// Streamed as `spec:draft` and kept as the draft; nothing is approved.
+/// run over the requirements as the file holds them (the tab saves them
+/// first). Streamed as `spec:draft`, then written into the file; what it held
+/// before is returned, for Undo.
 #[tauri::command]
 pub async fn apply_spec_answers(app: AppHandle, task_id: String, request_id: String) -> Result<AppliedAnswers> {
+    {
+        let state = app.state::<AppState>();
+        require(&state, &state.config.task(&task_id)?, Extra::Questions)?;
+    }
     let program = claude()?;
     let emitter = app.clone();
     super::blocking(app, move |state| {
-        let task = state.config.task(&task_id)?;
-        let spec = spec_of(state, &task);
-        let slot = Slot::shared(Part::Requirements);
-        let before = spec.latest(&slot).unwrap_or_default();
-        if spec::answered(&before).is_empty() {
-            return Err(Error::Other("no open question has an answer yet".into()));
-        }
-        let say = |text: &str| {
-            let _ = emitter.emit(
-                "spec:draft",
-                SpecDraftChunk { request_id: &request_id, part: Part::Requirements, checkout_id: None, text },
-            );
+        let say = |path: &str, text: &str| {
+            let _ = emitter.emit("spec:draft", SpecDraftChunk { request_id: &request_id, path, text });
         };
-        let folders: Vec<String> = spec.homes.iter().map(|h| h.folder.clone()).collect();
-        let mut so_far = String::new();
-        let out = oneshot(&program, home_dir(), how(false), &answers_prompt(&folders, &before), |delta| {
-            so_far.push_str(delta);
-            say(&so_far);
-        })?;
-        if out.trim().is_empty() {
-            say(&before);
-            return Err(Error::Other("claude returned nothing".into()));
-        }
-        say(&out);
-        spec.save_draft(&slot, Some(&out))?;
-        let (changed, added, removed) = compare(&before, &out);
-        Ok(AppliedAnswers { changed, added, removed })
+        apply_inner(state, &state.config.task(&task_id)?, &say, &mut *real(program))
     })
     .await
+}
+
+fn apply_inner(state: &AppState, task: &Task, say: &dyn Fn(&str, &str), run: Run) -> Result<AppliedAnswers> {
+    let t = require(state, task, Extra::Questions)?;
+    let task = &with_spec_moved(state, task)?;
+    let dir = spec_dir(state, task);
+    let (rel, before) =
+        requirements_of(&dir, &t)?.ok_or_else(|| Error::Other("write the requirements first".into()))?;
+    if spec::answered(&before).is_empty() {
+        return Err(Error::Other("no open question has an answer yet".into()));
+    }
+    let folders: Vec<String> = repositories(state, task).into_iter().map(|r| r.folder).collect();
+    let mut so_far = String::new();
+    let out = run(&answers_prompt(&folders, &before), &home_dir(), false, &mut |delta| {
+        so_far.push_str(delta);
+        say(rel, &so_far);
+    })?;
+    if out.trim().is_empty() {
+        say(rel, &before);
+        return Err(Error::Other("claude returned nothing".into()));
+    }
+    say(rel, &out);
+    write_spec(state, task, rel, &out)?;
+    let (changed, added, removed) = compare(&before, &out);
+    Ok(AppliedAnswers { path: rel.to_string(), before, changed, added, removed })
 }
 
 /// Check one repository's work against the requirements that name it
-/// (SPEC-15): a run that may read the worktree, over the design's contracts
-/// and the branch's changes from its branch point. Kept with the commit it
-/// was checked at.
+/// (SPEC-15): a run that may read the worktree, over the requirements and the
+/// design as the working copy holds them now, and the branch's changes from
+/// its branch point. Kept with the commit it was checked at.
 #[tauri::command]
 pub async fn check_spec(app: AppHandle, task_id: String, checkout_id: String) -> Result<CheckView> {
+    {
+        let state = app.state::<AppState>();
+        require(&state, &state.config.task(&task_id)?, Extra::Check)?;
+    }
     let program = claude()?;
     super::blocking(app, move |state| {
-        let task = state.config.task(&task_id)?;
-        let spec = spec_of(state, &task);
-        let home = spec
-            .homes
-            .iter()
-            .find(|h| h.checkout.id == checkout_id)
-            .ok_or_else(|| Error::NotFound(format!("checkout {checkout_id}")))?;
-        let requirements = spec
-            .approved(&Slot::shared(Part::Requirements))
-            .ok_or_else(|| Error::Other("there are no approved requirements to check against".into()))?;
-        let ids: Vec<String> =
-            spec::requirements(&requirements).into_iter().filter(|r| r.names(&home.folder)).map(|r| r.id).collect();
-        if ids.is_empty() {
-            return Err(Error::Other(format!("no requirement names {}", home.folder)));
-        }
-        let design = spec.approved(&Slot::shared(Part::Design));
-        let repo: Vec<_> = reviewed_repos(state, &task).into_iter().filter(|r| r.checkout_id == checkout_id).collect();
-        let sha = crate::git::head_commit(Path::new(&home.checkout.path))?;
-        let prompt = check_prompt(&home.folder, &ids, &requirements, design.as_deref(), &review_context(&repo));
-        let out = oneshot(&program, Path::new(&home.checkout.path), how(true), &prompt, |_| {})?;
-        let results = verdicts(&out, &ids);
-        if results.is_empty() {
-            return Err(Error::Other("the check gave no answer for any requirement".into()));
-        }
-        let check = Check { sha, at: chrono::Utc::now().timestamp_millis(), results };
-        spec.set_check(home, check.clone())?;
-        Ok(CheckView { check, stale: false })
+        check_inner(state, &state.config.task(&task_id)?, &checkout_id, &mut *real(program))
     })
     .await
 }
 
-/// Merge the specs each repository had of its own into one (SPEC-25): one
-/// run over every copy, which writes the task's requirements and design and
-/// each repository's tasks, streamed and kept as drafts. Nothing in a
-/// worktree changes until they are approved.
-#[tauri::command]
-pub async fn merge_specs(app: AppHandle, task_id: String, request_id: String) -> Result<()> {
-    let program = claude()?;
-    let emitter = app.clone();
-    super::blocking(app, move |state| {
-        let task = state.config.task(&task_id)?;
-        let spec = spec_of(state, &task);
-        let kind = spec.kind();
-        let folders: Vec<String> = spec.homes.iter().map(|h| h.folder.clone()).collect();
-        let copies: Vec<(String, Vec<(Part, String)>)> = spec
-            .homes
-            .iter()
-            .map(|h| (h.folder.clone(), Part::ALL.iter().filter_map(|&p| Some((p, h.copy(p, kind)?))).collect()))
-            .collect();
-        let prompt = merge_prompt(kind, &folders, &copies);
-        let mut names = vec![REQUIREMENTS_HEADING.to_string(), DESIGN_HEADING.to_string()];
-        names.extend(folders.iter().cloned());
-        let id_of = |name: &str| spec.home(name).map(|h| h.checkout.id.clone());
-        let part_of = |name: &str| match name {
-            REQUIREMENTS_HEADING => Part::Requirements,
-            DESIGN_HEADING => Part::Design,
-            _ => Part::Tasks,
-        };
-        let say = |name: &str, text: &str| {
-            let checkout = id_of(name);
-            let _ = emitter.emit(
-                "spec:draft",
-                SpecDraftChunk { request_id: &request_id, part: part_of(name), checkout_id: checkout.as_deref(), text },
-            );
-        };
-        let mut so_far = String::new();
-        let out = oneshot(&program, home_dir(), how(false), &prompt, |delta| {
-            so_far.push_str(delta);
-            for (name, text) in by_repo(&so_far, &names) {
-                say(&name, &text);
-            }
-        })?;
-        let split = by_repo(&out, &names);
-        if !split.iter().any(|(n, t)| n == REQUIREMENTS_HEADING && !spec::requirements(t).is_empty()) {
-            return Err(Error::Other("the merge gave no requirements".into()));
-        }
-        for (name, text) in split {
-            let slot = match part_of(&name) {
-                Part::Tasks => Slot::tasks(&name),
-                part => Slot::shared(part),
-            };
-            spec.save_draft(&slot, Some(&text))?;
-        }
-        Ok(())
-    })
-    .await
+fn check_inner(state: &AppState, task: &Task, checkout_id: &str, run: Run) -> Result<CheckView> {
+    let t = require(state, task, Extra::Check)?;
+    let task = &with_spec_moved(state, task)?;
+    let dir = spec_dir(state, task);
+    let repo = repositories(state, task)
+        .into_iter()
+        .find(|r| r.checkout.id == checkout_id)
+        .ok_or_else(|| Error::NotFound(format!("checkout {checkout_id}")))?;
+    let (_, requirements) =
+        requirements_of(&dir, &t)?.ok_or_else(|| Error::Other("there are no requirements to check against".into()))?;
+    let ids: Vec<String> =
+        spec::requirements(&requirements).into_iter().filter(|r| r.names(&repo.folder)).map(|r| r.id).collect();
+    if ids.is_empty() {
+        return Err(Error::Other(format!("no requirement names {}", repo.folder)));
+    }
+    let design = text_of(&dir, &t, "design.md")?;
+    let reviewed: Vec<_> = reviewed_repos(state, task).into_iter().filter(|r| r.checkout_id == checkout_id).collect();
+    let sha = crate::git::head_commit(Path::new(&repo.checkout.path))?;
+    let prompt = check_prompt(&repo.folder, &ids, &requirements, design.as_deref(), &review_context(&reviewed));
+    let out = run(&prompt, Path::new(&repo.checkout.path), true, &mut |_| {})?;
+    let results = verdicts(&out, &ids);
+    if results.is_empty() {
+        return Err(Error::Other("the check gave no answer for any requirement".into()));
+    }
+    let check = Check { sha, at: chrono::Utc::now().timestamp_millis(), results };
+    keep_check(state, task, &repo.folder, &check)?;
+    Ok(CheckView { check, stale: false })
 }
-
-/// The merge's headings for the task's own files, beside the repositories'.
-const REQUIREMENTS_HEADING: &str = "requirements";
-const DESIGN_HEADING: &str = "design";
 
 /// A run's text, one part per name: a first-level heading that is a name
 /// alone starts its part. With one name, no heading is needed.
@@ -435,14 +511,6 @@ mod tests {
     }
 
     #[test]
-    fn a_merge_is_split_into_the_tasks_own_files_and_each_repositorys_tasks() {
-        let names = vec![REQUIREMENTS_HEADING.to_string(), DESIGN_HEADING.to_string(), "api".into(), "web".into()];
-        let out = "# requirements\n## Requirements\n- R-1 [api]: x\n# design\n## Approach\ny\n# api\n## Tasks\n- [x] 1. Done (R-1)\n";
-        let parts: Vec<String> = by_repo(out, &names).into_iter().map(|(n, _)| n).collect();
-        assert_eq!(parts, vec!["requirements", "design", "api"]);
-    }
-
-    #[test]
     fn applying_answers_names_what_changed_by_id() {
         let before = "## Requirements\n- R-1: WHEN a sixth reset THE SYSTEM SHALL refuse it.\n- R-2 [api]: WHEN two addresses THE SYSTEM SHALL count apart.\n- R-3: WHEN staff ask THE SYSTEM SHALL lift it.\n";
         let after = "## Requirements\n- R-1: WHEN a sixth reset THE SYSTEM SHALL refuse it, saying when to try again.\n- R-2 [api, web]: WHEN  two addresses THE SYSTEM SHALL count apart.\n- R-4: WHEN a reset is refused THE SYSTEM SHALL log it.\n";
@@ -508,5 +576,218 @@ mod tests {
         );
         assert_eq!(v[1].verdict, "not met");
         assert_eq!(v[2].verdict, "unclear");
+    }
+
+    use crate::commands::spec_world::{get, put, world};
+
+    fn spec_at(root: &Path, rel: &str) -> PathBuf {
+        root.join("tasks/T-1/spec").join(rel)
+    }
+
+    fn quiet(_: &str, _: &str) {}
+
+    /// A run that answers `text` whatever it is asked, and keeps the prompt.
+    fn answering<'a>(text: &'a str, asked: &'a std::cell::RefCell<Vec<String>>) -> Box<RunFn<'a>> {
+        Box::new(move |prompt, _, _, on_delta| {
+            asked.borrow_mut().push(prompt.to_string());
+            on_delta(text);
+            Ok(text.to_string())
+        })
+    }
+
+    fn refusing(_: &str, _: &Path, _: bool, _: &mut dyn FnMut(&str)) -> Result<String> {
+        Err(Error::Other("a toolset without the extra must not run anything".into()))
+    }
+
+    #[test]
+    fn drafting_is_refused_outside_kiro() {
+        let (root, state, task) = world(&["api"]);
+        state.config.update(|c| c.tasks.iter_mut().for_each(|t| t.toolset = Some("openspec".into()))).unwrap();
+        let task = state.config.task(&task.id).unwrap();
+
+        let said = |e: Error| e.to_string();
+        let draft = draft_inner(&state, &task, Part::Requirements, None, &[], &quiet, &mut refusing).unwrap_err();
+        assert_eq!(said(draft), "OpenSpec has no Draft: it is an extra of Kiro's toolset");
+        let apply = apply_inner(&state, &task, &quiet, &mut refusing).unwrap_err();
+        assert!(said(apply).contains("has no Apply answers"));
+        let check = check_inner(&state, &task, "c-api", &mut refusing).unwrap_err();
+        assert!(said(check).contains("has no Check against spec"));
+        assert!(!spec_at(&root, "requirements.md").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_kiro_draft_writes_the_file_and_returns_what_it_replaced() {
+        let (root, state, task) = world(&["api"]);
+        let asked = std::cell::RefCell::new(Vec::new());
+
+        let first = draft_inner(
+            &state,
+            &task,
+            Part::Requirements,
+            None,
+            &[],
+            &quiet,
+            &mut *answering("## Requirements\n- R-1: WHEN a THE SYSTEM SHALL b.\n", &asked),
+        )
+        .unwrap();
+        assert_eq!((first.path.as_str(), first.before), ("requirements.md", None));
+        assert!(get(&spec_at(&root, "requirements.md")).contains("R-1"));
+
+        let again = draft_inner(
+            &state,
+            &task,
+            Part::Requirements,
+            None,
+            &[],
+            &quiet,
+            &mut *answering("## Requirements\n- R-1: new\n", &asked),
+        )
+        .unwrap();
+        assert_eq!(again.before.as_deref(), Some("## Requirements\n- R-1: WHEN a THE SYSTEM SHALL b.\n"));
+        assert_eq!(get(&spec_at(&root, "requirements.md")), "## Requirements\n- R-1: new\n");
+        assert!(!spec_at(&root, ".spec-drafts").exists());
+
+        // A bug is drafted into the file a bug's requirements are in, once.
+        let (root2, state2, task2) = world(&["api"]);
+        let bug = draft_inner(
+            &state2,
+            &task2,
+            Part::Requirements,
+            Some(Kind::Bugfix),
+            &[],
+            &quiet,
+            &mut *answering("## Expected behaviour\n- R-1: x\n", &asked),
+        )
+        .unwrap();
+        assert_eq!(bug.path, "bugfix.md");
+        let redo = draft_inner(
+            &state2,
+            &task2,
+            Part::Requirements,
+            Some(Kind::Feature),
+            &[],
+            &quiet,
+            &mut *answering("## Expected behaviour\n- R-1: y\n", &asked),
+        )
+        .unwrap();
+        assert_eq!(redo.path, "bugfix.md", "the file that is there decides");
+        assert!(!spec_at(&root2, "requirements.md").exists());
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&root2).ok();
+    }
+
+    #[test]
+    fn the_design_and_the_tasks_need_the_requirements_and_tasks_keep_what_was_done() {
+        let (root, state, task) = world(&["api", "web"]);
+        let asked = std::cell::RefCell::new(Vec::new());
+        let err =
+            draft_inner(&state, &task, Part::Design, None, &[], &quiet, &mut *answering("d", &asked)).unwrap_err();
+        assert_eq!(err.to_string(), "write the requirements first");
+
+        put(&spec_at(&root, "requirements.md"), "## Requirements\n- R-1 [api, web]: WHEN a THE SYSTEM SHALL b.\n");
+        let design =
+            draft_inner(&state, &task, Part::Design, None, &[], &quiet, &mut *answering("## Approach\nx\n", &asked))
+                .unwrap();
+        assert_eq!(design.path, "design.md");
+        assert!(asked.borrow().last().unwrap().contains("WHEN a THE SYSTEM SHALL b."), "it reads the working copy");
+
+        put(
+            &spec_at(&root, "tasks.md"),
+            "# api\n\n## Tasks\n- [x] 1. Add it (R-1)\n\n# web\n\n## Tasks\n- [ ] 1. Show it (R-1)\n",
+        );
+        let run = "# api\n## Tasks\n- [ ] 1. Add it (R-1)\n- [ ] 2. Test it (R-1)\n\n# web\n## Tasks\n- [ ] 1. Show it (R-1; after api 1)\n";
+        let tasks = draft_inner(&state, &task, Part::Tasks, None, &[], &quiet, &mut *answering(run, &asked)).unwrap();
+
+        assert_eq!(tasks.path, "tasks.md");
+        assert!(tasks.before.unwrap().contains("[x] 1. Add it"));
+        let written = get(&spec_at(&root, "tasks.md"));
+        assert!(written.contains("# api\n\n## Tasks\n- [x] 1. Add it"), "done stays done: {written}");
+        assert!(written.contains("# web\n\n## Tasks\n- [ ] 1. Show it (R-1; after api 1)"), "{written}");
+        let folders = vec!["api".to_string(), "web".to_string()];
+        let steps = crate::spec::owned::owned_steps(&written, &folders);
+        assert_eq!(steps.iter().filter(|s| s.repos == ["api"]).count(), 2, "{steps:?}");
+        assert_eq!(steps.iter().filter(|s| s.repos == ["web"]).count(), 1, "{steps:?}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn applying_answers_rewrites_the_requirements_file_and_hands_back_the_old_text() {
+        let (root, state, task) = world(&["api"]);
+        let asked = std::cell::RefCell::new(Vec::new());
+        let before = "## Requirements\n- R-1: WHEN a THE SYSTEM SHALL b.\n\n## Open questions\n- Q-1: Say when?\n  Answer: yes\n";
+        put(&spec_at(&root, "requirements.md"), before);
+
+        let done = apply_inner(
+            &state,
+            &task,
+            &quiet,
+            &mut *answering("## Requirements\n- R-1: WHEN a THE SYSTEM SHALL b, saying when.\n", &asked),
+        )
+        .unwrap();
+
+        assert_eq!(
+            (done.path.as_str(), done.before.as_str(), done.changed.as_slice()),
+            ("requirements.md", before, ["R-1".to_string()].as_slice())
+        );
+        assert!(get(&spec_at(&root, "requirements.md")).contains("saying when"));
+        put(&spec_at(&root, "requirements.md"), "## Requirements\n- R-1: x\n");
+        let none = apply_inner(&state, &task, &quiet, &mut refusing).unwrap_err();
+        assert_eq!(none.to_string(), "no open question has an answer yet");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn check_against_spec_reads_the_working_copy() {
+        let (root, state, task) = world(&["api", "web"]);
+        let api = root.join("tasks/T-1/api");
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["config", "user.email", "t@villain.local"],
+            &["config", "user.name", "T"],
+            &["commit", "-q", "--allow-empty", "-m", "init"],
+        ] {
+            crate::git::run_for_tests(&api, args).unwrap();
+        }
+        put(
+            &spec_at(&root, "requirements.md"),
+            "## Requirements\n- R-1 [api]: WHEN a THE SYSTEM SHALL b.\n- R-2 [web]: WHEN c THE SYSTEM SHALL d.\n",
+        );
+        put(&spec_at(&root, "design.md"), "## Contracts\n- C-1: POST /refunds\n");
+        let asked = std::cell::RefCell::new(Vec::new());
+
+        let checked = check_inner(
+            &state,
+            &task,
+            "c-api",
+            &mut *answering("R-1 | met | api/x.rs:1\nR-2 | met | not ours", &asked),
+        )
+        .unwrap();
+
+        let prompt = asked.borrow()[0].clone();
+        assert!(
+            prompt.contains("R-1") && prompt.contains("WHEN a THE SYSTEM SHALL b.") && prompt.contains("POST /refunds"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("requirements it must meet: R-1."), "{prompt}");
+        assert_eq!(checked.check.results.len(), 1, "only the requirements that name api");
+        assert!(!checked.stale);
+        let kept = crate::commands::spec::check_of(&state, &task, "api").unwrap();
+        assert_eq!(kept.sha, checked.check.sha);
+        assert!(get(&root.join("tasks/T-1/.spec-checks/api.json")).contains("R-1"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn sections_keep_a_repository_the_run_left_out() {
+        let folders = vec!["api".to_string(), "web".to_string()];
+        let drafted = vec![("api".to_string(), "## Tasks\n- [ ] 1. a".to_string())];
+        let before = vec![("web".to_string(), "## Tasks\n- [x] 1. w".to_string())];
+        assert_eq!(
+            sectioned(&folders, &drafted, &before),
+            "# api\n\n## Tasks\n- [ ] 1. a\n\n# web\n\n## Tasks\n- [x] 1. w\n"
+        );
+        assert_eq!(sectioned(&folders[..1], &drafted, &[]), "## Tasks\n- [ ] 1. a\n");
+        assert_eq!(without_heading("# api\n\n## Tasks\n- [ ] 1. a\n", "api"), "## Tasks\n- [ ] 1. a\n");
     }
 }

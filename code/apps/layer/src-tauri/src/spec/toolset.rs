@@ -3,9 +3,6 @@
 //! the paragraph agents are told about it. Nothing here touches the disk or
 //! runs anything; later code reads a `Toolset` and does the work.
 
-// Later tasks call all of this; until then nothing outside the tests does.
-#![allow(dead_code)]
-
 use super::glob;
 use serde::{Deserialize, Serialize};
 

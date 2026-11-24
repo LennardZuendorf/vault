@@ -11,18 +11,17 @@ import { Spinner } from "../ui";
  * and Apply answers, which builds them into the requirements (SPEC-20). An
  * answer lives in the editor's text, so this list is only a view of it.
  */
-export function SpecQuestions({ task }: { task: TaskView }) {
+export function SpecQuestions({ task, path }: { task: TaskView; path: string }) {
   const state = useSpecs((s) => s.byTask[task.id]);
   const edit = useSpecs((s) => s.edit);
   const applyAnswers = useSpecs((s) => s.applyAnswers);
-  const undoAnswers = useSpecs((s) => s.undoAnswers);
+  const undo = useSpecs((s) => s.undo);
   const fail = useStore((s) => s.fail);
 
-  const text = editorText(state, "requirements", null);
+  const text = editorText(state, path);
   const qs = questions(text);
-  const applied = state?.applied ?? null;
+  const applied = state?.last?.results ?? null;
   const drafting = state?.drafting ?? null;
-  const applying = drafting?.part === "requirements";
   const anyAnswered = qs.some((q) => q.answer);
 
   if (qs.length === 0 && !applied) return null;
@@ -41,8 +40,12 @@ export function SpecQuestions({ task }: { task: TaskView }) {
       </h3>
       {applied && (
         <div className="spec-applied">
-          <span>{appliedSummary(applied.results)}</span>
-          <button className="ui-button" disabled={!!drafting} onClick={() => undoAnswers(task.id)}>
+          <span>{appliedSummary(applied)}</span>
+          <button
+            className="ui-button"
+            disabled={!!drafting}
+            onClick={() => void undo(task.id).catch(fail)}
+          >
             Undo
           </button>
         </div>
@@ -52,9 +55,7 @@ export function SpecQuestions({ task }: { task: TaskView }) {
           key={q.id}
           question={q}
           disabled={!!drafting}
-          onAnswer={(answer) =>
-            edit(task.id, { part: "requirements", checkoutId: null }, setAnswer(text, q.id, answer))
-          }
+          onAnswer={(answer) => edit(task.id, path, setAnswer(text, q.id, answer))}
         />
       ))}
       {qs.length > 0 && (
@@ -71,7 +72,7 @@ export function SpecQuestions({ task }: { task: TaskView }) {
           >
             Apply answers
           </button>
-          {applying && <Spinner />}
+          {drafting && <Spinner />}
         </div>
       )}
     </section>
@@ -150,5 +151,5 @@ function appliedSummary(r: AppliedAnswers): string {
   ].filter(Boolean) as string[];
   if (parts.length === 0) return "No requirement changed.";
   const text = parts.join("; ");
-  return text.charAt(0).toUpperCase() + text.slice(1) + ". Read it through before approving.";
+  return text.charAt(0).toUpperCase() + text.slice(1) + ". Read it through.";
 }

@@ -1,5 +1,5 @@
 //! What the spec's one-shot runs are asked (§19, SPEC-5, SPEC-15,
-//! SPEC-20, SPEC-25): the text of each prompt, kept apart from running them.
+//! SPEC-20): the text of each prompt, kept apart from running them.
 
 use std::path::Path;
 
@@ -160,7 +160,7 @@ pub(super) fn design_prompt(kind: Kind, folders: &[String], reqs: &str, old: Opt
     ));
     if let Some(old) = old {
         p.push_str(&format!(
-            "\n# The design approved before\n\nKeep what still holds, and change what the \
+            "\n# The design so far\n\nKeep what still holds, and change what the \
              requirements now need.\n\n{}\n",
             old.trim()
         ));
@@ -236,7 +236,7 @@ pub(super) fn tasks_prompt(
     ));
     for (folder, tasks) in old {
         p.push_str(&format!(
-            "\n# The tasks of `{folder}` approved before\n\nKeep every ticked step as it is, with \
+            "\n# The tasks of `{folder}` so far\n\nKeep every ticked step as it is, with \
              its number. Add steps for what the requirements now need.\n\n{}\n",
             tasks.trim()
         ));
@@ -276,38 +276,6 @@ pub(super) fn answers_prompt(folders: &[String], text: &str) -> String {
     }
     p.push_str(text.trim());
     p.push('\n');
-    p
-}
-
-pub(super) fn merge_prompt(kind: Kind, folders: &[String], copies: &[(String, Vec<(Part, String)>)]) -> String {
-    let mut p = format!(
-        concat!(
-            "Below are the specs that the repositories {names} each had of their own for one piece ",
-            "of work. Merge them into one spec for the whole task.\n\n",
-            "Reply with these parts, each headed with a first-level heading that is its name ",
-            "alone, and nothing else:\n\n",
-            "`# requirements`: the {word} once, with the headings they have. Where two repositories ",
-            "had the same requirement, write it once. {tagging}",
-            "Note an id that changed after the text: `(was web R-2)`. Keep every `Answer:` line.\n\n",
-            "`# design`: one design: `## Approach`, then `## Contracts` (each `- C-1: `, what passes ",
-            "between the repositories exactly, with the side that provides it and the side that ",
-            "uses it, from both sides' designs; where they disagree, say so in the item), then a ",
-            "section for each repository headed with its name alone.\n\n",
-            "Then a part for each repository headed with its name alone (`# {first}`): its tasks, ",
-            "as they were, with every tick kept, the requirement ids changed to the new ones, and ",
-            "`after <repository> <step>` added last in the parentheses of a step that needs another ",
-            "repository's step done first.\n\n",
-        ),
-        names = names(folders),
-        word = Part::Requirements.word(kind),
-        tagging = tagging(folders),
-        first = folders.first().map(String::as_str).unwrap_or(""),
-    );
-    for (folder, files) in copies {
-        for (part, text) in files {
-            p.push_str(&format!("\n# The {} of `{folder}`\n\n{}\n", part.word(kind), text.trim()));
-        }
-    }
     p
 }
 
@@ -404,7 +372,7 @@ mod tests {
         assert!(p.contains("Each side is built to this text alone"));
         let one = design_prompt(Kind::Feature, &two()[..1], "x", Some("old design"));
         assert!(!one.contains("## Contracts"));
-        assert!(one.contains("# The design approved before\n\nKeep what still holds"));
+        assert!(one.contains("# The design so far\n\nKeep what still holds"));
     }
 
     #[test]
@@ -412,7 +380,7 @@ mod tests {
         let p = tasks_prompt(&two(), "reqs", "design", &[("web".into(), "- [x] 1. Done".into())], None);
         assert!(p.contains("(`# api`)"));
         assert!(p.contains("`(R-2, C-1; after api 3)`"));
-        assert!(p.contains("# The tasks of `web` approved before"));
+        assert!(p.contains("# The tasks of `web` so far"));
         assert!(!p.contains("This is an epic"));
     }
 
@@ -438,25 +406,6 @@ mod tests {
         assert!(p.ends_with(
             "# Tickets under the epic\n\n- ACME-265 Invoice PDF (P1)\n- ACME-270 Cancelled state for all orders\n"
         ));
-    }
-
-    #[test]
-    fn the_merge_asks_for_one_spec_with_each_repositorys_tasks_and_their_ticks() {
-        let copies = vec![
-            (
-                "api".to_string(),
-                vec![
-                    (Part::Requirements, "- R-1: api's".to_string()),
-                    (Part::Tasks, "- [x] 1. Done (R-1)".to_string()),
-                ],
-            ),
-            ("web".to_string(), vec![(Part::Requirements, "- R-1: web's".to_string())]),
-        ];
-        let p = merge_prompt(Kind::Feature, &two(), &copies);
-        assert!(p.contains("`# requirements`") && p.contains("`# design`") && p.contains("(`# api`)"));
-        assert!(p.contains("with every tick kept"));
-        assert!(p.contains("(was web R-2)"));
-        assert!(p.contains("# The tasks of `api`\n\n- [x] 1. Done (R-1)"));
     }
 
     #[test]

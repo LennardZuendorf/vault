@@ -114,26 +114,3 @@ export function sameAnswer(option: string, answer: string | null): boolean {
   const norm = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
   return answer !== null && norm(option) === norm(answer);
 }
-
-/**
- * What approving requirements that still hold questions puts at risk
- * (SPEC-21), or null when there are none.
- */
-export function approveWarning(qs: Question[]): string | null {
-  const open = qs.filter((q) => !q.answer).length;
-  const answered = qs.length - open;
-  const said: string[] = [];
-  if (open > 0) {
-    said.push(
-      open === 1
-        ? "1 open question has no answer. An agent working to these requirements will stop to ask it."
-        : `${open} open questions have no answer. An agent working to these requirements will stop to ask them.`,
-    );
-  }
-  if (answered > 0) {
-    said.push(
-      `${answered === 1 ? "1 answer is" : `${answered} answers are`} not built into the requirements yet, and Check against spec reads only the requirements. Apply answers does that.`,
-    );
-  }
-  return said.length > 0 ? said.join(" ") : null;
-}

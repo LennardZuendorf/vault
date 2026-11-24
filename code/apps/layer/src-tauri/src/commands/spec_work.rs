@@ -1,5 +1,6 @@
 //! Working to a task's spec (§19): what agents are told of it, the steps
-//! they tick, what the pull requests say of it, and telling them it changed.
+//! they tick, the one way a file of it is written, and what the pull
+//! requests say of it.
 
 use std::path::Path;
 
@@ -9,18 +10,18 @@ use tauri::State;
 use crate::config::{SpecCommit, Task};
 use crate::error::{Error, Result};
 use crate::git;
-use crate::mcp::{arg, required};
+use crate::mcp::{arg, required, str_prop, tool};
 use crate::spec::owned::{owned_steps, tick_at, OwnedStep};
 use crate::spec::toolset::Toolset;
-use crate::spec::{self, glob, Kind, Part};
+use crate::spec::{self, glob};
 
-use super::spec::{and_list, spec_of, Slot};
+use super::spec::check_of;
 use super::spec_commit::commit_spec;
 use super::spec_copy::{list_files, move_old_spec, read_file, spec_dir, toolset_of, write_file};
 use super::AppState;
 
-/// Every edit of a spec file that reads the file and writes it back, a tick
-/// or a whole new text: one at a time. Two agents ticking at once each wrote
+/// Every edit of a spec file, a tick or a whole new text, from an agent or
+/// from the Spec tab: one at a time. Two agents ticking at once each wrote
 /// back what they had read, and one tick was lost.
 static EDITING: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
@@ -39,7 +40,7 @@ pub(crate) fn named_task(state: &AppState, args: &Value, caller: Option<&str>) -
 /// `task`, with a spec kept the old way moved into its `spec/` folder first
 /// when there is none yet. The move may pin the task to Kiro, so the task is
 /// read again after it.
-fn with_spec_moved(state: &AppState, task: &Task) -> Result<Task> {
+pub(crate) fn with_spec_moved(state: &AppState, task: &Task) -> Result<Task> {
     if std::fs::symlink_metadata(spec_dir(state, task)).is_err() && move_old_spec(state, task)? {
         return state.config.task(&task.id);
     }
@@ -106,6 +107,17 @@ pub(crate) fn tick_step(
         .ok_or_else(|| Error::NotFound(format!("step {position} of {rel}")))
 }
 
+/// Replace the whole text of one file of `task`'s spec. The one way a file is
+/// written, by an agent's `spec_write`, the Spec tab, a draft or Apply
+/// answers, so the lock above is every edit's. Refused outside the spec folder
+/// and for a file the task's toolset does not keep in a spec.
+pub(crate) fn write_spec(state: &AppState, task: &Task, path: &str, text: &str) -> Result<()> {
+    let task = with_spec_moved(state, task)?;
+    let (t, dir) = (toolset_of(state, &task), spec_dir(state, &task));
+    let _one = EDITING.lock();
+    write_file(&dir, &t, path, text)
+}
+
 /// What a spec tool answers, and the task whose spec it changed, so the
 /// caller can say so.
 #[derive(Debug)]
@@ -147,10 +159,7 @@ pub fn spec_tool(state: &AppState, name: &str, args: &Value, caller: Option<&str
             // An empty text is a file made empty, so only a missing one is refused.
             let text =
                 args.get("text").and_then(Value::as_str).ok_or_else(|| Error::Other("text is required".into()))?;
-            {
-                let _one = EDITING.lock();
-                write_file(&dir, &t, path, text)?;
-            }
+            write_spec(state, &task, path, text)?;
             Ok(SpecAnswer { value: Value::String(format!("wrote {path}")), changed: Some(task.id) })
         }
         "spec_task" => {
@@ -185,26 +194,36 @@ pub fn spec_tool(state: &AppState, name: &str, args: &Value, caller: Option<&str
     }
 }
 
-/// Commit what agents ticked since the last approval, before a push takes
-/// the branch to review (SPEC-13): `tasks.md` alone, and only while it
-/// differs from what was approved in its ticks. A spec changed outside the
-/// app is the user's to approve or put back (SPEC-22), not to be committed
-/// as ticks.
-///
-/// Open pull requests commits the whole spec now (`spec_commit.rs`); this goes
-/// with the old layout.
-#[allow(dead_code)]
-pub(crate) fn commit_ticks(state: &AppState, task: &Task, checkout_id: &str) -> Result<()> {
-    let spec = spec_of(state, task);
-    let Some(home) = spec.homes.iter().find(|h| h.checkout.id == checkout_id) else { return Ok(()) };
-    let Some(rel) = &home.rel else { return Ok(()) };
-    let file = Part::Tasks.file(Kind::Feature);
-    if !home.dir.join(file).is_file() || spec.has_outside(&Slot::tasks(&home.folder)) {
-        return Ok(());
-    }
-    let message = format!("Tick the done steps of the spec for {}.", task.issue_key.as_deref().unwrap_or(&task.branch));
-    git::commit_only(Path::new(&home.checkout.path), &[format!("{rel}/{file}").as_str()], &message)?;
-    Ok(())
+/// The tool this file answers that is gone: `spec_propose`, which running
+/// agents may still have in context. It points at `spec_write` for one release.
+pub fn spec_tools() -> Vec<Value> {
+    vec![tool(
+        "spec_propose",
+        "Gone: write the spec's file with `spec_write`, or edit it in the spec folder of \
+         your task. The answer says where that is.",
+        json!({ "task_id": str_prop("Your task's id, from the context file or list_tasks") }),
+        Vec::new(),
+    )]
+}
+
+pub fn spec_owns(name: &str) -> bool {
+    name == "spec_propose"
+}
+
+/// What `spec_propose` answers: where to write instead.
+fn gone(dir: &Path) -> Error {
+    Error::Other(format!("spec_propose is gone: write the file with spec_write, or edit it under {}.", dir.display()))
+}
+
+pub async fn spec_call(app: &tauri::AppHandle, args: Value, caller: Option<&str>) -> Result<Value> {
+    let caller = caller.map(str::to_string);
+    super::blocking(app.clone(), move |state| {
+        let place = named_task(state, &args, caller.as_deref())
+            .map(|task| spec_dir(state, &task))
+            .unwrap_or_else(|_| "the spec folder of your task".into());
+        Err(gone(&place))
+    })
+    .await
 }
 
 /// The sentence that tells an agent to write the spec first (Spec first,
@@ -256,28 +275,32 @@ pub(crate) fn with_spec_line(state: &AppState, task: &Task, prompt: String) -> S
 pub(crate) fn pr_section(state: &AppState, task: &Task) -> String {
     let (t, dir) = (toolset_of(state, task), spec_dir(state, task));
     let reqs = super::task_context::entry_file(&t, &dir).map(|(_, text)| spec::requirements(&text)).unwrap_or_default();
-    let spec = spec_of(state, task);
     let mut md = String::new();
-    for h in &spec.homes {
-        let mine: Vec<_> = reqs.iter().filter(|r| r.names(&h.folder)).collect();
+    for r in super::spec_commit::repositories(state, task) {
+        let mine: Vec<_> = reqs.iter().filter(|q| q.names(&r.folder)).collect();
         if mine.is_empty() {
             continue;
         }
         // Kiro's goes under the repository's spec folder; the other toolsets
         // mirror their own layout (`commit_to`).
-        let rel = if t.id == "kiro" { h.rel.clone() } else { t.commit_to.clone() };
-        let place = match rel.filter(|_| h.project.spec_commit != SpecCommit::None) {
+        let rel = if t.id == "kiro" {
+            let base = r.project.spec_folder.as_deref().unwrap_or("specs");
+            Some(format!("{base}/{}", spec::folder_name(&task.branch)))
+        } else {
+            t.commit_to.clone()
+        };
+        let place = match rel.filter(|_| r.project.spec_commit != SpecCommit::None) {
             Some(rel) => format!("`{rel}/` in the repository"),
             None => "kept outside the repository, so not linked".into(),
         };
-        md.push_str(&format!("\n## Spec of `{}`: {place}\n\n", h.project.name));
-        let check = spec.check(h);
-        let head = git::head_commit(Path::new(&h.checkout.path)).ok();
+        md.push_str(&format!("\n## Spec of `{}`: {place}\n\n", r.project.name));
+        let check = check_of(state, task, &r.folder);
+        let head = git::head_commit(Path::new(&r.checkout.path)).ok();
         let stale = check.as_ref().is_some_and(|c| head.as_deref() != Some(c.sha.as_str()));
-        for r in mine {
+        for q in mine {
             let answer = check
                 .as_ref()
-                .and_then(|c| c.results.iter().find(|v| v.id == r.id))
+                .and_then(|c| c.results.iter().find(|v| v.id == q.id))
                 .map(|v| {
                     format!(
                         "{}{}",
@@ -286,7 +309,7 @@ pub(crate) fn pr_section(state: &AppState, task: &Task) -> String {
                     )
                 })
                 .unwrap_or_else(|| "not checked".into());
-            md.push_str(&format!("- {}: {} — {answer}\n", r.id, r.text));
+            md.push_str(&format!("- {}: {} — {answer}\n", q.id, q.text));
         }
         match (&check, stale) {
             (None, _) => md.push_str("\nNo check against the spec was run.\n"),
@@ -297,15 +320,9 @@ pub(crate) fn pr_section(state: &AppState, task: &Task) -> String {
     md
 }
 
-/// What Start agent asks of an agent on the spec (SPEC-12): every step file,
+/// What an agent started on the spec is asked (SPEC-12): every step file,
 /// or one repository's steps in it, in order, each ticked as soon as it is
-/// done.
-#[tauri::command]
-pub async fn spec_work_prompt(app: tauri::AppHandle, task_id: String, checkout_id: Option<String>) -> Result<String> {
-    super::blocking(app, move |state| work_prompt(state, &task_id, checkout_id.as_deref())).await
-}
-
-/// The body of `spec_work_prompt`; empty when the spec has no step to do.
+/// done. Empty when the spec has no step to do.
 pub(crate) fn work_prompt(state: &AppState, task_id: &str, checkout_id: Option<&str>) -> Result<String> {
     let task = with_spec_moved(state, &state.config.task(task_id)?)?;
     let (t, dir) = (toolset_of(state, &task), spec_dir(state, &task));
@@ -350,39 +367,6 @@ pub(crate) fn work_prompt(state: &AppState, task_id: &str, checkout_id: Option<&
             ""
         },
     ))
-}
-
-/// Tell the task's running agents that the spec changed (SPEC-14): one line
-/// each, naming the files. Returns how many were told.
-#[tauri::command]
-pub async fn tell_spec_change(app: tauri::AppHandle, task_id: String, parts: Vec<Part>) -> Result<usize> {
-    super::blocking(app, move |state| {
-        let task = state.config.task(&task_id)?;
-        let spec = spec_of(state, &task);
-        let kind = spec.kind();
-        let mut files: Vec<String> = Vec::new();
-        for part in &parts {
-            match spec.homes.first() {
-                Some(first) if *part != Part::Tasks || spec.homes.len() == 1 => {
-                    files.push(format!("{} (the same in every repository)", first.dir.join(part.file(kind)).display()));
-                }
-                _ => files.extend(spec.homes.iter().map(|h| h.dir.join(part.file(kind)).display().to_string())),
-            }
-        }
-        let line = format!(
-            "The user changed the spec for this work: {}. Read it again, and check what you are doing still meets it.",
-            and_list(&files.iter().map(String::as_str).collect::<Vec<_>>())
-        );
-        let mut told = 0;
-        for pane in state.ptys.list(Some(&task.id)) {
-            if pane.running && pane.kind == crate::pty::PaneKind::Agent {
-                super::hand_over(state, &task, &pane.id, "SPEC_CHANGED.md", &line)?;
-                told += 1;
-            }
-        }
-        Ok(told)
-    })
-    .await
 }
 
 /// How a repository takes specs (SPEC-1, SPEC-3): the toolset Start work
@@ -703,6 +687,36 @@ mod tests {
         assert!(sub.find(&work).unwrap() < sub.find(&line).unwrap(), "{sub}");
         assert!(sub.ends_with(&line), "{sub}");
         assert_eq!(sub.matches(&line).count(), 1);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn spec_propose_points_at_spec_write() {
+        let (root, _, _) = world(&["api"]);
+        let said = gone(&root.join("tasks/T-1/spec")).to_string();
+        assert!(said.starts_with("spec_propose is gone: write the file with spec_write, or edit it under "), "{said}");
+        assert!(said.ends_with(&format!("{}.", root.join("tasks/T-1/spec").display())), "{said}");
+        assert!(spec_owns("spec_propose") && !spec_owns("spec_write"));
+        assert_eq!(spec_tools().len(), 1);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_pull_request_section_shows_the_check_kept_for_a_repository() {
+        use crate::commands::spec::{keep_check, Check, Verdict};
+        let (root, state, task) = world(&["api"]);
+        put(&spec_at(&root, "requirements.md"), "## Requirements\n- R-1 [api]: WHEN a THE SYSTEM SHALL b.\n");
+        let check = Check {
+            sha: "abc".into(),
+            at: 1,
+            results: vec![Verdict { id: "R-1".into(), verdict: "met".into(), evidence: "api/x.rs:1".into() }],
+        };
+        keep_check(&state, &task, "api", &check).unwrap();
+
+        let md = pr_section(&state, &task);
+
+        assert!(md.contains("- R-1: WHEN a THE SYSTEM SHALL b. — met (api/x.rs:1)"), "{md}");
+        assert!(!md.contains("No check against the spec was run"), "{md}");
         std::fs::remove_dir_all(&root).ok();
     }
 }

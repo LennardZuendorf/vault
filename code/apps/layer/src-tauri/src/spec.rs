@@ -12,8 +12,7 @@ pub mod glob;
 pub mod owned;
 pub mod toolset;
 
-/// One of a spec's files, in the order they are drafted and approved
-/// (SPEC-4).
+/// One of a Kiro spec's files, in the order they are usually drafted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Part {
@@ -23,8 +22,6 @@ pub enum Part {
 }
 
 impl Part {
-    pub const ALL: [Part; 3] = [Part::Requirements, Part::Design, Part::Tasks];
-
     /// Its file in the spec folder. A bug's requirements are its analysis.
     pub fn file(self, kind: Kind) -> &'static str {
         match (self, kind) {
@@ -43,10 +40,6 @@ impl Part {
             (Part::Design, _) => "design",
             (Part::Tasks, _) => "tasks",
         }
-    }
-
-    pub fn index(self) -> usize {
-        self as usize
     }
 }
 
@@ -326,40 +319,6 @@ fn mark(tasks: &str, step: &Step, note: &str) -> String {
         .join("\n")
 }
 
-/// `tasks` with every box unticked: what an agent may change in an approved
-/// `tasks.md` without changing the spec (SPEC-13, SPEC-22).
-pub fn without_ticks(tasks: &str) -> String {
-    let mut out = tasks.trim().to_string();
-    for step in steps(tasks).into_iter().filter(|s| s.done) {
-        out = tick(&out, step.number, false).unwrap_or(out);
-    }
-    out
-}
-
-/// The same text, as far as the spec goes: what was approved and a copy
-/// that differs only in its ticks (for `tasks.md`) or in blank space at
-/// either end are the same.
-pub fn same_text(part: Part, approved: &str, copy: &str) -> bool {
-    match part {
-        Part::Tasks => without_ticks(approved) == without_ticks(copy),
-        _ => approved.trim() == copy.trim(),
-    }
-}
-
-/// `approved` with the steps ticked that are ticked in `copy` under the same
-/// number and text: what Put back writes, so a spec put back keeps the work
-/// done (SPEC-22).
-pub fn keep_ticks(approved: &str, copy: &str) -> String {
-    let fresh = steps(approved);
-    let mut out = approved.to_string();
-    for done in steps(copy).into_iter().filter(|s| s.done) {
-        if fresh.iter().any(|s| s.number == done.number && normal(&s.text) == normal(&done.text)) {
-            out = tick(&out, done.number, true).unwrap_or(out);
-        }
-    }
-    out
-}
-
 fn normal(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
@@ -617,18 +576,5 @@ mod tests {
         assert_eq!(s[0].serves, vec!["R-3"]);
         assert_eq!(s[0].after, vec!["api 2", "api 4"]);
         assert!(s[1].after.is_empty());
-    }
-
-    #[test]
-    fn ticks_are_no_change_to_the_spec_and_survive_being_put_back() {
-        let approved = "## Tasks\n- [ ] 1. Add it (R-1)\n- [ ] 2. Test it (R-1)\n";
-        let ticked = tick(approved, 1, true).unwrap();
-        assert!(same_text(Part::Tasks, approved, &format!("{ticked}\n\n")));
-        let edited = format!("{ticked}\n- [ ] 3. Something nobody approved\n");
-        assert!(!same_text(Part::Tasks, approved, &edited));
-        assert!(!same_text(Part::Requirements, "- R-1: a", "- R-1: b"));
-
-        let put_back = keep_ticks(approved, &edited);
-        assert_eq!(put_back, ticked, "the step done stays done; the step added goes");
     }
 }

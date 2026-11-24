@@ -44,13 +44,13 @@ pub(crate) fn target_path(t: &Toolset, task: &Task, project: &Project, rel: &str
 }
 
 /// One repository of the task, and what names it in a step file.
-struct Repo {
-    checkout: Checkout,
-    project: Project,
-    folder: String,
+pub(crate) struct Repo {
+    pub checkout: Checkout,
+    pub project: Project,
+    pub folder: String,
 }
 
-fn repositories(state: &AppState, task: &Task) -> Vec<Repo> {
+pub(crate) fn repositories(state: &AppState, task: &Task) -> Vec<Repo> {
     state
         .config
         .checkouts_of(&task.id)

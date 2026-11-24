@@ -424,8 +424,15 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     let root = unique_task_root(&state.config, &branch.replace('/', "-"));
     std::fs::create_dir_all(&root)?;
 
+    // A sub-task is written to the epic's spec, so it is installed with the
+    // epic's toolset, not whatever the app's default has become.
+    let toolset = req
+        .sub_task
+        .as_ref()
+        .and_then(|of| state.config.task(&of.epic).ok())
+        .map(|epic| super::spec_copy::toolset_of(state, &epic).id);
     let task = Task {
-        toolset: None,
+        toolset,
         id: uuid::Uuid::new_v4().to_string(),
         name: req.name,
         root: root.to_string_lossy().to_string(),
@@ -506,7 +513,7 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     // started by hand in it is no worse off than one the app launched.
     let _ = write_task_context(state, &task);
     // Its toolset goes in once the worktrees are there, and in the background.
-    super::spec_install::start(&task.id);
+    super::spec_install_run::start(&task.id);
 
     Ok(task)
 }
@@ -568,7 +575,7 @@ pub(crate) fn add_repo(state: &AppState, task_id: &str, project_id: &str) -> Res
     if let Ok(task) = state.config.task(task_id) {
         let _ = write_task_context(state, &task);
         // A task that had no folder until now has no install yet.
-        super::spec_install::start_unless_installed(state, &task);
+        super::spec_install_run::start_unless_installed(state, &task);
     }
 
     let told = tell_agents(

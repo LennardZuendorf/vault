@@ -10,12 +10,10 @@
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
 
 use crate::config::Task;
 use crate::error::{Error, Result};
@@ -24,7 +22,7 @@ use crate::spec::{self, glob};
 
 use super::panes::agent_file_dir;
 use super::spec_copy::{spec_dir, toolset_of, MOST_DEPTH, MOST_FILES};
-use super::spec_runner::{tail, Real, Runner};
+use super::spec_runner::{tail, Runner};
 use super::AppState;
 
 /// What an install wrote, in the task folder: `{ toolset, version, ok,
@@ -74,9 +72,9 @@ pub struct InstallState {
 /// The `spec:install` event: whose install, and how it stands.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Announce<'a> {
-    task_id: &'a str,
-    state: &'a InstallState,
+pub(super) struct Announce<'a> {
+    pub(super) task_id: &'a str,
+    pub(super) state: &'a InstallState,
 }
 
 /// Tasks being installed now. A second install of one (Retry pressed twice,
@@ -468,6 +466,29 @@ fn read_record(dir: &Path) -> Option<Record> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
+/// How `task`'s install stands now, for the Spec tab when it opens: under
+/// way, or as its record says. None when none has run.
+pub(crate) fn state_of(state: &AppState, task: &Task) -> Option<InstallState> {
+    if RUNNING.lock().contains(&task.id) {
+        let toolset = toolset_of(state, task);
+        return Some(InstallState {
+            toolset: toolset.id,
+            version: toolset.version,
+            ok: false,
+            error: None,
+            running: true,
+        });
+    }
+    let record = read_record(&agent_file_dir(state, task)?)?;
+    Some(InstallState {
+        toolset: record.toolset,
+        version: record.version,
+        ok: record.ok,
+        error: record.error,
+        running: false,
+    })
+}
+
 /// The text is written beside it, to a file nobody else can have made, and
 /// renamed over it: a reader sees the old record or the new, never half.
 fn write_record(dir: &Path, record: &Record) -> Result<()> {
@@ -534,65 +555,6 @@ fn ours(dir: &Path, rel: &str) -> bool {
         }
     }
     true
-}
-
-// ---- Running it in the background -----------------------------------------
-
-static APP: OnceLock<AppHandle> = OnceLock::new();
-
-/// From launch on, installs can be started where a task is made, which has
-/// no app of its own to announce with. Nothing starts in tests.
-pub fn attach_spec_install(app: &AppHandle) {
-    let _ = APP.set(app.clone());
-}
-
-/// Install `task_id`'s toolset in the background and announce how it goes.
-pub(crate) fn start(task_id: &str) {
-    let Some(app) = APP.get().cloned() else { return };
-    let id = task_id.to_string();
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = announce(app, id.clone()).await {
-            eprintln!("the spec toolset of {id} was not installed: {e}");
-        }
-    });
-}
-
-/// `start`, for a task that gained a repository and has no install on
-/// record: the first repository of a task that had none.
-pub(crate) fn start_unless_installed(state: &AppState, task: &Task) {
-    if agent_file_dir(state, task).is_some_and(|dir| std::fs::symlink_metadata(dir.join(INSTALL_RECORD)).is_err()) {
-        start(&task.id);
-    }
-}
-
-fn emit(app: &AppHandle, task_id: &str, state: &InstallState) {
-    let _ = app.emit("spec:install", Announce { task_id, state });
-}
-
-/// Install, saying so when it starts and when it is done.
-async fn announce(app: AppHandle, task_id: String) -> Result<InstallState> {
-    let starting = {
-        let state = app.state::<AppState>();
-        let task = state.config.task(&task_id)?;
-        let toolset = toolset_of(&state, &task);
-        InstallState { toolset: toolset.id, version: toolset.version, ok: false, error: None, running: true }
-    };
-    emit(&app, &task_id, &starting);
-    let id = task_id.clone();
-    // The steps wait on npm and on git: off the runtime's threads.
-    let done = super::blocking(app.clone(), move |state| Ok(install(state, &state.config.task(&id)?, &Real))).await?;
-    // Running already: that install announces its own end.
-    if !done.running {
-        emit(&app, &task_id, &done);
-    }
-    Ok(done)
-}
-
-/// Install the task's toolset again: Retry on the Spec tab. The state it
-/// reaches is also announced, as `spec:install`.
-#[tauri::command]
-pub async fn install_spec_toolset(app: AppHandle, task_id: String) -> Result<InstallState> {
-    announce(app, task_id).await
 }
 
 #[cfg(test)]
