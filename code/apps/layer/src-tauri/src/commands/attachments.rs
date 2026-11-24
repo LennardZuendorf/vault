@@ -43,8 +43,10 @@ fn save_chat_image_inner(state: &AppState, pane_id: &str, name: &str, data: &str
         .ok_or_else(|| invalid("Invalid image filename."))?;
 
     let pane = state.ptys.info(pane_id)?;
-    if !pane.running || !pane.acp {
-        return Err(invalid("The conversation is not running."));
+    // A terminal takes them too (PANE-19): its agent is handed the path as
+    // if it had been pasted, which is how Claude Code is given an image.
+    if !pane.running {
+        return Err(invalid("The pane is not running."));
     }
     let root = if pane.task_id == CHAT_TASK_ID {
         let chats = state.config.worktree_root().join("_chat").canonicalize()?;
@@ -251,6 +253,40 @@ mod tests {
         assert_eq!(std::path::Path::new(&second), task.join("attachments/Screen Shot 2.png"));
         assert_eq!(std::fs::read(first).unwrap(), bytes);
         assert_eq!(std::fs::read(second).unwrap(), bytes);
+        state.ptys.close(&id).unwrap();
+    }
+
+    #[test]
+    fn a_terminal_pane_saves_dropped_images_at_its_task_root() {
+        let (root, mut cfg) = super::super::repos::tests::setup();
+        super::super::repos::tests::add_task(&mut cfg, &root, "task");
+        let task = root.join("tasks/task");
+        std::fs::create_dir_all(task.join("api")).unwrap();
+        let state = super::super::repos::tests::state(&root, cfg);
+        let app = tauri::test::mock_app();
+        let opts = SpawnOptions {
+            task_id: "task".into(),
+            checkout_id: Some("task-api".into()),
+            cwd: task.join("api").to_string_lossy().into_owned(),
+            kind: PaneKind::Agent,
+            title: "Claude Code".into(),
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "sleep 30".into()],
+            agent_id: Some("claude".into()),
+            rows: None,
+            cols: None,
+            initial_input: None,
+            prompted: true,
+            env: vec![],
+            title_activity: None,
+            title_topic: None,
+        };
+        let id = state.ptys.spawn(app.handle(), opts).unwrap().id;
+        let bytes = b"\x89PNG\r\n\x1a\nimage";
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let saved = save_chat_image_inner(&state, &id, "Screen Shot.png", &data).unwrap();
+        assert_eq!(std::path::Path::new(&saved), task.join("attachments/Screen Shot.png"));
+        assert_eq!(std::fs::read(saved).unwrap(), bytes);
         state.ptys.close(&id).unwrap();
     }
 

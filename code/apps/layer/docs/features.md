@@ -499,9 +499,17 @@ Each of them can also run as a conversation the app draws, over ACP (§20).
   (BOT-12), and the Henchman always starts in it (HEN-2). An agent that
   offers no `auto` mode keeps its own. Turned off, an agent asks as its
   own settings say; one already running keeps its mode.
+- **PANE-19** Images dropped on a terminal MUST be saved as ACP-20 saves
+  them (up to ten PNG, JPEG, GIF or WebP, 10 MiB each, in `attachments/`
+  of the task root or chat room) and their paths pasted at the cursor,
+  escaped as a Mac terminal escapes a dropped file, so Claude Code takes
+  each as an image. The window cannot see where a dropped file lives, so
+  the copy is what gets a path; other files are refused, with the reason.
+  Before this, a drop on a terminal did nothing.
 
 Code: `pty.rs`, `agents.rs`, `commands/panes.rs` (`restart_pane`),
-`Terminals.tsx`, `Terminal.tsx`, `AgentsView.tsx` (`lib/agentSort.ts`),
+`Terminals.tsx`, `Terminal.tsx` (drops through `lib/chatDrop.ts` and
+`commands/attachments.rs`, PANE-19), `AgentsView.tsx` (`lib/agentSort.ts`),
 `PaneNotice.tsx`.
 
 Verify PANE-8 in the mock harness: open the Claude Code terminal, type `@`
