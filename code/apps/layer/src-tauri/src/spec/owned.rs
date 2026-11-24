@@ -186,9 +186,11 @@ fn named(text: &str, folders: &[String], whole: bool) -> Option<String> {
 }
 
 /// `2.1 Add x` as ("2.1", "Add x"), `**Step 2: Run it**` as ("Step 2",
-/// "Run it**"), and a step with no number as ("", itself).
+/// "Run it"), and a step with no number as ("", its text). The stars of a
+/// bold step go, both ends.
 fn split_label(rest: &str) -> (&str, &str) {
     let body = rest.trim_start_matches('*');
+    let bold = body.len() != rest.len();
     let word = ["step ", "task "]
         .iter()
         .find(|w| body.get(..w.len()).is_some_and(|b| b.eq_ignore_ascii_case(w)))
@@ -198,10 +200,20 @@ fn split_label(rest: &str) -> (&str, &str) {
     let token = number[..digits].trim_end_matches('.');
     let boundary = number[token.len()..].chars().next().is_none_or(|c| !c.is_alphanumeric());
     if token.is_empty() || token.starts_with('.') || !boundary {
-        return ("", rest.trim());
+        return ("", unbold(body.trim(), bold));
     }
     let end = word + token.len();
-    (&body[..end], body[end..].trim_start_matches(['.', ':', ')', '*', '-', '—', '–', ' ']).trim())
+    let text = body[end..].trim_start_matches(['.', ':', ')', '*', '-', '—', '–', ' ']).trim();
+    (&body[..end], unbold(text, bold))
+}
+
+/// `text` without the stars that closed a bold step.
+fn unbold(text: &str, bold: bool) -> &str {
+    if bold {
+        text.trim_end_matches('*').trim_end()
+    } else {
+        text
+    }
 }
 
 #[cfg(test)]
@@ -299,6 +311,19 @@ mod tests {
         assert_eq!(steps[0].label, "Step 1");
         assert_eq!(steps[1].text, "nested");
         assert!(steps[3].done);
+    }
+
+    #[test]
+    fn a_bold_step_has_no_stars_left_in_its_text() {
+        let steps = owned_steps(
+            "- [ ] **Step 1: Write failing tests:**\n- [ ] **2.1 Add x**\n- [ ] **Add y**\n- [ ] **Step 2**: Run it",
+            &folders(),
+        );
+        let got: Vec<_> = steps.iter().map(|s| (s.label.as_str(), s.text.as_str())).collect();
+        assert_eq!(
+            got,
+            vec![("Step 1", "Write failing tests:"), ("2.1", "Add x"), ("", "Add y"), ("Step 2", "Run it")]
+        );
     }
 
     #[test]
