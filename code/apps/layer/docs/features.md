@@ -3604,7 +3604,7 @@ Slack come later.
   its tab showed it as the Henchman. It is woken from its
   tab with the agent chosen for it (HEN-15), or else any that speaks
   ACP; waking it while it runs gives back
-  the one running. Its context file says who it is, what its tools do,
+  the one running, and two wakes at once wake one. Its context file says who it is, what its tools do,
   and what it never does: write code, edit files, merge, or answer anyone
   in Jira, GitHub or Slack without asking. It is not listed in Chat and
   does not count as a chat that is working; its banners and messages
@@ -3855,7 +3855,9 @@ Slack come later.
   It is on until the user turns it off. Turned off, it is stopped,
   running or not, and its conversation waits (PANE-7): it is not put back
   at launch, and nothing wakes it, from its tab or anywhere else, while
-  it is off. Nothing runs for it then: the agents ping the user
+  it is off. Turning it off waits for a wake already under way, then
+  stops what it started: a wake that had found it on started it just
+  after Off had stopped the one running, and it ran while off. Nothing runs for it then: the agents ping the user
   themselves again (HEN-13), and nothing is kept to tell it (HEN-9,
   HEN-12). Its tab stays, as the lair (HEN-5): in place of the
   conversation it says the Henchman is off, with a button to Settings →

@@ -647,6 +647,13 @@ pub(crate) fn open_chat(
     resume: Resume,
     acp: bool,
 ) -> Result<PaneInfo> {
+    // Held until the pane is started and saved, so turning the Henchman off
+    // cannot slip between the check and the start (HEN-16).
+    let henchman = room.as_deref().is_some_and(super::henchman::is_room);
+    let _held = super::henchman::hold(henchman);
+    if henchman {
+        super::henchman::refuse_while_off(state)?;
+    }
     let def = agents::find(&agent_id).ok_or_else(|| Error::NotFound(format!("agent {agent_id}")))?;
 
     let dir = match room {
@@ -658,10 +665,6 @@ pub(crate) fn open_chat(
     };
     // Best effort: a context file that cannot be written is not a reason to
     // refuse to start the agent. The Henchman's room gets its own (HEN-2).
-    let henchman = super::henchman::is_room(&dir);
-    if henchman {
-        super::henchman::refuse_while_off(state)?;
-    }
     let _ = if henchman { super::henchman::write_context(state, &dir) } else { write_chat_context(state, &dir) };
     let _ = crate::mcp::write_config(&dir);
     let name = if henchman { "Henchman" } else { def.name };

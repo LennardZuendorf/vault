@@ -5,6 +5,7 @@
 
 use std::path::Path;
 
+use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::config::{AppConfig, HenchmanAgent, SavedPane};
@@ -16,6 +17,19 @@ use super::AppState;
 
 /// The Henchman's room under the chat root.
 const ROOM: &str = "henchman";
+
+/// Held while the Henchman is woken and while it is turned off (HEN-16).
+/// Unheld, a wake that had found it on started its pane just after Off had
+/// stopped every one running, and it ran while off; two wakes at once both
+/// found none running and woke two. Reentrant: a wake from its tab holds it,
+/// then opens the chat, which holds it again.
+static LIFECYCLE: ReentrantMutex<()> = ReentrantMutex::new(());
+
+/// The hold on `LIFECYCLE`, for the Henchman's room only: other chats open
+/// without waiting on it.
+pub(crate) fn hold(henchman: bool) -> Option<ReentrantMutexGuard<'static, ()>> {
+    henchman.then(|| LIFECYCLE.lock())
+}
 
 /// What it is asked when woken (HEN-3): what it may do itself first, then
 /// a brief short enough to read, so the user is not asked about each
@@ -88,6 +102,7 @@ pub(crate) fn running(state: &AppState) -> Option<PaneInfo> {
 pub async fn spawn_henchman(app: AppHandle, agent_id: String) -> Result<PaneInfo> {
     let handle = app.clone();
     super::blocking(app, move |state| {
+        let _held = hold(true);
         if let Some(pane) = running(state) {
             return Ok(pane);
         }
@@ -106,18 +121,28 @@ pub async fn spawn_henchman(app: AppHandle, agent_id: String) -> Result<PaneInfo
 pub async fn set_henchman_on(app: AppHandle, on: bool) -> Result<()> {
     let handle = app.clone();
     super::blocking(app, move |state| {
-        state.config.update(|c| switch(c, on))?;
-        if on {
-            return Ok(());
+        turn(state, on)?;
+        if !on {
+            let _ = handle.emit("panes:waiting", ());
         }
-        // An exited one too: left in the list, its Resume would wake it.
-        for pane in state.ptys.list(Some(CHAT_TASK_ID)).into_iter().filter(is_henchman) {
-            state.ptys.close(&pane.id)?;
-        }
-        let _ = handle.emit("panes:waiting", ());
         Ok(())
     })
     .await
+}
+
+/// The switch, held against a wake (`LIFECYCLE`): one under way finishes
+/// first, and its pane is stopped with the rest.
+fn turn(state: &AppState, on: bool) -> Result<()> {
+    let _held = hold(true);
+    state.config.update(|c| switch(c, on))?;
+    if on {
+        return Ok(());
+    }
+    // An exited one too: left in the list, its Resume would wake it.
+    for pane in state.ptys.list(Some(CHAT_TASK_ID)).into_iter().filter(is_henchman) {
+        state.ptys.close(&pane.id)?;
+    }
+    Ok(())
 }
 
 /// The switch and, turned off, every saved Henchman waiting, in one write:
@@ -402,6 +427,30 @@ mod tests {
         state.config.update(|c| c.saved_panes = vec![serde_json::from_value(pane).unwrap()]).unwrap();
         state.config.update(|c| switch(c, false)).unwrap();
         assert!(state.config.read().saved_panes[0].waiting, "turned off, the one under the old root waits too");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn turning_it_off_waits_for_a_wake_under_way_and_the_next_wake_is_refused() {
+        let root = std::env::temp_dir().join(format!("vl-henchman-{}", uuid::Uuid::new_v4()));
+        let state = super::super::repos::tests::state(&root, Default::default());
+        let (done, turned) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            // A wake that found it on and is starting its pane.
+            let waking = hold(true);
+            assert!(refuse_while_off(&state).is_ok());
+            let state = &state;
+            s.spawn(move || {
+                turn(state, false).unwrap();
+                done.send(()).unwrap();
+            });
+            let wait = std::time::Duration::from_millis(200);
+            assert!(turned.recv_timeout(wait).is_err(), "off waits until the pane is started, then stops it");
+            assert!(refuse_while_off(state).is_ok());
+            drop(waking);
+            turned.recv().unwrap();
+        });
+        assert!(refuse_while_off(&state).is_err(), "a wake after it is refused");
         let _ = std::fs::remove_dir_all(&root);
     }
 
