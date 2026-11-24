@@ -939,7 +939,7 @@ offers Start work.
   which it was ("preselected from the last task under ACME-100"), so a
   stale guess is visible. It picks
   a base, optionally starts an agent with the ticket as the prompt (or,
-  with "Write a spec first", leaves that to the Spec tab, SPEC-18), and
+  with "Write a spec first", told to write the spec first, SPEC-18), and
   moves the ticket where its project's "work starts →" says, beside the
   other stages of Tickets follow the work (TKT-8): to the first
   in-progress (`indeterminate`) status its workflow allows, unless it is
@@ -1426,7 +1426,9 @@ Known gaps:
 | Agents: Henchman's agent, model and effort | Claude Code, Sonnet, Medium | HEN-15 |
 | Agents: Task folder location | `~/.villain-worktrees` | where task folders go |
 | Keep awake (the cup in the top bar) | off | STATE-7, PHONE-8 |
-| Code: Spec first | off | every agent is told to write the spec before any code (SPEC-27); the Settings switch comes with the Spec tab work, so it is not on Settings → Code yet |
+| Code: Always write a spec first | off | every agent is told to write the spec before any code (SPEC-27), and Start work's "Write a spec first" is on and locked |
+| Code: Default toolset | Kiro | the spec toolset a task gets unless Start work or its repository says otherwise (SPEC-18); `set_default_toolset` |
+| Code: Custom toolsets | none | the user's own toolsets as the JSON of their manifests, on this Mac only; one whose `run` steps execute as written (`set_custom_toolsets`, refused whole when one is not a manifest) |
 | Browser: sites agents may use | none: this machine's pages only | BRW-3, BRW-11 |
 | Browser: saved sign-ins | none | BRW-18 |
 | Remote access: Tailscale | off | PHONE-1, PHONE-2 |
@@ -2042,7 +2044,10 @@ each reviewed before the next is drafted.
   them into each repository as `specs/<task>/` in its worktree, `<task>`
   being the task's branch with `/` as `-`
   (`specs/ACME-123-fix-login-race/`). The `specs/` folder is set per
-  repository in the Repos view. The files are:
+  repository in the Repos view, beside the toolset it prefers and what Commit
+  spec puts there (`set_project_specs`); the folder is offered only where
+  Kiro is the toolset, since the others mirror their own layout. A toolset this
+  Mac does not have is kept, with a note that Start work ignores it. The files are:
   - `requirements.md`: Goal, Requirements, Out of scope, Open questions.
     Each requirement is a list item with its id first (`R-1`, `R-2`, …),
     then the repositories that meet it by folder name (`R-3 [api, web]`),
@@ -2226,11 +2231,17 @@ requirements it decided by hand, and finding that Redraft threw both away.
 
 ### From Start work
 
-- **SPEC-18** Start work, with an agent picked, MUST offer "Write a spec
-  first", on until turned off, and remembered. With it the task is made
-  and the ticket moved as without it, but no agent starts: the task opens
-  on its Spec tab. (Known gap, until the Spec tab's rewrite: Start agent has
-  left the tab, so the agent Start work picked is not started from there.)
+- **SPEC-18** Start work MUST offer the spec toolset the task is made with
+  (`toolset` of `start_work_on_ticket`, stored with the task). It starts on the
+  one every picked repository prefers (a toolset this Mac does not have is
+  passed over), else the app's default (Settings → Code), else Kiro; a pick
+  made by hand is not changed when repositories are added. It MUST refuse a
+  toolset nothing has, before a folder is made. With an agent picked it MUST
+  also offer "Write a spec first", on until turned off, and remembered. With it
+  the task is made and the ticket moved as without it, the picked agent starts
+  at once, with the Spec first sentence (SPEC-27) at the end of its prompt
+  (`write_spec`), and the task opens on its Spec tab. With Spec first on as a
+  setting, the option is on and cannot be turned off.
 
 ### Moving from earlier specs
 
@@ -2257,8 +2268,8 @@ requirements it decided by hand, and finding that Redraft threw both away.
   with why, and the others keep their commit. Open pull requests (PR-1)
   runs it first for the repositories whose committed copy is behind
   `spec/`.
-- **SPEC-27** With **Spec first** on (an app setting, off by default, `set_spec_first`;
-  its Settings switch comes with the Spec tab work), every agent Layer starts MUST be told, in words only, to
+- **SPEC-27** With **Spec first** on (an app setting, off by default, `set_spec_first`; the
+  switch is Settings → Code, "Always write a spec first"), every agent Layer starts MUST be told, in words only, to
   write or update the spec in `<task>/spec/` before it changes any code:
   `Write or update the spec in <path> before you change any code.` is the
   first line of the context file's body, followed by "Then implement it step
@@ -2292,12 +2303,13 @@ part, `spec_propose`'s pointer), `commands/spec_commit.rs` (Commit spec),
 `commands/spec_watch.rs` (SPEC-28), `commands/spec_draft.rs` and
 `commands/spec_prompts.rs` (Kiro's Draft, Apply answers and Check),
 `commands/task_context.rs`, `git/only.rs` (committing only the spec),
-`mcp.rs` (the spec tools), `commands/open_prs.rs`, `SpecView.tsx`,
+`commands/spec_settings.rs` (the toolsets to pick from, the default, the
+custom ones), `mcp.rs` (the spec tools), `commands/open_prs.rs`, `SpecView.tsx`,
 `spec/SpecTree.tsx`, `spec/SpecEditor.tsx`, `spec/SpecSide.tsx`,
 `spec/SpecQuestions.tsx`, `lib/specs.ts`, `lib/spec-edit.ts`,
 `lib/questions.ts`, `Watchers.tsx` (reading the spec again when an agent
-stops), `tickets/StartWorkDialog.tsx`, `ReposView.tsx` (the per-repository
-setting).
+stops), `tickets/StartWorkDialog.tsx`, `ReposView.tsx` and `RepoSettings.tsx` (the
+per-repository setting), `SpecSettings.tsx` (Settings → Code).
 
 Known gaps:
 - Drafting runs Claude Code, whichever agent will do the work.

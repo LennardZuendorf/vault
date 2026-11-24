@@ -327,6 +327,10 @@ export const api = {
     branchSuffix?: string | null,
     base?: string | null,
     epic = false,
+    /** The spec toolset the task is made with; none: the app's default. */
+    toolset?: string | null,
+    /** Tell the agent to write the spec first, for this start (Spec first does it for every one). */
+    writeSpec = false,
   ) =>
     invoke<Started>("start_work_on_ticket", {
       key,
@@ -335,6 +339,8 @@ export const api = {
       branchSuffix: branchSuffix ?? null,
       base: base ?? null,
       epic,
+      toolset: toolset ?? null,
+      writeSpec,
     }),
   // epics (§26)
   epicView: (epicId: string) => invoke<EpicView>("epic_view", { epicId }),

@@ -116,6 +116,19 @@ __mock.spec.commitFails = ["web"]             // Commit spec fails in web, and k
 - Opening `/` instead of `/mock.html` loads the app without the mock, and
   the console fills with `reading 'metadata'` errors. That is expected.
 
+What to check for the Spec tab (§19): the tab order (Agents, Spec, Diff, Pull
+requests); each toolset's world (`?toolset=`), its files as a tree and its
+steps per repository; an agent's write following live
+(`__mock.spec.write`) and, with unsaved text typed in the editor, the conflict
+line with Load theirs and Save mine; Commit spec with `__mock.spec.commitFails`
+set; `?install=failed` and Retry; Draft off while text is unsaved, and Undo of a
+draft that made its file (`remove_spec_file` in `__mock.calls`). Settings →
+Code has the default toolset, Always write a spec first and custom toolsets; the
+Repos view has each repository's toolset and commit mode (`web` prefers a
+toolset this Mac lacks, `api` prefers OpenSpec); Start work offers the toolset
+and "Write a spec first" (`start_work_on_ticket` carries `toolset` and
+`writeSpec`).
+
 What to check for a UI change:
 
 - the flow you changed, click by click, with `__mock.calls` showing the

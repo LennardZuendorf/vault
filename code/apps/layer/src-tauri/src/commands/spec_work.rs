@@ -297,6 +297,16 @@ pub(crate) fn with_spec_line(state: &AppState, task: &Task, prompt: String) -> S
     }
 }
 
+/// `prompt` with the Spec first sentence at its end for this one launch, when
+/// `write_first` asks for it (Start work's "Write a spec first") and the
+/// setting has not put it there already. A review is never told it.
+pub(crate) fn with_spec_first(state: &AppState, task: &Task, prompt: String, write_first: bool) -> String {
+    if !write_first || task.review.is_some() || state.config.with(|c| c.spec_first) {
+        return prompt;
+    }
+    format!("{prompt}\n\n{}", spec_first_line(&spec_dir(state, task)))
+}
+
 /// The spec's part of a drafted pull request description (SPEC-16): for
 /// each repository, where its spec is in it and the requirements it meets,
 /// read from the working copy's entry file, with the latest check's answer.
@@ -629,6 +639,21 @@ mod tests {
         let pointing = prompt_line(&state, &task).unwrap();
         assert!(pointing.contains(&root.join("tasks/T-1/spec").display().to_string()), "{pointing}");
         assert!(!pointing.contains(FIRST), "{pointing}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn writing_a_spec_first_for_one_launch_adds_the_line_once_whatever_the_setting() {
+        let (root, state, task) = world(&["api"]);
+        let line = spec_first_line(&root.join("tasks/T-1/spec"));
+
+        let asked = with_spec_first(&state, &task, "Task: x".into(), true);
+        assert_eq!(asked, format!("Task: x\n\n{line}"));
+        assert_eq!(with_spec_first(&state, &task, "Task: x".into(), false), "Task: x");
+
+        on(&state);
+        let once = with_spec_first(&state, &task, with_spec_line(&state, &task, "Task: x".into()), true);
+        assert_eq!(once.matches(FIRST).count(), 1, "the setting already said it: {once}");
         std::fs::remove_dir_all(&root).ok();
     }
 

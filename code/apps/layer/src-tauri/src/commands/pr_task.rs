@@ -55,6 +55,7 @@ pub(crate) fn task_for_pr_inner(state: &AppState, repo: &str, head: &str, base: 
             epic_key: None,
             epic: false,
             sub_task: None,
+            toolset: None,
         },
     )
 }

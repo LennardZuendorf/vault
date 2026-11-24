@@ -744,6 +744,7 @@ async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) ->
                 epic_key: None,
                 epic: false,
                 sub_task: None,
+                toolset: None,
             };
             let chat = caller_chat(&state.ptys, caller);
             let task = commands::blocking(app.clone(), move |s| {
@@ -805,6 +806,8 @@ async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) ->
                 arg(&args, "agent").map(str::to_string),
                 arg(&args, "branch_suffix").map(str::to_string),
                 arg(&args, "base").map(str::to_string),
+                None,
+                None,
                 None,
             )
             .await?;

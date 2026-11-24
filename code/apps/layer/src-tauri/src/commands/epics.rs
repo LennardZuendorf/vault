@@ -442,6 +442,7 @@ async fn file_one(
         epic_key: epic.issue_key.clone(),
         epic: false,
         sub_task: Some(of),
+        toolset: None,
     };
     let epic = epic.clone();
     let task = super::blocking(app.clone(), move |state| {

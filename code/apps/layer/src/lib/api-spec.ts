@@ -44,6 +44,10 @@ export const specApi = {
    */
   commitSpec: (taskId: string, repos: string[] | null = null) =>
     invoke<RepoResult[]>("commit_spec_cmd", { taskId, repos }),
+  /** The toolset a task gets when nothing else says; null is Kiro. */
+  setDefaultToolset: (id: string | null) => invoke<void>("set_default_toolset", { id }),
+  /** Replace the user's own toolsets with the manifests in `json`; refused whole when one is not a manifest. */
+  setCustomToolsets: (json: string) => invoke<void>("set_custom_toolsets", { json }),
   setProjectSpecs: (
     projectId: string,
     toolset: string | null,

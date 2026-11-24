@@ -3,6 +3,26 @@
 /** What Commit spec puts in a repository: all of it, its own part, or nothing. */
 export type SpecCommit = "whole" | "own" | "none";
 
+/** A toolset as a pick list offers it (`commands/spec_settings.rs`). `custom`: the user's own, on this Mac. */
+export interface ToolsetChoice {
+  id: string;
+  name: string;
+  version: string | null;
+  custom: boolean;
+}
+
+/** The spec's part of the app's settings (§19), which `Settings` extends. */
+export interface SpecSettings {
+  /** Agents are told to write the spec before any code (SPEC-27). */
+  spec_first: boolean;
+  /** The toolset a task gets when nothing else says; null is Kiro. */
+  default_toolset: string | null;
+  /** Every toolset there is to pick from. */
+  toolsets: ToolsetChoice[];
+  /** The manifests the user added, shown as JSON in Settings → Code. */
+  custom_toolsets: unknown[];
+}
+
 /** One part of a Kiro spec, for Draft (SPEC-5). */
 export type SpecPart = "requirements" | "design" | "tasks";
 export type SpecKind = "feature" | "bugfix";

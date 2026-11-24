@@ -434,6 +434,8 @@ pub fn run() {
             commands::delete_repo_note,
             commands::set_worktree_root,
             commands::set_spec_first,
+            commands::set_default_toolset,
+            commands::set_custom_toolsets,
             commands::set_ui_prefs,
             commands::disconnect,
             commands::cursor_ide_installed,

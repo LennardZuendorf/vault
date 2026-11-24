@@ -394,6 +394,10 @@ pub struct NewTask {
     /// A sub-task filed from an epic (EPIC-7).
     #[serde(default)]
     pub sub_task: Option<SubTaskOf>,
+    /// The spec toolset the task is made with, by id: what Start work picked.
+    /// None: the app's default. A sub-task is made with its epic's.
+    #[serde(default)]
+    pub toolset: Option<String>,
 }
 
 /// Note on a task that a chat's agent created it, so the task can point at
@@ -416,6 +420,14 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     }
     let projects: Vec<Project> = req.project_ids.iter().map(|id| state.config.project(id)).collect::<Result<_>>()?;
 
+    // Refused before a folder is made: a task cannot be installed with a toolset
+    // nothing here has.
+    if let Some(id) = req.toolset.as_deref() {
+        if state.config.with(|c| crate::spec::toolset::find(id, &c.toolsets)).is_none() {
+            return Err(Error::Other(format!("there is no spec toolset {id:?}")));
+        }
+    }
+
     let branch =
         derive_branch(req.branch.as_deref(), req.issue_key.as_deref(), req.branch_suffix.as_deref(), &req.name);
 
@@ -430,7 +442,8 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
         .sub_task
         .as_ref()
         .and_then(|of| state.config.task(&of.epic).ok())
-        .map(|epic| super::spec_copy::toolset_of(state, &epic).id);
+        .map(|epic| super::spec_copy::toolset_of(state, &epic).id)
+        .or(req.toolset.clone());
     let task = Task {
         toolset,
         id: uuid::Uuid::new_v4().to_string(),
@@ -1007,9 +1020,39 @@ mod tests {
                 epic_key: None,
                 epic: false,
                 sub_task: None,
+                toolset: None,
             },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn a_task_made_with_a_toolset_keeps_it_and_one_nothing_has_makes_nothing() {
+        let root = std::env::temp_dir().join(format!("vl-tasks-{}", uuid::Uuid::new_v4()));
+        let api = github_and_clone(&root, "api", &["main"]);
+        let state = state(&root, vec![project("api", &api, "main")]);
+        let request = |toolset: &str| NewTask {
+            name: "Pick a toolset".into(),
+            project_ids: vec!["api".into()],
+            branch: Some("ACME-2-toolset".into()),
+            branch_suffix: None,
+            base: Some("main".into()),
+            issue_key: None,
+            issue_url: None,
+            epic_key: None,
+            epic: false,
+            sub_task: None,
+            toolset: Some(toolset.into()),
+        };
+
+        let refused = new_task(&state, request("nothing-here")).unwrap_err().to_string();
+        assert!(refused.contains("no spec toolset"), "{refused}");
+        assert!(state.config.read().tasks.is_empty(), "no task, and no folder for one");
+
+        let task = new_task(&state, request("openspec")).unwrap();
+        assert_eq!(task.toolset.as_deref(), Some("openspec"));
+        assert_eq!(state.config.task(&task.id).unwrap().toolset.as_deref(), Some("openspec"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

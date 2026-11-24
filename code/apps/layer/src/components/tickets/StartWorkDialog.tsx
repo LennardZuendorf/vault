@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import { suggestBase } from "../../lib/derive";
 import { read, write } from "../../lib/persist";
+import { suggestToolset } from "../../lib/spec-toolset";
 import { branchStem } from "../../lib/tracker";
 import type { AgentStatus, Ticket, Project } from "../../lib/types";
 import { useStore } from "../../store";
@@ -27,6 +28,7 @@ export function StartWorkDialog({
   const refreshPanes = useStore((s) => s.refreshPanes);
   const select = useStore((s) => s.select);
   const setTab = useStore((s) => s.setTab);
+  const settings = useStore((s) => s.settings);
   // Starting fails in the dialog, above its buttons (NOTE-6).
   const failure = useFailure();
   const { clear } = failure;
@@ -41,14 +43,26 @@ export function StartWorkDialog({
   /** The base this dialog last filled in itself, as opposed to one typed. */
   const autoBase = useRef("");
   const [starting, setStarting] = useState(false);
-  /** SPEC-18: start the agent from the Spec tab, once its spec is agreed. */
-  const [specFirst, setSpecFirst] = useState(() => read("specFirst", true));
+  /** SPEC-18: the agent starts told to write the spec first, and the task opens on Spec. */
+  const [writeFirst, setWriteFirst] = useState(() => read("specFirst", true));
+  /** The toolset picked; none until one is, which follows the suggestion. */
+  const [chosenToolset, setChosenToolset] = useState<string | null>(null);
 
   const installed = agents.filter((a) => a.installed);
   // An epic-level ticket is made an epic: its spec makes the sub-tasks, and
   // no agent starts on it (EPIC-2).
   const epic = isEpicType(types, issue.issue_type);
   const selected = projects.filter((p) => picked.includes(p.id));
+  // Spec first (SPEC-27) already tells every agent: for a launch it cannot be turned off.
+  const locked = settings?.spec_first ?? false;
+  const toolsets = settings?.toolsets ?? [];
+  const toolset =
+    chosenToolset ??
+    suggestToolset(
+      selected,
+      toolsets.map((t) => t.id),
+      settings?.default_toolset ?? null,
+    );
 
   // A default, once. Re-filled whenever the value was empty — and on every
   // render, since `installed` is a new list each time — this put the first
@@ -65,6 +79,7 @@ export function StartWorkDialog({
     setBase("");
     setBaseOptions([]);
     setPicked([]);
+    setChosenToolset(null);
     let stop = false;
     // A suggestion, so it gives way to what was picked while it was out.
     api
@@ -128,23 +143,25 @@ export function StartWorkDialog({
     if (picked.length === 0) return;
     setStarting(true);
     failure.clear();
-    const spec = epic || (specFirst && !!agentId);
+    const specFirst = !epic && !!agentId && (locked || writeFirst);
     try {
       const task = await api.startWorkOnTicket(
         issue.key,
         picked,
-        spec ? null : agentId || null,
+        agentId || null,
         suffix || null,
         base.trim() || null,
         epic,
+        toolset,
+        specFirst,
       );
       // Refresh the issues too: the ticket has usually just moved, and the
       // status on the card is the thing the move was meant to correct.
       await Promise.all([refreshTasks(), refreshPanes(), refreshIssues()]);
       select(task.id);
-      if (spec) {
-        setTab("spec");
-      }
+      // An epic is made to write its spec, and "Write a spec first" has its
+      // agent doing it: both land on the tab it is written in.
+      if (epic || specFirst) setTab("spec");
       // The task is selected and its ticket's card moved: nothing more to say (NOTE-7).
       onClose();
     } catch (e) {
@@ -257,6 +274,26 @@ export function StartWorkDialog({
         />
       </Field>
 
+      {toolsets.length > 0 && (
+        <Field
+          label="Spec"
+          hint="What the task writes its spec with. It is installed in the task folder, and the task keeps it."
+        >
+          <select
+            className="ui-field"
+            value={toolset}
+            onChange={(e) => setChosenToolset(e.target.value)}
+          >
+            {toolsets.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+                {t.version ? ` ${t.version}` : ""}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+
       {epic ? (
         <div className="muted" style={{ marginBottom: 14, lineHeight: 1.6 }}>
           An epic: its spec is written here, and its tasks become sub-tasks, each filed under{" "}
@@ -290,13 +327,16 @@ export function StartWorkDialog({
               <input
                 type="checkbox"
                 style={{ width: "auto" }}
-                checked={specFirst}
+                checked={locked || writeFirst}
+                disabled={locked}
                 onChange={(e) => {
-                  setSpecFirst(e.target.checked);
+                  setWriteFirst(e.target.checked);
                   write("specFirst", e.target.checked);
                 }}
               />
-              Write a spec first: the agent starts from the Spec tab once you have agreed it
+              {locked
+                ? "Write a spec first: on for every agent, in Settings → Code"
+                : "Write a spec first: the agent starts by writing the spec, and the task opens on the Spec tab"}
             </label>
           )}
         </>

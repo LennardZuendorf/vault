@@ -386,6 +386,35 @@ const answer: Record<string, Answer> = {
   set_spec_first: (a) => {
     world.settings.spec_first = a.on as boolean;
   },
+  set_default_toolset: (a) => {
+    const id = a.id as string | null;
+    if (id && !world.settings.toolsets.some((t) => t.id === id))
+      throw `there is no spec toolset "${id}"`;
+    world.settings.default_toolset = id;
+  },
+  // The real one checks each manifest; here, that it is a list with an id, a name and files.
+  set_custom_toolsets: (a) => {
+    const text = (a.json as string).trim();
+    const list: unknown = text ? JSON.parse(text) : [];
+    if (!Array.isArray(list)) throw "custom toolsets must be a list of manifests";
+    for (const m of list as { id?: string; name?: string; files?: string[] }[]) {
+      if (!m.id || !m.name || !m.files?.length)
+        throw `${m.id ?? "toolset"}: it needs an id, a name and files`;
+    }
+    const builtIn = world.settings.toolsets.filter(
+      (t) => !t.custom && !list.some((m) => m.id === t.id),
+    );
+    world.settings.custom_toolsets = list;
+    world.settings.toolsets = [
+      ...builtIn,
+      ...(list as { id: string; name: string; version?: string }[]).map((m) => ({
+        id: m.id,
+        name: m.name,
+        version: m.version ?? null,
+        custom: true,
+      })),
+    ];
+  },
   take_notices: () => [],
   // Connecting checks the token against the site; here any token will do.
   grafana_connect: (a) => {
@@ -944,6 +973,7 @@ const answer: Record<string, Answer> = {
       created_at: new Date().toISOString(),
       pane_count: 0,
       epic: !!a.epic,
+      toolset: a.toolset as string | null,
       checkouts: (a.projectIds as string[]).map((pid) => {
         const name = world.projects.find((p) => p.id === pid)?.name ?? pid;
         return {

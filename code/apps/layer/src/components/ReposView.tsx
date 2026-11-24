@@ -6,7 +6,7 @@ import { groupProjects, repoTrouble } from "../lib/derive";
 import { pressKeys } from "../lib/press";
 import { syncSummary } from "../lib/report";
 import { ago } from "../lib/time";
-import type { Project, RepoHealth, RepoNote, Synced, UpdateBy } from "../lib/types";
+import type { Project, RepoHealth, RepoNote, SpecCommit, Synced, UpdateBy } from "../lib/types";
 import type { Elsewhere } from "../lib/types-profiles";
 import { useNow, useStore } from "../store";
 import { AddRepos } from "./AddRepos";
@@ -14,7 +14,7 @@ import { CleanUp } from "./CleanUp";
 import { ChevronIcon } from "./icons";
 import { RepoNotes } from "./RepoNotes";
 import { ReposElsewhere } from "./ReposElsewhere";
-import { CheckCommand, SpecsPicker, UpdateByPicker } from "./RepoSettings";
+import { CheckCommand, RepoSpecs, UpdateByPicker } from "./RepoSettings";
 import { BusyLabel, Combo, Confirm, ErrorMessage, useFailure } from "./ui";
 
 export function ReposView() {
@@ -134,12 +134,10 @@ export function ReposView() {
     }
   }
 
-  async function setSpecs(p: Project, inApp: boolean, folder: string) {
+  async function setSpecs(p: Project, toolset: string | null, commit: SpecCommit, folder: string) {
     tryAt(p.id);
     try {
-      // The switch is the app keeping the spec (`none`) or committing all of it.
-      const commit = inApp ? "none" : p.spec_commit === "own" ? "own" : "whole";
-      await api.setProjectSpecs(p.id, p.spec_toolset ?? null, commit, folder);
+      await api.setProjectSpecs(p.id, toolset, commit, folder);
       await refreshRepos();
     } catch (e) {
       row.fail(e);
@@ -362,10 +360,6 @@ export function ReposView() {
                       <CopyState h={h} now={now} />
                       <div className="spacer" />
                       <UpdateByPicker p={p} h={h} onChange={(by) => void setUpdateBy(p, by)} />
-                      <SpecsPicker
-                        p={p}
-                        onChange={(inApp, folder) => void setSpecs(p, inApp, folder)}
-                      />
                       <Combo
                         value={p.group ?? ""}
                         options={groupNames}
@@ -419,6 +413,12 @@ export function ReposView() {
                       <div className="spacer" />
                       <CheckCommand p={p} onSave={(command) => void setCheck(p, command)} />
                     </div>
+                    <RepoSpecs
+                      p={p}
+                      onChange={(toolset, commit, folder) =>
+                        void setSpecs(p, toolset, commit, folder)
+                      }
+                    />
                     {problem && (
                       <div className="repo-problem">
                         <span>
