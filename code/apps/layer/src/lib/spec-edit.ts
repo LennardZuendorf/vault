@@ -7,6 +7,23 @@ export interface Editor {
   base: string;
 }
 
+/** Cmd+S or Cmd+Enter (Ctrl on other keyboards): what saves what is being written. */
+export function isSaveShortcut(e: { metaKey: boolean; ctrlKey: boolean; key: string }): boolean {
+  return (e.metaKey || e.ctrlKey) && (e.key === "Enter" || e.key === "s");
+}
+
+/**
+ * Whether that shortcut writes the file. Not while the file changed under the
+ * editor: it would overwrite what an agent wrote with no word, so over theirs
+ * is only the button, "Save mine".
+ */
+export function shortcutSaves(
+  e: { metaKey: boolean; ctrlKey: boolean; key: string },
+  conflict: boolean,
+): boolean {
+  return isSaveShortcut(e) && !conflict;
+}
+
 /**
  * What an editor shows once the file on disk is read again (SPEC-28). A clean
  * editor takes the file. A dirty one keeps what the user typed, since an agent

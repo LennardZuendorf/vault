@@ -240,7 +240,7 @@ export const useSpecs = create<Specs>((set, get) => {
  * editor whose text is now the file's has nothing left to keep. Unchanged
  * edits are the same objects, so nothing re-renders for them.
  */
-function reconcile(edits: Record<string, Edit>, spec: SpecView): Record<string, Edit> {
+export function reconcile(edits: Record<string, Edit>, spec: SpecView): Record<string, Edit> {
   let next = edits;
   for (const [path, edit] of Object.entries(edits)) {
     const disk = spec.files.find((f) => f.path === path)?.text ?? "";

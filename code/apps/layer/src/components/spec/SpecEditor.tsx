@@ -1,3 +1,4 @@
+import { isSaveShortcut, shortcutSaves } from "../../lib/spec-edit";
 import { editorText, useSpecs } from "../../lib/specs";
 import type { SpecFileView, TaskView } from "../../lib/types";
 import { ErrorMessage, useFailure } from "../ui";
@@ -76,9 +77,10 @@ export function SpecEditor({
         spellCheck={false}
         onChange={(e) => edit(task.id, path, e.target.value)}
         onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && (e.key === "Enter" || e.key === "s")) {
+          if (isSaveShortcut(e)) {
+            // Also when it does not save: the browser's own Cmd+S is not wanted.
             e.preventDefault();
-            void saveNow();
+            if (shortcutSaves(e, conflict)) void saveNow();
           }
         }}
       />
