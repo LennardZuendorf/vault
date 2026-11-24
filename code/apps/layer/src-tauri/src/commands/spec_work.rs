@@ -3,47 +3,186 @@
 
 use std::path::Path;
 
+use serde_json::{json, Value};
 use tauri::State;
 
 use crate::config::{SpecCommit, Task};
 use crate::error::{Error, Result};
 use crate::git;
-use crate::spec::{self, Kind, Part, Step};
+use crate::mcp::{arg, required};
+use crate::spec::owned::{owned_steps, tick_at, OwnedStep};
+use crate::spec::toolset::Toolset;
+use crate::spec::{self, glob, Kind, Part};
 
 use super::spec::{and_list, spec_of, Slot};
+use super::spec_commit::commit_spec;
+use super::spec_copy::{list_files, move_old_spec, read_file, spec_dir, toolset_of, write_file};
 use super::AppState;
 
-/// Tick (or untick) step `number` of a repository's `tasks.md`, for an
-/// agent's `spec_task` (SPEC-13). Committed later, with the next approval
-/// or before the pull requests are opened.
-pub(crate) fn tick_step(state: &AppState, task_id: &str, repo: &str, number: u32, done: bool) -> Result<Step> {
-    let task = state.config.task(task_id)?;
-    let spec = spec_of(state, &task);
-    let home = spec
-        .homes
-        .iter()
-        .find(|h| h.folder == repo || h.project.name == repo)
-        .or_else(|| (spec.homes.len() == 1).then(|| &spec.homes[0]))
-        .ok_or_else(|| Error::NotFound(format!("a spec for `{repo}` in this task")))?;
-    tick_file(&home.dir.join(Part::Tasks.file(Kind::Feature)), repo, number, done)
+/// Every edit of a spec file that reads the file and writes it back, a tick
+/// or a whole new text: one at a time. Two agents ticking at once each wrote
+/// back what they had read, and one tick was lost.
+static EDITING: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+/// The task a spec tool is about: its `task_id`, else the calling pane's.
+pub(crate) fn named_task(state: &AppState, args: &Value, caller: Option<&str>) -> Result<Task> {
+    let id = match arg(args, "task_id") {
+        Some(id) => id.to_string(),
+        None => caller
+            .and_then(|pane| state.ptys.info(pane).ok())
+            .map(|p| p.task_id)
+            .ok_or_else(|| Error::Other("give task_id".into()))?,
+    };
+    state.config.task(&id)
 }
 
-/// Tick step `number` in the `tasks.md` at `path`. One tick at a time, from
-/// reading the file to writing it back: two agents ticking at once each
-/// wrote back what they had read, and one tick was lost. Written whole, as
-/// the file is in the user's repository and approved: a crash part-way
-/// through `fs::write` left it cut short.
-fn tick_file(path: &Path, repo: &str, number: u32, done: bool) -> Result<Step> {
-    static TICKING: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
-    let _one = TICKING.lock();
-    let text =
-        std::fs::read_to_string(path).map_err(|_| Error::NotFound(format!("an approved tasks.md for `{repo}`")))?;
-    let ticked = spec::tick(&text, number, done).ok_or_else(|| Error::NotFound(format!("step {number}")))?;
-    crate::agents::replace_file(path, ticked.as_bytes(), None)?;
-    spec::steps(&ticked)
+/// `task`, with a spec kept the old way moved into its `spec/` folder first
+/// when there is none yet. The move may pin the task to Kiro, so the task is
+/// read again after it.
+fn with_spec_moved(state: &AppState, task: &Task) -> Result<Task> {
+    if std::fs::symlink_metadata(spec_dir(state, task)).is_err() && move_old_spec(state, task)? {
+        return state.config.task(&task.id);
+    }
+    Ok(task.clone())
+}
+
+/// The task's repositories as (folder, project name): what a step file and
+/// `spec_commit` call them.
+fn repositories(state: &AppState, task: &Task) -> Vec<(String, String)> {
+    state
+        .config
+        .checkouts_of(&task.id)
         .into_iter()
-        .find(|s| s.number == number)
-        .ok_or_else(|| Error::NotFound(format!("step {number}")))
+        .filter_map(|c| {
+            let folder = Path::new(&c.path).file_name()?.to_string_lossy().to_string();
+            let name = state.config.project(&c.project_id).ok()?.name;
+            Some((folder, name))
+        })
+        .collect()
+}
+
+fn folders_of(state: &AppState, task: &Task) -> Vec<String> {
+    repositories(state, task).into_iter().map(|(folder, _)| folder).collect()
+}
+
+fn holds_steps(t: &Toolset, rel: &str) -> bool {
+    t.steps.iter().any(|g| glob::matches(g, rel))
+}
+
+/// The step file a tick means: `file`, or the only one the spec has.
+fn step_file(dir: &Path, t: &Toolset, file: Option<&str>) -> Result<String> {
+    let found: Vec<String> = list_files(dir, t)?.into_iter().filter(|f| holds_steps(t, f)).collect();
+    match (file, found.as_slice()) {
+        (_, []) => Err(Error::Other("the spec has no file of steps yet".into())),
+        (Some(f), _) if found.iter().any(|s| s == f) => Ok(f.to_string()),
+        (Some(f), _) => {
+            Err(Error::Other(format!("{f} is not a file of steps in this spec; they are: {}", found.join(", "))))
+        }
+        (None, [only]) => Ok(only.clone()),
+        (None, _) => Err(Error::Other(format!("give file: this spec has more than one, {}", found.join(", ")))),
+    }
+}
+
+/// Tick (or untick) the step at `position` of a step file, for an agent's
+/// `spec_task` (SPEC-13): `file` when the spec has more than one. The step as
+/// it is now.
+pub(crate) fn tick_step(
+    state: &AppState,
+    task_id: &str,
+    file: Option<&str>,
+    position: u32,
+    done: bool,
+) -> Result<OwnedStep> {
+    let task = with_spec_moved(state, &state.config.task(task_id)?)?;
+    let (t, dir) = (toolset_of(state, &task), spec_dir(state, &task));
+    let _one = EDITING.lock();
+    let rel = step_file(&dir, &t, file)?;
+    let text = read_file(&dir, &t, &rel)?;
+    let ticked = tick_at(&text, position, done).ok_or_else(|| Error::NotFound(format!("step {position} of {rel}")))?;
+    write_file(&dir, &t, &rel, &ticked)?;
+    owned_steps(&ticked, &folders_of(state, &task))
+        .into_iter()
+        .find(|s| s.position == position)
+        .ok_or_else(|| Error::NotFound(format!("step {position} of {rel}")))
+}
+
+/// What a spec tool answers, and the task whose spec it changed, so the
+/// caller can say so.
+#[derive(Debug)]
+pub struct SpecAnswer {
+    pub value: Value,
+    pub changed: Option<String>,
+}
+
+/// One of `spec_read`, `spec_write`, `spec_task` and `spec_commit`: the
+/// task's spec as files, for an agent that has no other way to reach the task
+/// folder.
+pub fn spec_tool(state: &AppState, name: &str, args: &Value, caller: Option<&str>) -> Result<SpecAnswer> {
+    let named = named_task(state, args, caller)?;
+    let task = with_spec_moved(state, &named)?;
+    let (t, dir) = (toolset_of(state, &task), spec_dir(state, &task));
+    let unchanged = |value| SpecAnswer { value, changed: None };
+    match name {
+        "spec_read" => match arg(args, "path") {
+            Some(path) => Ok(unchanged(Value::String(read_file(&dir, &t, path)?))),
+            None => {
+                let mut rows = Vec::new();
+                for path in list_files(&dir, &t)? {
+                    let steps = if holds_steps(&t, &path) {
+                        owned_steps(&read_file(&dir, &t, &path)?, &[])
+                    } else {
+                        Vec::new()
+                    };
+                    rows.push(json!({
+                        "path": path,
+                        "steps_done": steps.iter().filter(|s| s.done).count(),
+                        "steps_total": steps.len(),
+                    }));
+                }
+                Ok(unchanged(Value::Array(rows)))
+            }
+        },
+        "spec_write" => {
+            let path = required(args, "path")?;
+            // An empty text is a file made empty, so only a missing one is refused.
+            let text =
+                args.get("text").and_then(Value::as_str).ok_or_else(|| Error::Other("text is required".into()))?;
+            {
+                let _one = EDITING.lock();
+                write_file(&dir, &t, path, text)?;
+            }
+            Ok(SpecAnswer { value: Value::String(format!("wrote {path}")), changed: Some(task.id) })
+        }
+        "spec_task" => {
+            let step = args.get("step").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
+            let step = step.ok_or_else(|| Error::Other("step is required: its position in the file, from 1".into()))?;
+            let done = args.get("done").and_then(Value::as_bool).unwrap_or(true);
+            let ticked = tick_step(state, &task.id, arg(args, "file"), step, done)?;
+            Ok(SpecAnswer { value: serde_json::to_value(ticked)?, changed: Some(task.id) })
+        }
+        "spec_commit" => {
+            super::pr_task::not_a_review(&task, "given a spec of its own")?;
+            let known = repositories(state, &task);
+            let only = match args.get("repos").and_then(Value::as_array) {
+                Some(names) => Some(
+                    names
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(|n| {
+                            known
+                                .iter()
+                                .find(|(folder, project)| folder == n || project == n)
+                                .map(|(folder, _)| folder.clone())
+                                .ok_or_else(|| Error::NotFound(format!("a repository `{n}` in this task")))
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+                None => None,
+            };
+            Ok(unchanged(serde_json::to_value(commit_spec(state, &task, only.as_deref()))?))
+        }
+        other => Err(Error::NotFound(format!("tool {other}"))),
+    }
 }
 
 /// Commit what agents ticked since the last approval, before a push takes
@@ -230,24 +369,165 @@ pub fn set_project_specs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::spec_world::{get, put, world};
+
+    fn steps_file(n: u32) -> String {
+        (1..=n).map(|n| format!("- [ ] {n}. Step {n}\n")).collect()
+    }
+
+    fn spec_at(root: &Path, rel: &str) -> std::path::PathBuf {
+        root.join("tasks/T-1/spec").join(rel)
+    }
+
+    fn use_toolset(state: &AppState, id: &str) {
+        state.config.update(|c| c.tasks.iter_mut().for_each(|t| t.toolset = Some(id.into()))).unwrap();
+    }
 
     #[test]
-    fn agents_ticking_steps_at_once_lose_none_of_them() {
-        let root = std::env::temp_dir().join(format!("vl-spec-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        let path = root.join("tasks.md");
-        let steps: String = (1..=16).map(|n| format!("- [ ] {n}. Step {n}\n")).collect();
-        std::fs::write(&path, steps).unwrap();
+    fn concurrent_ticks_of_one_file_all_land() {
+        let (root, state, _) = world(&["api"]);
+        put(&spec_at(&root, "tasks.md"), &steps_file(16));
 
         std::thread::scope(|s| {
             for n in 1..=16 {
-                let path = &path;
-                s.spawn(move || tick_file(path, "api", n, true).unwrap());
+                let state = &state;
+                s.spawn(move || tick_step(state, "t1", None, n, true).unwrap());
             }
         });
 
-        let ticked = spec::steps(&std::fs::read_to_string(&path).unwrap());
+        let ticked = owned_steps(&get(&spec_at(&root, "tasks.md")), &[]);
+        assert_eq!(ticked.len(), 16);
         assert!(ticked.iter().all(|s| s.done), "{ticked:?}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_tick_answers_with_the_step_and_an_untick_takes_it_back() {
+        let (root, state, _) = world(&["api"]);
+        put(&spec_at(&root, "tasks.md"), "## api\n\n- [ ] 1.1 Add the route\n- [ ] 1.2 Test it\n");
+
+        let step = tick_step(&state, "t1", Some("tasks.md"), 2, true).unwrap();
+        assert_eq!((step.position, step.label.as_str(), step.done), (2, "1.2", true));
+        assert_eq!(step.repos, ["api"], "the step as the file's section owns it");
+        assert_eq!(get(&spec_at(&root, "tasks.md")), "## api\n\n- [ ] 1.1 Add the route\n- [x] 1.2 Test it\n");
+
+        assert!(!tick_step(&state, "t1", None, 2, false).unwrap().done);
+        assert!(tick_step(&state, "t1", None, 3, true).is_err(), "no such step");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn spec_task_without_a_file_is_refused_when_two_step_files_exist() {
+        let (root, state, _) = world(&["api"]);
+        use_toolset(&state, "superpowers");
+        put(&spec_at(&root, "docs/superpowers/plans/one.md"), &steps_file(2));
+        put(&spec_at(&root, "docs/superpowers/plans/two.md"), &steps_file(2));
+
+        let refused = tick_step(&state, "t1", None, 1, true).unwrap_err().to_string();
+        assert!(refused.contains("give file") && refused.contains("plans/one.md"), "{refused}");
+        assert!(get(&spec_at(&root, "docs/superpowers/plans/one.md")).starts_with("- [ ]"), "nothing was ticked");
+
+        tick_step(&state, "t1", Some("docs/superpowers/plans/two.md"), 1, true).unwrap();
+        assert!(get(&spec_at(&root, "docs/superpowers/plans/two.md")).starts_with("- [x]"));
+        let other = tick_step(&state, "t1", Some("docs/superpowers/specs/x.md"), 1, true).unwrap_err().to_string();
+        assert!(other.contains("not a file of steps"), "{other}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn spec_read_lists_files_with_their_steps_and_reads_one() {
+        let (root, state, _) = world(&["api"]);
+        put(&spec_at(&root, "requirements.md"), "# R\n");
+        put(&spec_at(&root, "tasks.md"), "- [x] 1. a\n- [ ] 2. b\n- [ ] 3. c\n");
+        let ask = |args: Value| spec_tool(&state, "spec_read", &args, None).map(|a| a.value);
+
+        assert_eq!(
+            ask(json!({ "task_id": "t1" })).unwrap(),
+            json!([
+                { "path": "requirements.md", "steps_done": 0, "steps_total": 0 },
+                { "path": "tasks.md", "steps_done": 1, "steps_total": 3 },
+            ])
+        );
+        assert_eq!(ask(json!({ "task_id": "t1", "path": "requirements.md" })).unwrap(), json!("# R\n"));
+        assert!(ask(json!({ "task_id": "t1", "path": "../config.json" })).is_err());
+        assert!(ask(json!({ "task_id": "t1", "path": "secrets.txt" })).is_err(), "not a file the toolset keeps");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn spec_write_replaces_a_file_and_says_which_task_changed() {
+        let (root, state, _) = world(&["api"]);
+        let write = |args: Value| spec_tool(&state, "spec_write", &args, None);
+
+        let done = write(json!({ "task_id": "t1", "path": "design.md", "text": "# D\n" })).unwrap();
+        assert_eq!((done.value, done.changed.as_deref()), (json!("wrote design.md"), Some("t1")));
+        assert_eq!(get(&spec_at(&root, "design.md")), "# D\n");
+
+        assert!(write(json!({ "task_id": "t1", "path": "../escape.md", "text": "x" })).is_err());
+        assert!(write(json!({ "task_id": "t1", "path": "notes.txt", "text": "x" })).is_err());
+        assert!(write(json!({ "task_id": "t1", "path": "design.md" })).is_err(), "no text");
+        assert_eq!(get(&spec_at(&root, "design.md")), "# D\n", "a refused write leaves the file");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_spec_tool_moves_an_old_layout_spec_first() {
+        let (root, state, _) = world(&["api"]);
+        // Where earlier builds kept it: drafts in the task folder.
+        let old = root.join("tasks/T-1/.spec-drafts/approved");
+        put(&old.join("requirements.md"), "# Old\n");
+        assert!(state.config.task("t1").unwrap().toolset.is_none());
+
+        let listed = spec_tool(&state, "spec_read", &json!({ "task_id": "t1" }), None).unwrap().value;
+        assert!(listed.to_string().contains("requirements.md"), "{listed}");
+        assert_eq!(get(&spec_at(&root, "requirements.md")), "# Old\n");
+        assert_eq!(state.config.task("t1").unwrap().toolset.as_deref(), Some("kiro"), "pinned by the move");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn spec_write_from_a_pane_writes_into_its_tasks_spec_folder() {
+        use crate::pty::{PaneKind, SpawnOptions};
+        let (root, state, _) = world(&["api"]);
+        let app = tauri::test::mock_app();
+        let pane = state
+            .ptys
+            .spawn(
+                app.handle(),
+                SpawnOptions {
+                    task_id: "t1".into(),
+                    checkout_id: None,
+                    cwd: root.to_string_lossy().to_string(),
+                    kind: PaneKind::Agent,
+                    title: "claude".into(),
+                    program: "/bin/sh".into(),
+                    args: vec!["-c".into(), "sleep 5".into()],
+                    agent_id: Some("claude".into()),
+                    rows: None,
+                    cols: None,
+                    initial_input: None,
+                    prompted: true,
+                    env: Vec::new(),
+                    title_activity: None,
+                    title_topic: None,
+                },
+            )
+            .unwrap()
+            .id;
+
+        let done = spec_tool(&state, "spec_write", &json!({ "path": "requirements.md", "text": "# R\n" }), Some(&pane));
+
+        let _ = state.ptys.close(&pane);
+        assert_eq!(done.unwrap().changed.as_deref(), Some("t1"));
+        assert_eq!(get(&spec_at(&root, "requirements.md")), "# R\n");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn spec_commit_names_a_repository_it_does_not_have() {
+        let (root, state, _) = world(&["api"]);
+        let refused = spec_tool(&state, "spec_commit", &json!({ "task_id": "t1", "repos": ["web"] }), None);
+        assert!(refused.unwrap_err().to_string().contains("`web`"));
         std::fs::remove_dir_all(&root).ok();
     }
 }

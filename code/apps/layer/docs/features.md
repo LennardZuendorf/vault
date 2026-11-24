@@ -1341,8 +1341,10 @@ never hold credentials themselves.
 | `remember` | keep a lasting fact about a repository, after asking the user (MEM-1) | yes |
 | `check_note` | say a note still holds, as of now | |
 | `forget_note` | remove a note that no longer holds, with a reason for the message center | yes |
-| `spec_task` | tick (or untick) a numbered step of a repository's spec `tasks.md` (SPEC-13) | |
-| `spec_propose` | propose a change to the task's spec, with why, as a draft for the user to approve (SPEC-24) | |
+| `spec_read` | list the task's spec files with steps ticked and total, or read one file (SPEC-13) | |
+| `spec_write` | write one file of the task's spec, whole text, in the task's `spec/` folder (SPEC-24) | |
+| `spec_task` | tick (or untick) a step of the spec by file and position (SPEC-13) | |
+| `spec_commit` | Commit spec: put the spec into the task's repositories and commit it there | yes |
 | `epic_subtasks` | an epic's sub-tasks: ticket, task, steps ticked, what each waits for, its agents (EPIC-12); the tickets under it that are none yet (EPIC-14) | |
 | `subtask_start` | start a sub-task's agent on its spec, and move its ticket (EPIC-8) | yes |
 | `subtask_tell` | send one message to a sub-task's running agents (EPIC-12) | |
@@ -2142,14 +2144,14 @@ to it, and what was drafted after it was drafted from something else.
 - **SPEC-23** Open pull requests (PR-1) for a task with a spec file
   changed outside the app MUST say which, and ask first: a reviewer would
   read a spec nobody approved.
-- **SPEC-24** An agent MUST propose a change to the spec with the
-  `spec_propose` tool, not by editing the files: which file (requirements,
-  design, or one repository's tasks), its whole new text, and why. It
-  lands in that file's editor as a draft, with the reason and the pane
-  that proposed it, and the tab is marked until the user approves it or
-  turns it down; either way the agent is sent one line saying which
-  (SPEC-14). An editor holding a draft of the user's refuses it, and the
-  agent is told to ask instead.
+- **SPEC-24** An agent changes the spec with the `spec_write` tool (a
+  file's whole new text, in the task's `spec/` folder), or by editing the
+  file there. Only the files the task's toolset keeps in a spec are
+  accepted, and nothing outside the folder. `spec_read` lists the files and
+  reads one. `spec_propose` is gone: it answers with a pointer to
+  `spec_write` for one release, since running agents may still have it in
+  context. The old proposal flow (a draft the user approves) goes with the
+  Spec tab's rewrite.
 
 ### Answering open questions
 
@@ -2189,7 +2191,7 @@ requirements it decided by hand, and finding that Redraft threw both away.
   the user's own: they are what done means, they win where they and the
   ticket disagree, what they put out of scope is left alone, and open
   questions are asked rather than guessed. It says to change the spec
-  only with `spec_propose` (SPEC-24). Past 8 KB they are cut, and point at
+  only with `spec_write` (SPEC-24). Past 8 KB they are cut, and point at
   the files.
 - **SPEC-11** An opening prompt for a task with a spec (`task_prompt`: the
   launch dialog, Start agent, handoffs) MUST end by pointing at the spec
@@ -2216,7 +2218,10 @@ requirements it decided by hand, and finding that Redraft threw both away.
   repository only, though it started both; not sure, the user clicked it
   again in the other panel, and two agents set off on the same steps.
 - **SPEC-13** An agent MUST mark a step done with the `spec_task` tool,
-  which ticks it in `tasks.md` and updates the tab. Ticks are committed
+  which ticks it in the step file, addressed by the file and the step's
+  position (the file may be left out when the spec has one), and updates
+  the tab. `spec_commit` (with `confirm: true`) commits the spec as Commit
+  spec does. Ticks are committed
   with the next approval or before Open pull requests (PR-1), with only
   the spec's files in the commit. A tick an agent makes by editing the
   file itself counts the same: the file is the record.

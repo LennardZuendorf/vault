@@ -311,15 +311,6 @@ impl Spec {
         self.repo_notes(home).check
     }
 
-    /// Keep a proposal until the user answers it, in place of one before
-    /// for the same file.
-    pub(super) fn wait_on(&self, proposal: Proposal) -> Result<()> {
-        let mut notes = self.notes();
-        notes.proposals.retain(|p| p.slot != proposal.slot);
-        notes.proposals.push(proposal);
-        self.keep(&notes)
-    }
-
     /// The pane a waiting proposal came from, and forget the proposal.
     pub(super) fn settle(&self, slot: &Slot) -> Result<Option<Proposal>> {
         let mut notes = self.notes();

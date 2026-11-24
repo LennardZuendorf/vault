@@ -223,6 +223,7 @@ async fn dispatch(app: &AppHandle, method: &str, params: Value, caller: Option<&
         "tools/list" => {
             let uses = app.state::<AppState>().config.read().tracker_in_use();
             let mut all = tools();
+            all.extend(spec_tools());
             all.extend(
                 crate::browser::tools::list()
                     .into_iter()
@@ -318,6 +319,7 @@ const DANGER: &[&str] = &[
     "forget_note",
     "finish_task",
     "subtask_start",
+    "spec_commit",
 ];
 
 pub(crate) fn confirm_prop() -> Value {
@@ -558,18 +560,53 @@ fn tools() -> Vec<Value> {
             }),
             vec!["id", "reason"],
         ),
+    ]
+}
+
+/// The task's spec, as files: the working copy at the task root (§19).
+pub(crate) fn spec_tools() -> Vec<Value> {
+    let task = || str_prop("The task's id; may be left out when you run in the task's own pane");
+    vec![
+        tool(
+            "spec_read",
+            "Read the task's spec. Without `path`, lists its files, each with how many of its \
+             steps are ticked; with one, returns that file's text.",
+            json!({ "task_id": task(), "path": str_prop("A file from the list, relative to the spec folder") }),
+            Vec::new(),
+        ),
+        tool(
+            "spec_write",
+            "Write one file of the task's spec: its whole new text, folders made as needed. Only \
+             the files the task's toolset keeps in a spec are accepted.",
+            json!({
+                "task_id": task(),
+                "path": str_prop("Relative to the spec folder, e.g. requirements.md"),
+                "text": str_prop("The file's whole text")
+            }),
+            vec!["path", "text"],
+        ),
         tool(
             "spec_task",
-            "Mark a numbered step of a repository's spec tasks.md done (or not) as soon \
-             as you have finished it, before starting the next. The user follows the \
-             work by these ticks.",
+            "Tick a step of the spec as soon as you have finished it, before starting the next, \
+             or untick it. The user follows the work by these ticks. Returns the step.",
             json!({
-                "task_id": str_prop("Your task's id, from the context file or list_tasks"),
-                "repo": str_prop("The repository's folder in the task; may be left out when there is one"),
-                "step": { "type": "integer", "description": "The step's number in tasks.md" },
-                "done": { "type": "boolean", "description": "Default true; false unticks it" }
+                "task_id": task(),
+                "file": str_prop("The file of steps; may be left out when the spec has one"),
+                "step": { "type": "integer", "description": "The step's position in the file: 1 for the first checkbox, counting every one" },
+                "done": bool_prop("Default true; false unticks it")
             }),
             vec!["step"],
+        ),
+        tool(
+            "spec_commit",
+            "Commit the spec into the task's repositories, as each one's settings say: what the \
+             user does with Commit spec. Returns a row per repository.",
+            json!({
+                "task_id": task(),
+                "repos": { "type": "array", "items": { "type": "string" }, "description": "Only these repositories, by folder; default all" },
+                "confirm": confirm_prop()
+            }),
+            Vec::new(),
         ),
     ]
 }
@@ -843,25 +880,16 @@ async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) ->
             Ok(json!({ "remembered": note.id }))
         }
 
-        "spec_task" => {
-            let task_id = match arg(&args, "task_id") {
-                Some(id) => id.to_string(),
-                None => caller
-                    .and_then(|pane| state.ptys.info(pane).ok())
-                    .map(|p| p.task_id)
-                    .ok_or_else(|| crate::error::Error::Other("give task_id".into()))?,
-            };
-            let repo = arg(&args, "repo").unwrap_or_default().to_string();
-            let step = args.get("step").and_then(Value::as_u64).unwrap_or(0) as u32;
-            let (id, done) = (task_id.clone(), args.get("done").and_then(Value::as_bool).unwrap_or(true));
-            let ticked =
-                commands::blocking(app.clone(), move |state| commands::tick_step(state, &id, &repo, step, done))
+        "spec_read" | "spec_write" | "spec_task" | "spec_commit" => {
+            let (tool, caller) = (name.to_string(), caller.map(str::to_string));
+            let answer =
+                commands::blocking(app.clone(), move |s| commands::spec_tool(s, &tool, &args, caller.as_deref()))
                     .await?;
-            let _ = {
+            if let Some(task_id) = &answer.changed {
                 use tauri::Emitter;
-                app.emit("spec:changed", &task_id)
-            };
-            Ok(serde_json::to_value(ticked)?)
+                let _ = app.emit("spec:changed", task_id);
+            }
+            Ok(answer.value)
         }
 
         "check_note" => {
@@ -947,6 +975,7 @@ mod tests {
     /// feature included: a danger tool defined there is gated here too.
     fn served() -> Vec<Value> {
         let mut all = tools();
+        all.extend(spec_tools());
         all.extend(
             commands::grafana_tools()
                 .into_iter()
@@ -970,6 +999,34 @@ mod tests {
         let names: Vec<&str> = listed.iter().filter_map(|t| t.get("name").and_then(Value::as_str)).collect();
         for danger in DANGER {
             assert!(names.contains(danger), "{danger} missing from tools/list");
+        }
+    }
+
+    #[test]
+    fn spec_tools_are_listed_with_their_schemas() {
+        let listed = spec_tools();
+        let schema = |name: &str| {
+            let t = listed.iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("{name} is not listed"));
+            let required: Vec<&str> =
+                t["inputSchema"]["required"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+            (t["inputSchema"]["properties"].clone(), required)
+        };
+        let (props, required) = schema("spec_read");
+        assert!(props.get("task_id").is_some() && props.get("path").is_some() && required.is_empty());
+        let (props, required) = schema("spec_write");
+        assert!(props.get("text").is_some());
+        assert_eq!(required, ["path", "text"]);
+        let (props, required) = schema("spec_task");
+        assert_eq!(props["step"]["type"], "integer");
+        assert!(props.get("file").is_some() && props.get("done").is_some());
+        assert_eq!(required, ["step"]);
+        let (props, required) = schema("spec_commit");
+        assert_eq!(props["repos"]["type"], "array");
+        assert!(props.get("confirm").is_some() && required.is_empty());
+        assert_eq!(listed.len(), 4, "spec_propose is no longer one of them");
+        assert!(tool_needs_confirm("spec_commit", &json!({})));
+        for read in ["spec_read", "spec_write", "spec_task"] {
+            assert!(!tool_needs_confirm(read, &json!({})), "{read} needs no confirm");
         }
     }
 

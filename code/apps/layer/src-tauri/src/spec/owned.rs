@@ -8,7 +8,7 @@
 use super::{checkbox, list_item};
 
 /// One `- [ ]` step.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct OwnedStep {
     /// 1-based place among every checkbox of the file outside code blocks,
     /// nested ones included. This is how a step is addressed.
