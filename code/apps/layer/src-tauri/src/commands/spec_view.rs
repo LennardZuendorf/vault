@@ -1,4 +1,4 @@
-//! What the Spec tab is shown of a task's spec (SPEC-8), and the one command
+//! What the Spec tab is shown of a task's spec (SPEC-14), and the one command
 //! that writes a file of it: the toolset's files with their steps, how far
 //! each repository is, what was last committed, and how the install stands.
 

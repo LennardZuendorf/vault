@@ -29,7 +29,7 @@ pub struct Settings {
     pub henchman: crate::config::HenchmanAgent,
     pub worktree_root: String,
     pub worktree_root_is_default: bool,
-    /// Agents are told to write the spec before any code (SPEC-27).
+    /// Agents are told to write the spec before any code (SPEC-20).
     pub spec_first: bool,
     /// The toolset a task gets when nothing else says, none for Kiro (§19).
     pub default_toolset: Option<String>,

@@ -1,6 +1,44 @@
 # Composable spec workflows — design
 
-Status: draft for approval · 2026-11-24 · replaces most of `docs/features.md` §19 (SPEC-1…25)
+Status: implemented (see docs/features.md §19) · 2026-11-24 · replaced `docs/features.md` §19 (its SPEC-1…25)
+
+## What the build did differently
+
+`docs/features.md` §19 says what the code does; where it differs from this
+design, §19 wins. The SPEC-n ids in the rest of this document are those of
+§19 before it was rewritten, not its present ids. The differences:
+
+- **Manifests are JSON, not TOML.** `config.json` is JSON and nothing depends
+  on a TOML parser. The built-ins are `src-tauri/toolsets/<id>.json` with the
+  paragraph in `<id>.md` (`{spec_dir}` marks the working copy's path), and a
+  custom manifest, in the app config, writes its paragraph inline as
+  `agents_md`. A `fetch` step has no `cache` key (a fetched copy is always
+  kept, by version), and a `skills` step has no `to`: it copies into both
+  skill folders. `commit_to` does not move files: only Kiro's, by its id, are
+  committed under another path; for the rest it names the folder in a pull
+  request description.
+- **`# <folder>` headings in moved and drafted step files.** Moving an old
+  spec (section 12) and Kiro's tasks draft write each repository's steps under
+  a first-level `# <folder>` heading, because a repository's own `tasks.md` has
+  `##` headings (`## Tasks`, an epic's sub-tasks) that a same-level heading
+  would end the section at. Ownership is read at any heading level. A heading
+  of the same or a higher level that names no repository ends the owner's
+  section; section 5 said it would not change it.
+- **Epics were rewired.** Epics (§26) depended on the approval pipeline: their
+  plan, sub-task counts and filing now read the epic's working copy, and a
+  sub-task is seeded with the epic's non-step files and its own steps, with the
+  epic's toolset, committing nothing.
+- **"Write a spec first" starts the agent at once** with the Spec first
+  sentence at the end of its prompt, and opens on Spec (section 13); the
+  Spec-tab Start agent route and its prompt were removed with the pipeline.
+- **A task's toolset cannot be changed after it is made.** Section 3's menu
+  item was not built: the task is made again to use another.
+- **Smaller:** Claude Code started in a worktree gets `--add-dir <task folder>`
+  for the installed skills (section 4's check; no other CLI was found to need
+  or take an argument); the install's state shows on the Spec tab only, with no
+  status dot; an epic's Spec tab is not followed live; the `start_work` MCP
+  tool takes no toolset or "write a spec first". The remaining gaps are in
+  §19's list.
 
 ## Why
 

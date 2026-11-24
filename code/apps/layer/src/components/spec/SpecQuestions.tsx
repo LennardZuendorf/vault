@@ -7,8 +7,8 @@ import { Spinner } from "../ui";
 
 /**
  * Beside the requirements editor: its open questions, each to answer by
- * picking one of the answers drafted for it or writing one's own (SPEC-19),
- * and Apply answers, which builds them into the requirements (SPEC-20). An
+ * picking one of the answers drafted for it or writing one's own (SPEC-26),
+ * and Apply answers, which builds them into the requirements (SPEC-26). An
  * answer lives in the editor's text, so this list is only a view of it.
  */
 export function SpecQuestions({ task, path }: { task: TaskView; path: string }) {

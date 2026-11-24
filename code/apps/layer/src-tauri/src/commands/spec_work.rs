@@ -85,7 +85,7 @@ fn step_file(dir: &Path, t: &Toolset, file: Option<&str>) -> Result<String> {
 }
 
 /// Tick (or untick) the step at `position` of a step file, for an agent's
-/// `spec_task` (SPEC-13): `file` when the spec has more than one. The step as
+/// `spec_task` (SPEC-23): `file` when the spec has more than one. The step as
 /// it is now.
 pub(crate) fn tick_step(
     state: &AppState,
@@ -256,7 +256,7 @@ pub async fn spec_call(app: &tauri::AppHandle, args: Value, caller: Option<&str>
 }
 
 /// The sentence that tells an agent to write the spec first (Spec first,
-/// SPEC-27), naming the working copy by its full path.
+/// SPEC-20), naming the working copy by its full path.
 pub(crate) fn spec_first_line(dir: &Path) -> String {
     format!("Write or update the spec in {} before you change any code.", dir.display())
 }
@@ -267,7 +267,7 @@ pub(crate) fn spec_first_for(state: &AppState, task: &Task) -> Option<String> {
     (state.config.with(|c| c.spec_first) && task.review.is_none()).then(|| spec_first_line(&spec_dir(state, task)))
 }
 
-/// What an opening prompt gains for a task's spec (SPEC-11): where the
+/// What an opening prompt gains for a task's spec (SPEC-19): where the
 /// working copy is, once it holds files, and with Spec first on the line
 /// that tells the agent to write it before any code, which it gets even
 /// while there is nothing to point at yet. Reads the disk.
@@ -307,7 +307,7 @@ pub(crate) fn with_spec_first(state: &AppState, task: &Task, prompt: String, wri
     format!("{prompt}\n\n{}", spec_first_line(&spec_dir(state, task)))
 }
 
-/// The spec's part of a drafted pull request description (SPEC-16): for
+/// The spec's part of a drafted pull request description (SPEC-13): for
 /// each repository, where its spec is in it and the requirements it meets,
 /// read from the working copy's entry file, with the latest check's answer.
 /// Runs git.
@@ -359,7 +359,7 @@ pub(crate) fn pr_section(state: &AppState, task: &Task) -> String {
     md
 }
 
-/// What an agent started on the spec is asked (SPEC-12): every step file,
+/// What an agent started on the spec is asked (SPEC-21): every step file,
 /// or one repository's steps in it, in order, each ticked as soon as it is
 /// done. Empty when the spec has no step to do.
 pub(crate) fn work_prompt(state: &AppState, task_id: &str, checkout_id: Option<&str>) -> Result<String> {
@@ -408,7 +408,7 @@ pub(crate) fn work_prompt(state: &AppState, task_id: &str, checkout_id: Option<&
     ))
 }
 
-/// How a repository takes specs (SPEC-1, SPEC-3): the toolset Start work
+/// How a repository takes specs (SPEC-5): the toolset Start work
 /// offers for it, what Commit spec puts in it (`none`: the app keeps the
 /// spec), and the folder it goes to.
 #[tauri::command]

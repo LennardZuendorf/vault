@@ -43,7 +43,7 @@ impl Part {
     }
 }
 
-/// A feature, or a bug: which file holds the requirements (SPEC-1).
+/// A feature, or a bug: which file holds the requirements (SPEC-24).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
@@ -53,7 +53,7 @@ pub enum Kind {
 }
 
 /// One requirement: `R-2`, the repositories that meet it (`[api, web]`;
-/// none named means every one, SPEC-1), and what it says.
+/// none named means every one, SPEC-24), and what it says.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Requirement {
     pub id: String,
@@ -70,7 +70,7 @@ impl Requirement {
 
 /// One step of `tasks.md`: its number, whether it is ticked, the
 /// requirements it serves, and the other repositories' steps it waits for
-/// (`after api 2`, SPEC-1).
+/// (`after api 2`, SPEC-24).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Step {
     pub number: u32,
@@ -81,7 +81,7 @@ pub struct Step {
 }
 
 /// The folder a task's spec is kept in, under the repository's spec folder:
-/// its branch, made one path segment (SPEC-1).
+/// its branch, made one path segment (SPEC-12).
 pub fn folder_name(branch: &str) -> String {
     let name: String = branch
         .chars()
@@ -112,7 +112,7 @@ pub fn valid_folder(folder: &str) -> Result<Option<String>, String> {
 
 /// The requirements of a spec: the list items under its Requirements
 /// heading, or a bug's Expected and Unchanged behaviour, up to the next
-/// heading (SPEC-1). An item's `R-n` is its id; one without is numbered by
+/// heading (SPEC-24). An item's `R-n` is its id; one without is numbered by
 /// its place. A spec from before, with "Acceptance criteria" and `AC-n`,
 /// reads the same. A checkbox is not part of the text, and an indented line
 /// goes with the item above.
@@ -158,7 +158,7 @@ pub fn requirements(spec: &str) -> Vec<Requirement> {
 }
 
 /// The open questions of a requirements file that have an answer, as
-/// (question, answer) (SPEC-1, SPEC-19): a list item under the Open
+/// (question, answer) (SPEC-24, SPEC-26): a list item under the Open
 /// questions heading, and under it an `Answer:` line, or a line starting
 /// `--`, which is how people answered before the tab had a place for it.
 /// The items under a question are the answers drafted for it, not its
@@ -272,10 +272,10 @@ pub fn tick(tasks: &str, number: u32, done: bool) -> Option<String> {
 }
 
 /// What a step whose requirements are all gone is marked with, for the user
-/// to remove: never removed by itself (SPEC-7).
+/// to remove: never removed by itself (SPEC-25).
 pub const ORPHANED: &str = "— its requirements are gone: remove this step?";
 
-/// A redrafted `tasks.md`, made to keep what was done (SPEC-7): a ticked
+/// A redrafted `tasks.md`, made to keep what was done (SPEC-25): a ticked
 /// step of `old` stays ticked in `new`, or is put back at the end if the
 /// draft left it out, and a step serving only requirements that are no
 /// longer there is marked.

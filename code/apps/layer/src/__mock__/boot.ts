@@ -28,7 +28,7 @@ import { emit } from "@tauri-apps/api/event";
  *   __mock.emit("pty:activity", id)  deliver a backend event
  *   __mock.print(id, "text\r\n")     a pane prints, live to its terminal if shown
  *   __mock.world                     the data being served; edit it, then emit
- *   __mock.spec.write(task, path, text)   an agent writes a file of the task's spec (SPEC-28)
+ *   __mock.spec.write(task, path, text)   an agent writes a file of the task's spec (SPEC-15)
  *
  * A command with no answer here logs "[mock] unanswered" and returns null.
  * That is the cue to add it to `answer` below.

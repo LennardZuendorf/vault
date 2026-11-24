@@ -13,6 +13,7 @@ names the rule). The rest are on you.
 - [Add an MCP tool](#add-an-mcp-tool)
 - [Add a Jira, GitHub or Slack call](#add-a-jira-github-or-slack-call)
 - [Add a git operation](#add-a-git-operation)
+- [Add a spec toolset](#add-a-spec-toolset)
 - [Fix a bug](#fix-a-bug)
 - [Splitting a file](#splitting-a-file)
 
@@ -253,6 +254,64 @@ Don't make the UI ask on a timer.
    worktree. The tests run under your global git config, so write them to
    pass whatever it says.
 5. **Call it from a command through `blocking`.**
+
+## Add a spec toolset
+
+A toolset (§19) is data: a manifest and a paragraph. A team adds one of its
+own in Settings → Code, as JSON, with no release (SPEC-4). Ship one with
+Layer only when everyone should have it.
+
+1. **Write the manifest**, `src-tauri/toolsets/<id>.json`: `id`, `name`, an
+   optional pinned `version`, `files` and `steps` (globs relative to the task's
+   `spec/`: `*` within a segment, `**` across segments; every `steps` glob lies
+   inside `files`), `install` (steps, in order: `{"run": [argv…], "cwd":
+   "spec"|"task", "timeout_secs": n}`, `{"fetch": url, "ref": ref}`,
+   `{"skills": glob}` for skill folders in the fetched copy; `{version}`,
+   `{task}`, `{openspec_tools}` and `{skill_dirs}` are filled in), and
+   `commit_to`. A step names exactly one kind and `run` is an argv, never a
+   shell string. Pin the version of anything it fetches or runs.
+2. **Write the paragraph**, `src-tauri/toolsets/<id>.md`: what agents are told
+   about the toolset, in the context file's Spec section (SPEC-18). Write
+   `{spec_dir}` where the working copy's absolute path goes, and say where its
+   files are saved, by that path, so a skill or tool never writes into a
+   repository's worktree. Say how its steps are grouped for several
+   repositories (`## <repo>` headings or `[repo]` tags, SPEC-11).
+3. **List it** in `builtin()` in `src-tauri/src/spec/toolset.rs`, a pair of
+   `include_str!`. The order there is the order of every pick list. Settings,
+   Start work and the Repos view read the list; nothing else names it.
+4. **Mirror a repository's root.** Commit spec puts a file at the same path in a
+   repository (SPEC-12), which is what a toolset wants. Only Kiro's flat files go
+   elsewhere, by its id (`spec_commit.rs`, `target_path`; `spec_work.rs`,
+   `pr_section`). Do not add a toolset that needs another place without
+   changing that deliberately, and `commit_to` alone does not move a file.
+5. **Give it an entry file**, if it has one: the file that says what the work
+   is, whose first 8 KB the context file quotes. Add its id and glob to
+   `entry_file` in `src-tauri/src/commands/task_context.rs`; without one the
+   section has the paragraph only.
+6. **Tests**, at the bottom of the file they test, real folders in a temp dir:
+   - `spec/toolset.rs`: add the id to `every_builtin_toolset_is_valid`, and its
+     pinned values to `the_builtin_manifests_carry_the_pinned_values`. `validate`
+     refuses: an id that is not lowercase letters, digits, `-` or `_`; no name;
+     a version that is not one path segment; no `files`; a glob with `..`, an
+     absolute path or an empty segment; a `steps` glob outside `files`; a `run`
+     with no command, a `fetch` with no URL or ref, a `skills` glob that leaves
+     the fetched copy; a `commit_to` that leaves the repository. Mutate one
+     field of a valid manifest per test.
+   - `commands/spec_install.rs`: an install test with the fake `Runner` that
+     file has (`installing_openspec_runs_its_pinned_init_in_the_spec_folder`,
+     `installing_superpowers_copies_its_skills_into_every_skill_folder`), so no
+     `npx` runs and no network is touched.
+   - `spec/owned.rs`: a step file of its shape, which repository owns each step.
+7. **Mock harness**: a world for it in `src/__mock__/spec-worlds.ts` and a
+   `toolset` value in `docs/testing.md`, so the tab is clicked through with its
+   files and steps.
+8. **Docs**: list it in SPEC-3 in `docs/features.md` §19, with its files, steps
+   and install, and change any requirement the toolset makes untrue.
+9. **Say what you ran.** Install it into a task and read what it wrote in the
+   task folder (`.spec-install.json` lists it), start an agent and ask it for
+   its skills (an agent CLI Layer does not give the task folder to will not see
+   them from a worktree, SPEC-9), and tick a step from the Spec tab, the file and
+   `spec_task`. If you could not, say so.
 
 ## Fix a bug
 

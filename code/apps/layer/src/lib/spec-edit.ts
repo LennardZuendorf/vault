@@ -25,7 +25,7 @@ export function shortcutSaves(
 }
 
 /**
- * What an editor shows once the file on disk is read again (SPEC-28). A clean
+ * What an editor shows once the file on disk is read again (SPEC-16). A clean
  * editor takes the file. A dirty one keeps what the user typed, since an agent
  * writing the file is no reason to lose it, and says so when the file is no
  * longer what the editing began from: there is no merge, only Load theirs.

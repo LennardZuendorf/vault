@@ -1,5 +1,5 @@
 /**
- * The open questions of a requirements file (SPEC-1, SPEC-19): each list
+ * The open questions of a requirements file (SPEC-24, SPEC-26): each list
  * item under its Open questions heading, the answers drafted for it (the
  * items under it) and the user's own (an `Answer:` line under it, or one
  * starting `--`, which is how people answered before the tab had a place

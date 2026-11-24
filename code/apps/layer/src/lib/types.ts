@@ -29,9 +29,9 @@ export interface Project {
   /** The check as this Mac's user typed or confirmed it. A loop runs
    *  `check` only when it is this, word for word (LOOP-1). */
   check_approved?: string | null;
-  /** Where specs are committed here (SPEC-1). Absent: `specs`. */
+  /** Where specs are committed here (SPEC-5). Absent: `specs`. */
   spec_folder?: string | null;
-  /** The toolset Start work offers here, and what Commit spec puts here (`none`: the app keeps it, SPEC-3). */
+  /** The toolset Start work offers here, and what Commit spec puts here (`none`: the app keeps it, SPEC-5). */
   spec_toolset?: string | null;
   spec_commit?: SpecCommit;
 }

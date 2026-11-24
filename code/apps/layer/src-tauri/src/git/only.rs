@@ -1,4 +1,4 @@
-//! Committing some files and no others: a spec the user approved (SPEC-6),
+//! Committing some files and no others: the spec Commit spec puts (SPEC-12)
 //! in a worktree where an agent may be halfway through its own change.
 
 use std::path::Path;

@@ -13,7 +13,7 @@ import type {
 /**
  * What an editor holds where it is not what its file holds: the text, what the
  * file held when the editing began, and whether the file has changed since
- * (`conflict`: an agent wrote it, SPEC-28).
+ * (`conflict`: an agent wrote it, SPEC-16).
  */
 export interface Edit {
   text: string;
@@ -34,9 +34,9 @@ export interface SpecState {
   edits: Record<string, Edit>;
   /** A Kiro draft or Apply answers being streamed in, and its request. */
   drafting: { requestId: string } | null;
-  /** Repositories whose check is running (SPEC-15). */
+  /** Repositories whose check is running (SPEC-27). */
   checking: string[];
-  /** What the last draft or Apply answers replaced, for Undo (SPEC-20). */
+  /** What the last draft or Apply answers replaced, for Undo (SPEC-26). */
   last: { path: string; before: string | null; results: AppliedAnswers | null } | null;
   /** What the last Commit spec did in each repository, until the spec changes again. */
   committed: RepoResult[] | null;

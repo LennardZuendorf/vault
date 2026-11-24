@@ -5,7 +5,7 @@ import { ErrorMessage, useFailure } from "../ui";
 
 /**
  * One file of the spec in an editor, saved as a plain file write, the way an
- * agent writes it (SPEC-28). When the file changes on disk under an editor
+ * agent writes it (SPEC-16). When the file changes on disk under an editor
  * with unsaved text, the text stays and a line says so: Load theirs takes the
  * file's, Save mine writes over it. There is no merge.
  */

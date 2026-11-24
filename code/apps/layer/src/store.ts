@@ -178,7 +178,7 @@ export interface State {
   dropNotes: (taskId: string, ids: number[]) => void;
   editNote: (taskId: string, id: number, body: string) => void;
   refreshSettings: () => Promise<void>;
-  setSpecFirst: (on: boolean) => Promise<void>; // Spec first (SPEC-27), then the settings again
+  setSpecFirst: (on: boolean) => Promise<void>; // Spec first (SPEC-20), then the settings again
   /** `quiet` is a timer tick: no toast, and no spinner over a list already shown. */
   refreshIssues: (opts?: { quiet?: boolean }) => Promise<void>;
 }

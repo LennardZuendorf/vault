@@ -284,6 +284,17 @@ build does the same.
 | `crates/domain`, `crates/sync`, `crates/server`, `migrations/` | Layer's server: the synced records, who may write them, the HTTP and sync routes, the schema ([architecture](docs/architecture.md#layers-server)) |
 | `web/` | the server's web app; `packages/types` holds the records' types, generated |
 
+## Specs and toolsets
+
+A task's spec is plain files in its working copy, `<task>/spec/`, laid out by
+the task's toolset (`docs/features.md` §19). A toolset is a JSON manifest and a
+Markdown paragraph in `src-tauri/toolsets/` (Kiro, OpenSpec, superpowers); a
+team adds its own in Settings → Code. To add one, follow "Add a spec toolset" in
+[`docs/recipes.md`](docs/recipes.md). Every read and write of `spec/` goes
+through `commands/spec_copy.rs`, and nothing writes a spec file into a worktree
+but Commit spec. The design and plan of this work, and any later design that is
+not yet in `docs/features.md`, are in `docs/superpowers/`.
+
 ## One company
 
 A server runs for one company (`layer.example.toml`, or `--config`, or

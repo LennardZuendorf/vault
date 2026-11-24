@@ -5,7 +5,7 @@ import { ErrorMessage, Field, Switch, useFailure } from "./ui";
 
 /**
  * Settings → Code, for specs (§19): the toolset a task gets by default, Spec
- * first (SPEC-27), and the user's own toolsets as the JSON of their manifests.
+ * first (SPEC-20), and the user's own toolsets as the JSON of their manifests.
  * Each saves where it is changed: the toolsets, as a whole, when the field is
  * left, since a list that is half a manifest means nothing.
  */

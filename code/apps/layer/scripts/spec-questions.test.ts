@@ -16,7 +16,7 @@ const DRAFT = `## Requirements
   - No
 `;
 
-describe("open questions in the requirements (SPEC-1, SPEC-19)", () => {
+describe("open questions in the requirements (SPEC-24, SPEC-26)", () => {
   test("each question is read with its id and the answers drafted for it", () => {
     const qs = questions(DRAFT);
     expect(qs.map((q) => q.id)).toEqual(["Q-1", "Q-2"]);
