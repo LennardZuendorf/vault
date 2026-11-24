@@ -305,7 +305,9 @@ pub struct AppConfig {
     pub spec_first: bool,
     /// Toolsets the user added, beside the three Layer ships. Never synced: a
     /// manifest's install steps run on this Mac, so each Mac holds its own.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Read leniently (`lenient_list`): one entry no longer readable must not make
+    /// the whole file unreadable and the app start empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::spec::toolset::lenient_list")]
     pub toolsets: Vec<crate::spec::toolset::Toolset>,
 }
 
@@ -781,6 +783,29 @@ mod tests {
         let json = serde_json::to_value(old(r#","specs_in_app":true"#)).unwrap();
         assert_eq!(json["spec_commit"], "none");
         assert!(json.get("specs_in_app").is_none());
+    }
+
+    #[test]
+    fn one_unreadable_custom_toolset_does_not_make_the_config_unreadable() {
+        let good = serde_json::json!({ "id": "mine", "name": "Mine", "files": ["docs/**/*.md"] });
+        let two_kinds = serde_json::json!({
+            "id": "bad", "name": "Bad", "files": ["a.md"],
+            "install": [{ "run": ["true"], "fetch": "https://x", "ref": "v1" }]
+        });
+        let no_files = serde_json::json!({ "id": "nofiles", "name": "No files" });
+        let cfg: AppConfig = serde_json::from_value(serde_json::json!({
+            "tasks": [{ "id": "t", "name": "n", "root": "/r", "branch": "b", "created_at": "2026-01-01T00:00:00Z" }],
+            "default_toolset": "mine",
+            "toolsets": [two_kinds, good, no_files, 7]
+        }))
+        .unwrap();
+
+        assert_eq!(cfg.tasks.len(), 1, "every task is still there");
+        assert_eq!(cfg.default_toolset.as_deref(), Some("mine"));
+        let ids: Vec<&str> = cfg.toolsets.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["mine"], "only the one that reads is kept");
+        let all: AppConfig = serde_json::from_str(r#"{"toolsets": "not a list"}"#).unwrap();
+        assert!(all.toolsets.is_empty());
     }
 
     #[test]

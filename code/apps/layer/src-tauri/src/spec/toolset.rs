@@ -116,6 +116,33 @@ pub struct Vars {
     pub skill_dirs: String,
 }
 
+/// `Config.toolsets` as it is read from `config.json`: each entry that is not a
+/// manifest (an install step of two kinds, a missing `files`, a hand edit gone
+/// wrong) is left out and said on stderr, and the rest are kept. Read strictly,
+/// one bad entry made the whole config unreadable and the app started empty
+/// with every task gone. Strictness stays where a person is told why: Settings
+/// refuses the list whole (`spec_settings::parse_toolsets`). A manifest that
+/// reads but breaks a rule (`validate`) is kept, so Settings still shows it and
+/// its install says why it fails.
+pub fn lenient_list<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Toolset>, D::Error> {
+    let raw = serde_json::Value::deserialize(d)?;
+    let serde_json::Value::Array(entries) = raw else {
+        eprintln!("the custom toolsets in the config are not a list, so none were kept");
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .into_iter()
+        .enumerate()
+        .filter_map(|(n, entry)| match serde_json::from_value::<Toolset>(entry) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                eprintln!("custom toolset {} in the config was left out: {e}", n + 1);
+                None
+            }
+        })
+        .collect())
+}
+
 /// The toolsets Layer ships, in the order the UI lists them. A manifest that
 /// fails to parse is left out rather than taking the app down; the tests
 /// below fail on that.

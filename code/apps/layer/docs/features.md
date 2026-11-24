@@ -2115,7 +2115,12 @@ requirements, then design, then tasks.
   `.`, empty segment, backslash or leading `/`; every step glob inside `files`;
   a `run` step with a command, a `fetch` step with a URL and a ref, and each
   install step of exactly one kind (`run`, `fetch` or `skills`, never two). The
-  field says that `run` steps execute as written, on this Mac, as the user.
+  field says that `run` steps execute as written, on this Mac, as the user. The
+  config file is read more leniently than Settings: an entry in it that is not
+  a manifest at all (a hand edit gone wrong, a step of two kinds) is left out
+  and said on stderr, and every other entry and every task is kept, where it
+  once made the whole config unreadable (`toolset::lenient_list`). The next
+  write of the config no longer has the left-out entry.
 
 ### Configuration
 
