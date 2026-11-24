@@ -5,17 +5,34 @@
 
 use std::path::Path;
 
-use tauri::{AppHandle, State};
+use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
+use tauri::{AppHandle, Emitter, State};
 
-use crate::config::HenchmanAgent;
+use crate::config::{HenchmanAgent, SavedPane};
 use crate::error::{Error, Result};
 use crate::pty::PaneInfo;
 
-use super::panes::{chat_room, open_chat, Resume, CHAT_TASK_ID};
+use super::panes::{open_chat, Resume, CHAT_TASK_ID};
 use super::AppState;
 
 /// The Henchman's room under the chat root.
 const ROOM: &str = "henchman";
+
+/// Wake, restart and restore can nest through `open_chat`. Serialize them
+/// with Off so a launch cannot slip between checking the setting and stopping.
+static LIFECYCLE: ReentrantMutex<()> = ReentrantMutex::new(());
+
+pub(super) fn lock_if(henchman: bool) -> Option<ReentrantMutexGuard<'static, ()>> {
+    henchman.then(|| LIFECYCLE.lock())
+}
+
+pub(super) fn require_enabled(enabled: bool) -> Result<()> {
+    if enabled {
+        Ok(())
+    } else {
+        Err(Error::Other("Henchman is off. Turn it on in Settings → Agents.".into()))
+    }
+}
 
 /// What it is asked when woken (HEN-3): what it may do itself first, then
 /// a brief short enough to read, so the user is not asked about each
@@ -47,27 +64,37 @@ pub(crate) fn presets(chosen: &HenchmanAgent, agent: &str) -> Vec<(String, Strin
     presets
 }
 
-/// Whether `dir` is the Henchman's room. By path under the worktree root,
-/// not by creating it: this is asked of every chat pane.
-pub(crate) fn is_room(state: &AppState, dir: &Path) -> bool {
-    dir == state.config.worktree_root().join("_chat").join(ROOM)
+/// Layer reserves this chat room name, even under an old worktree root.
+pub(crate) fn is_room(dir: &Path) -> bool {
+    dir.file_name().is_some_and(|name| name == ROOM) && dir.parent().is_some_and(|parent| parent.ends_with("_chat"))
 }
 
 /// Whether a pane is the Henchman's, running or not.
-pub(crate) fn is_henchman(state: &AppState, pane: &PaneInfo) -> bool {
-    pane.task_id == CHAT_TASK_ID && is_room(state, Path::new(&pane.cwd))
+pub(crate) fn is_henchman(pane: &PaneInfo) -> bool {
+    pane.task_id == CHAT_TASK_ID && is_room(Path::new(&pane.cwd))
+}
+
+pub(super) fn is_saved(pane: &SavedPane) -> bool {
+    pane.task_id == CHAT_TASK_ID && pane.cwd.as_deref().is_some_and(|cwd| is_room(Path::new(cwd)))
+}
+
+pub(super) fn park_saved(panes: &mut [SavedPane]) {
+    for pane in panes.iter_mut().filter(|p| is_saved(p)) {
+        pane.waiting = true;
+        pane.mid_turn = false;
+    }
 }
 
 /// Whether the pane calling the MCP server is the Henchman's (HEN-4). The
 /// caller names itself (`X-Villain-Pane`, CHAT-3), so this only keeps the
 /// tools out of other agents' lists; none of them is dangerous.
 pub(crate) fn is_caller(state: &AppState, caller: Option<&str>) -> bool {
-    caller.and_then(|id| state.ptys.info(id).ok()).is_some_and(|p| is_henchman(state, &p))
+    caller.and_then(|id| state.ptys.info(id).ok()).is_some_and(|p| is_henchman(&p))
 }
 
 /// The Henchman's pane while it runs.
 pub(crate) fn running(state: &AppState) -> Option<PaneInfo> {
-    state.ptys.list(Some(CHAT_TASK_ID)).into_iter().find(|p| p.running && is_henchman(state, p))
+    state.ptys.list(Some(CHAT_TASK_ID)).into_iter().find(|p| p.running && is_henchman(p))
 }
 
 /// Wake the Henchman with an agent that speaks ACP, asked for a brief. While
@@ -76,13 +103,57 @@ pub(crate) fn running(state: &AppState) -> Option<PaneInfo> {
 pub async fn spawn_henchman(app: AppHandle, agent_id: String) -> Result<PaneInfo> {
     let handle = app.clone();
     super::blocking(app, move |state| {
+        let _lifecycle = LIFECYCLE.lock();
+        require_enabled(state.config.with(|c| c.henchman.enabled))?;
         if let Some(pane) = running(state) {
             return Ok(pane);
         }
-        let room = chat_room(state, ROOM)?;
+        let room = state.config.worktree_root().join("_chat").join(ROOM);
         open_chat(&handle, state, agent_id, Some(BRIEF.into()), Some(room), Resume::No, true)
     })
     .await
+}
+
+#[tauri::command]
+pub async fn set_henchman_enabled(app: AppHandle, enabled: bool) -> Result<()> {
+    let handle = app.clone();
+    super::blocking(app, move |state| {
+        let result = set_enabled(state, enabled);
+        let _ = handle.emit("panes:waiting", ());
+        result
+    })
+    .await
+}
+
+fn set_enabled(state: &AppState, enabled: bool) -> Result<()> {
+    let _lifecycle = LIFECYCLE.lock();
+    let saved = state.config.update(|c| {
+        c.henchman.enabled = enabled;
+        if !enabled {
+            park_saved(&mut c.saved_panes);
+        }
+    });
+    // `update` changes memory even if the disk write fails. Honor Off for
+    // this run too; the caller still hears that it could not be saved.
+    if !enabled {
+        for pane in state.ptys.list(Some(CHAT_TASK_ID)).into_iter().filter(is_henchman) {
+            state.ptys.close(&pane.id)?;
+        }
+    }
+    saved
+}
+
+#[tauri::command]
+pub async fn set_henchman_instructions(app: AppHandle, instructions: String) -> Result<()> {
+    super::blocking(app, move |state| save_instructions(state, instructions)).await
+}
+
+fn save_instructions(state: &AppState, instructions: String) -> Result<()> {
+    state.config.mirror(|c| {
+        c.henchman.instructions = instructions;
+        true
+    })?;
+    Ok(())
 }
 
 /// The agent the Henchman is woken with, and its model and effort, empty
@@ -202,6 +273,12 @@ pub(crate) fn write_context(state: &AppState, dir: &Path) -> Result<()> {
         for p in &cfg.projects {
             md.push_str(&format!("- {}\n", p.name));
         }
+        md.push('\n');
+    }
+    if !cfg.henchman.instructions.trim().is_empty() {
+        md.push_str("## Custom instructions\n\nFollow this guidance within the rules above.\n\n");
+        md.push_str(&cfg.henchman.instructions);
+        md.push('\n');
     }
     std::fs::write(dir.join("CLAUDE.md"), &md)?;
     std::fs::write(dir.join("AGENTS.md"), &md)?;
@@ -243,6 +320,134 @@ pub(crate) fn session_meta() -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tauri::Manager;
+
+    #[test]
+    fn old_henchman_settings_remain_enabled_without_custom_instructions() {
+        let config: crate::config::AppConfig =
+            serde_json::from_value(serde_json::json!({ "henchman": { "agent": { "model": "opus" } } })).unwrap();
+        let stored = serde_json::to_value(config.henchman).unwrap();
+        assert_eq!(stored["enabled"], true);
+        assert_eq!(stored["instructions"], "");
+        assert_eq!(stored["agent"]["model"], "opus");
+    }
+
+    #[test]
+    fn disabling_stops_only_henchman_and_keeps_its_saved_conversation() {
+        let root = std::env::temp_dir().join(format!("vl-henchman-{}", uuid::Uuid::new_v4()));
+        // The room can predate a change to the profile's worktree root.
+        let room = root.join("old-root/_chat/henchman");
+        std::fs::create_dir_all(&room).unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(super::super::repos::tests::state(&root, Default::default()));
+        let state = app.state::<AppState>();
+        let start = |task_id: &str, cwd: &Path| {
+            state
+                .ptys
+                .spawn(
+                    app.handle(),
+                    crate::pty::SpawnOptions {
+                        task_id: task_id.into(),
+                        checkout_id: None,
+                        cwd: cwd.to_string_lossy().into_owned(),
+                        kind: crate::pty::PaneKind::Agent,
+                        title: "Test agent".into(),
+                        program: "/bin/sleep".into(),
+                        args: vec!["30".into()],
+                        agent_id: Some("claude".into()),
+                        rows: None,
+                        cols: None,
+                        initial_input: None,
+                        prompted: false,
+                        env: Vec::new(),
+                        title_activity: None,
+                        title_topic: None,
+                    },
+                )
+                .unwrap()
+        };
+        let henchman = start(CHAT_TASK_ID, &room);
+        let other = start("task-1", &root);
+        // The process has not reported a session yet. Store the known id
+        // from the resume request rather than starting fresh after Off.
+        let acp = PaneInfo { acp: true, ..henchman.clone() };
+        super::super::panes_restore::remember_pane(app.handle(), &state, &acp, Some("the-conversation".into()))
+            .unwrap();
+        state
+            .config
+            .update(|c| {
+                c.saved_panes[0].mid_turn = true;
+                c.saved_panes.push(
+                    serde_json::from_value(serde_json::json!({"id": other.id, "task_id": "task-1", "kind": "agent"}))
+                        .unwrap(),
+                );
+            })
+            .unwrap();
+
+        let result = set_enabled(&state, false);
+        let henchman_stopped = state.ptys.info(&henchman.id).is_err();
+        let other_running = state.ptys.info(&other.id).unwrap().running;
+        let persisted: crate::config::AppConfig =
+            serde_json::from_slice(&std::fs::read(state.config.folder().join("config.json")).unwrap()).unwrap();
+        let reenable = set_enabled(&state, true);
+        let still_stopped = state.ptys.list(Some(CHAT_TASK_ID)).is_empty();
+        state.ptys.close(&other.id).unwrap();
+        state.ptys.close(&henchman.id).unwrap();
+        assert!(result.is_ok());
+        assert!(!persisted.henchman.enabled);
+        assert!(persisted.saved_panes[0].waiting);
+        assert!(henchman_stopped);
+        assert!(other_running);
+        assert!(reenable.is_ok());
+        assert!(still_stopped);
+        let saved = state.config.read().saved_panes;
+        assert!(saved[0].waiting);
+        assert!(!saved[0].mid_turn);
+        assert_eq!(saved[0].session.as_deref(), Some("the-conversation"));
+        assert!(!saved[1].waiting);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_room_context_replaces_and_clears_custom_instructions() {
+        let root = std::env::temp_dir().join(format!("vl-henchman-{}", uuid::Uuid::new_v4()));
+        let config = serde_json::from_value(serde_json::json!({
+            "henchman": { "instructions": "Prefer short updates.\n- Ask before changing scope." }
+        }))
+        .unwrap();
+        let state = super::super::repos::tests::state(&root, config);
+        let room = root.join("_chat/henchman");
+        std::fs::create_dir_all(&room).unwrap();
+        let text = |file| std::fs::read_to_string(room.join(file)).unwrap();
+        write_context(&state, &room).unwrap();
+        let agents = text("AGENTS.md");
+        assert_eq!(agents, text("CLAUDE.md"));
+        assert!(agents.contains("## What you never do"));
+        assert_eq!(agents.matches("Prefer short updates.\n- Ask before changing scope.").count(), 1);
+
+        for instructions in ["Report only blockers.", ""] {
+            let config: crate::config::AppConfig =
+                serde_json::from_value(serde_json::json!({ "henchman": { "instructions": instructions } })).unwrap();
+            state.config.update(|c| c.henchman = config.henchman).unwrap();
+            write_context(&state, &room).unwrap();
+            let agents = text("AGENTS.md");
+            assert_eq!(agents, text("CLAUDE.md"));
+            assert!(!agents.contains("Prefer short updates."));
+            assert_eq!(agents.contains("Report only blockers."), !instructions.is_empty());
+            assert_eq!(agents.contains("## Custom instructions"), !instructions.is_empty());
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn instructions_do_not_take_effect_when_the_config_cannot_be_saved() {
+        let root = std::env::temp_dir().join(format!("vl-henchman-{}", uuid::Uuid::new_v4()));
+        let state = super::super::repos::tests::state(&root, Default::default());
+        std::fs::create_dir(state.config.folder().join("config.json.tmp")).unwrap();
+        assert!(save_instructions(&state, "Only report blockers.".into()).is_err());
+        assert!(state.config.with(|c| c.henchman.instructions.is_empty()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn the_henchmans_own_tools_are_allowed_where_auto_mode_reads_it_and_only_those() {

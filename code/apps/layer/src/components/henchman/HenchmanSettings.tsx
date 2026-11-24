@@ -3,7 +3,7 @@ import { api } from "../../lib/api";
 import { isHenchman } from "../../lib/lair";
 import { useStore } from "../../store";
 import { AgentAndModel } from "../AgentAndModel";
-import { BusyLabel, ErrorMessage, Field, useFailure } from "../ui";
+import { BusyLabel, ErrorMessage, Field, Switch, useFailure } from "../ui";
 
 /** The efforts offered: the ones agents share. One its model lacks is left as the agent has it. */
 const EFFORTS = [
@@ -19,19 +19,22 @@ const EFFORTS = [
  */
 export function HenchmanSettings() {
   const chosen = useStore((s) => s.settings?.henchman);
+  const enabled = useStore((s) => s.settings?.henchman_enabled ?? true);
   const agents = useStore((s) => s.agents);
   const refreshSettings = useStore((s) => s.refreshSettings);
   const refreshPanes = useStore((s) => s.refreshPanes);
   const running = useStore((s) => s.panes.find((p) => p.running && isHenchman(p)));
   const failure = useFailure();
+  const toggleFailure = useFailure();
   const [switching, setSwitching] = useState(false);
+  const [toggling, setToggling] = useState(false);
   if (!chosen) return null;
 
   const conversational = agents.filter((a) => a.installed && a.acp);
   const nameOf = (id: string | null) => agents.find((a) => a.id === id)?.name ?? id ?? "";
   // The one running keeps its agent: a conversation cannot move to another.
   const elsewhere =
-    running && running.agent_id !== chosen.agent_id
+    enabled && running && running.agent_id !== chosen.agent_id
       ? conversational.find((a) => a.id === chosen.agent_id)
       : undefined;
 
@@ -60,8 +63,35 @@ export function HenchmanSettings() {
     }
   }
 
+  async function toggle(on: boolean) {
+    setToggling(true);
+    toggleFailure.clear();
+    try {
+      await api.setHenchmanEnabled(on);
+      await Promise.all([refreshSettings(), refreshPanes(), useStore.getState().refreshWaiting()]);
+    } catch (e) {
+      // Off can stop the current pane even if the preference could not be saved.
+      await Promise.allSettled([
+        refreshSettings(),
+        refreshPanes(),
+        useStore.getState().refreshWaiting(),
+      ]);
+      toggleFailure.fail(e);
+    } finally {
+      setToggling(false);
+    }
+  }
+
   return (
     <Field label="Henchman">
+      <Switch
+        label="Enable Henchman"
+        detail="Turning it off stops Henchman, not your other agents."
+        checked={enabled}
+        disabled={toggling || switching}
+        onChange={(on) => void toggle(on)}
+      />
+      <ErrorMessage>{toggleFailure.error}</ErrorMessage>
       <AgentAndModel
         agentId={chosen.agent_id}
         model={chosen.model}
@@ -99,13 +129,58 @@ export function HenchmanSettings() {
           <div className="spacer" />
           <button
             className="ui-button"
-            disabled={switching}
+            disabled={switching || toggling}
             onClick={() => void switchNow(elsewhere.id)}
           >
             <BusyLabel busy={switching} idle={`Wake it with ${elsewhere.name}`} working="Waking…" />
           </button>
         </div>
       )}
+      <ErrorMessage>{failure.error}</ErrorMessage>
+      <CustomInstructions />
+    </Field>
+  );
+}
+
+function CustomInstructions() {
+  const saved = useStore((s) => s.settings?.henchman_instructions ?? "");
+  const refreshSettings = useStore((s) => s.refreshSettings);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const failure = useFailure();
+
+  async function save(value: string) {
+    if (saving || value === saved) return;
+    failure.clear();
+    setSaving(true);
+    try {
+      await api.setHenchmanInstructions(value);
+      await refreshSettings();
+      setDraft(null);
+    } catch (e) {
+      failure.fail(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Field label="Custom instructions" hint="Used the next time Henchman starts or resumes.">
+      <textarea
+        aria-label="Custom instructions"
+        className="ui-field"
+        rows={4}
+        value={draft ?? saved}
+        readOnly={saving}
+        onChange={(e) => setDraft(e.currentTarget.value)}
+        onBlur={(e) => void save(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            e.currentTarget.blur();
+          }
+        }}
+      />
       <ErrorMessage>{failure.error}</ErrorMessage>
     </Field>
   );

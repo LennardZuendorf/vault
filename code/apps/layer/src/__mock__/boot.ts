@@ -32,6 +32,7 @@ import { emit } from "@tauri-apps/api/event";
  * That is the cue to add it to `answer` below.
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { isHenchman } from "../lib/lair";
 import { sortTickets, type TicketSort } from "../lib/ticket-sort";
 import type {
   BrowserView,
@@ -78,6 +79,10 @@ seedEpic(world);
 if (params.get("tracker") === "github") githubTracker(world);
 for (const p of world.panes) if (p.acp) seedAcp(p.id);
 const HENCHMAN_ROOM = "/Users/you/.villain-worktrees/_chat/henchman";
+function requireHenchmanEnabled() {
+  if (!world.settings.henchman_enabled)
+    throw new Error("Henchman is off. Turn it on in Settings → Agents.");
+}
 // `?henchman=waiting`: it was left out at launch (PANE-7) and waits.
 if (params.get("henchman") === "waiting")
   world.waiting.push({
@@ -532,6 +537,28 @@ const answer: Record<string, Answer> = {
     };
     return null;
   },
+  set_henchman_enabled: (a) => {
+    world.settings.henchman_enabled = a.enabled as boolean;
+    if (!world.settings.henchman_enabled) {
+      for (const p of world.panes.filter(isHenchman)) {
+        world.waiting.push({
+          id: p.id,
+          task_id: p.task_id,
+          kind: p.kind,
+          agent_id: p.agent_id,
+          cwd: p.cwd,
+          title: p.topic,
+        });
+      }
+      world.panes = world.panes.filter((p) => !isHenchman(p));
+      void emit("panes:waiting");
+    }
+    return null;
+  },
+  set_henchman_instructions: (a) => {
+    world.settings.henchman_instructions = a.instructions as string;
+    return null;
+  },
   set_slack_bot_on: (a) => {
     if (world.settings.slack_bot) world.settings.slack_bot.enabled = a.on as boolean;
     world.slackBot.status = { state: a.on ? "connected" : "off", error: null };
@@ -674,6 +701,7 @@ const answer: Record<string, Answer> = {
   },
   // The Henchman (§28): one, in its own room, asked for a brief.
   spawn_henchman: (a) => {
+    requireHenchmanEnabled();
     const running = world.panes.find((x) => x.cwd === HENCHMAN_ROOM && x.running);
     if (running) return running;
     const p = newPane({ ...a, acp: true }, "agent", "chat");
@@ -694,9 +722,10 @@ const answer: Record<string, Answer> = {
   reopen_waiting_pane: (a) => {
     const w = world.waiting.find((x) => x.id === a.id);
     if (!w) throw new Error("That pane is no longer waiting to be reopened.");
+    const henchman = w.cwd !== null && isHenchman({ task_id: w.task_id, cwd: w.cwd });
+    if (henchman) requireHenchmanEnabled();
     world.waiting = world.waiting.filter((x) => x !== w);
     void emit("panes:waiting");
-    const henchman = w.cwd === HENCHMAN_ROOM;
     const p = newPane({ agentId: w.agent_id, acp: henchman }, w.kind, w.task_id);
     // Back in its own folder, as the app reopens it: a chat in its room (CHAT-1).
     if (w.cwd !== null) p.cwd = w.cwd;
@@ -727,6 +756,7 @@ const answer: Record<string, Answer> = {
     const at = world.panes.findIndex((x) => x.id === a.paneId);
     if (at < 0) throw new Error("No such pane.");
     const old = world.panes[at];
+    if (isHenchman(old)) requireHenchmanEnabled();
     const p = newPane({ agentId: old.agent_id, checkoutId: old.checkout_id }, "agent", old.task_id);
     world.panes = world.panes.filter((x) => x !== p && x !== old);
     world.panes.splice(at, 0, {

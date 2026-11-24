@@ -1418,7 +1418,9 @@ Known gaps:
 | Agents: Start Claude Code in auto mode | on | PANE-18 |
 | Agents: Let agents read terminal output | **off** | MCP `pane_output`, `handoff_prompt` |
 | Agents: Most terminals running at once | 32 | 32, 48 or 64 (PANE-2) |
+| Agents: Enable Henchman | on | HEN-16 |
 | Agents: Henchman's agent, model and effort | Claude Code, Sonnet, Medium | HEN-15 |
+| Agents: Henchman custom instructions | empty | HEN-17 |
 | Agents: Task folder location | `~/.villain-worktrees` | where task folders go |
 | Keep awake (the cup in the top bar) | off | STATE-7, PHONE-8 |
 | Browser: sites agents may use | none: this machine's pages only | BRW-3, BRW-11 |
@@ -3569,7 +3571,7 @@ Slack come later.
   and what it never does: write code, edit files, merge, or answer anyone
   in Jira, GitHub or Slack without asking. It is not listed in Chat and
   does not count as a chat that is working; its banners and messages
-  open its tab. It is restored at launch like any chat (PANE-7), and
+  open its tab. When enabled (HEN-16), it is restored at launch like any chat (PANE-7), and
   before every other agent, so the restore limit never leaves it
   waiting. One that waits all the same is woken from its tab where it
   left off, in its own conversation. Before, it came back in the order
@@ -3807,11 +3809,25 @@ Slack come later.
   running keeps its agent: while it runs on another, Settings says so
   and offers to wake it with the chosen one, which begins a new
   conversation.
+- **HEN-16** Settings → Agents MUST let the user turn Henchman off for
+  this profile. Off stops only Henchman, keeps its saved conversation,
+  lair, and standing orders, and blocks wake, resume, and launch restore.
+  The tab remains in place and shows where to turn it back on. Ordinary
+  agent notifications are no longer suppressed by Henchman (HEN-13).
+  Turning it back on does not wake it. The user can wake it from its tab,
+  resuming the saved conversation where the agent supports it.
+- **HEN-17** Settings → Agents MUST let the user edit or clear Henchman's
+  custom instructions for this profile, even while it is off. The
+  multiline field saves when it loses focus or on ⌘Enter. On the next
+  wake or resume, Layer appends the saved text to Henchman's generated
+  `AGENTS.md` and `CLAUDE.md`, keeping the built-in instructions. An
+  empty field removes that section. The setting does not restart
+  Henchman, change tool permissions, or affect other agents' files.
 
 Code: `commands/henchman.rs` (the room, its context, `spawn_henchman`),
 `commands/henchman_tools.rs` (HEN-4, `pane_restart`),
 `commands/henchman_orders.rs` and `config/henchman.rs` (HEN-7, HEN-8,
-HEN-15),
+HEN-15–17),
 `commands/henchman_feed.rs` (HEN-9, HEN-10, HEN-12),
 `commands/henchman_work.rs` (HEN-11), `commands/henchman_watch.rs`
 (HEN-12), `commands/henchman_need.rs` and `attention.rs` (HEN-13),

@@ -2,27 +2,32 @@
 //! (PANE-7).
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::agents;
-use crate::config::SavedPane;
+use crate::config::{AppConfig, SavedPane};
 use crate::error::{Error, Result};
 use crate::pty::{PaneInfo, PaneKind};
 
 use super::panes::{
     open_chat, open_shell, resolve_scope, resumable_for, resume_dir, start_agent, Resume, CHAT_TASK_ID,
 };
-use super::AppState;
+use super::{henchman, AppState};
 
 /// Remember a pane so it can be put back next launch.
 ///
 /// Called where the pane is actually created rather than by each caller: an
 /// agent started from a ticket went through `start_agent` directly and so was
 /// never recorded, and vanished for good at the next restart.
-pub(crate) fn remember_pane(app: &AppHandle, state: &AppState, pane: &PaneInfo) {
+pub(crate) fn remember_pane<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    pane: &PaneInfo,
+    requested_session: Option<String>,
+) -> Result<()> {
     let saved = SavedPane {
         id: pane.id.clone(),
         task_id: pane.task_id.clone(),
@@ -36,7 +41,7 @@ pub(crate) fn remember_pane(app: &AppHandle, state: &AppState, pane: &PaneInfo) 
         failed: 0,
         waiting: false,
         acp: pane.acp,
-        session: None,
+        session: requested_session,
         on_loop: None,
         mid_turn: false,
     };
@@ -46,13 +51,13 @@ pub(crate) fn remember_pane(app: &AppHandle, state: &AppState, pane: &PaneInfo) 
     if let Some(agent) = &pane.agent_id {
         open.insert((agent.clone(), pane.cwd.clone()));
     }
-    let picked_up = state.config.update(|c| {
+    let record = |c: &mut AppConfig| {
         let mut saved = saved;
         // Read under the config's lock, which the ACP connection takes to
         // record the conversation too: one of the two is sure to see it,
         // however the opening and this race (ACP-9).
         if saved.acp {
-            saved.session = state.ptys.session(&saved.id).ok().flatten();
+            saved.session = state.ptys.session(&saved.id).ok().flatten().or(saved.session);
         }
         // Recorded again, the pane keeps the loop it is on (LOOP-11).
         saved.on_loop = c.saved_panes.iter().find(|p| p.id == saved.id).and_then(|p| p.on_loop.clone());
@@ -68,8 +73,19 @@ pub(crate) fn remember_pane(app: &AppHandle, state: &AppState, pane: &PaneInfo) 
         let before = c.saved_panes.len();
         c.saved_panes.retain(|p| !continued_by_an_open_agent(p, &open));
         c.saved_panes.len() < before
-    });
-    if picked_up.unwrap_or(false) {
+    };
+    let picked_up = if henchman::is_henchman(pane) {
+        // Do not replace its last resumable record until the new one is on disk.
+        let mut picked_up = false;
+        state.config.mirror(|c| {
+            picked_up = record(c);
+            true
+        })?;
+        picked_up
+    } else {
+        state.config.update(record).unwrap_or(false)
+    };
+    if picked_up {
         let _ = app.emit("panes:waiting", ());
     }
     // A chat with a Slack thread, put back, restarted or reopened, goes on
@@ -77,6 +93,7 @@ pub(crate) fn remember_pane(app: &AppHandle, state: &AppState, pane: &PaneInfo) 
     if pane.acp && pane.task_id == super::CHAT_TASK_ID {
         state.slack_bot.adopt(pane, &state.config.read().slack_threads);
     }
+    Ok(())
 }
 
 /// Each open agent, as the CLI and the folder it runs in.
@@ -104,6 +121,8 @@ fn continued_by_an_open_agent(p: &SavedPane, open: &HashSet<(String, String)>) -
 /// dropping the oldest could take a waiting pane, the one thing PANE-7 says
 /// is never lost, while dead entries newer than it stayed.
 fn trim(saved: &mut Vec<SavedPane>, live: &HashSet<String>, keep: usize) {
+    // Churn in unrelated task panes must never erase Henchman's last session.
+    let henchman = saved.iter().rfind(|p| henchman::is_saved(p)).map(|p| p.id.clone());
     let exited = |p: &SavedPane| !p.waiting && !live.contains(&p.id);
     let waiting = |p: &SavedPane| p.waiting;
     let any = |_: &SavedPane| true;
@@ -111,7 +130,7 @@ fn trim(saved: &mut Vec<SavedPane>, live: &HashSet<String>, keep: usize) {
     for goes in order {
         let mut over = saved.len().saturating_sub(keep);
         saved.retain(|p| {
-            let drop = over > 0 && goes(p);
+            let drop = over > 0 && henchman.as_ref() != Some(&p.id) && goes(p);
             if drop {
                 over -= 1;
             }
@@ -191,6 +210,31 @@ fn wait_for_the_rest(saved: &mut Vec<SavedPane>, putting_back: &HashSet<String>)
     newly
 }
 
+fn restore_batch(config: &mut AppConfig) -> (Vec<SavedPane>, usize) {
+    if !config.henchman.enabled {
+        henchman::park_saved(&mut config.saved_panes);
+    }
+    let saved = panes_to_restore(config.saved_panes.clone(), RESTORE_LIMIT, henchman::is_saved);
+    let putting_back = saved.iter().map(|p| p.id.clone()).collect();
+    let waiting = wait_for_the_rest(&mut config.saved_panes, &putting_back);
+    (saved, waiting)
+}
+
+fn restore_failed(config: &mut AppConfig, pane: &SavedPane) {
+    if henchman::is_saved(pane) {
+        // A launch error, such as failing to refresh instructions, must not
+        // exhaust the retry count and erase its only conversation.
+        for p in config.saved_panes.iter_mut().filter(|p| p.id == pane.id) {
+            p.waiting = true;
+        }
+    } else {
+        for p in config.saved_panes.iter_mut().filter(|p| p.id == pane.id) {
+            p.failed = p.failed.saturating_add(1);
+        }
+        config.saved_panes.retain(|p| p.id != pane.id || p.failed < RESTORE_TRIES);
+    }
+}
+
 /// Put back what was open when the app last closed.
 ///
 /// Agents are resumed rather than restarted where their CLI can do it, so the
@@ -202,15 +246,12 @@ pub fn restore_panes(app: &AppHandle) {
         return;
     }
 
-    let henchman = |p: &SavedPane| {
-        p.task_id == CHAT_TASK_ID && p.cwd.as_deref().is_some_and(|c| super::henchman::is_room(&state, Path::new(c)))
-    };
-    let saved = panes_to_restore(state.config.read().saved_panes, RESTORE_LIMIT, henchman);
     // What does not come back now waits rather than being forgotten. It was
     // forgotten here, and the notice said only "Restored 12 of 14 panes":
     // nothing in the app could bring the other two back.
-    let putting_back: HashSet<String> = saved.iter().map(|p| p.id.clone()).collect();
-    let waiting = state.config.update(|c| wait_for_the_rest(&mut c.saved_panes, &putting_back)).unwrap_or(0);
+    let mut batch = (Vec::new(), 0);
+    let _ = state.config.update(|c| batch = restore_batch(c));
+    let (saved, waiting) = batch;
     if waiting > 0 {
         let text = format!(
             "{waiting} {} not reopened: at most {RESTORE_LIMIT} come back at launch. {} in the Chat view and in {} tasks' Agents tab, to reopen or forget.",
@@ -231,18 +272,6 @@ pub fn restore_panes(app: &AppHandle) {
     let forget = |id: &str| {
         let _ = state.config.update(|c| c.saved_panes.retain(|p| p.id != id));
     };
-    // Kept for another try, a few times: a CLI missing from PATH at one
-    // launch may be back at the next, but a pane whose repo has left the task
-    // never will be.
-    let failed = |id: &str| {
-        let _ = state.config.update(|c| {
-            for p in c.saved_panes.iter_mut().filter(|p| p.id == id) {
-                p.failed = p.failed.saturating_add(1);
-            }
-            c.saved_panes.retain(|p| p.failed < RESTORE_TRIES);
-        });
-    };
-
     // Which agent has already resumed in which folder this restore. Two
     // agents in one folder both ran `--continue`, which picks the newest
     // conversation there: both came back as the same one, writing into one
@@ -250,6 +279,19 @@ pub fn restore_panes(app: &AppHandle) {
     let mut resumed: HashSet<(String, String)> = Default::default();
 
     for pane in saved {
+        let is_henchman = henchman::is_saved(&pane);
+        let _lifecycle = henchman::lock_if(is_henchman);
+        // Off may have parked this pane after the launch picked its batch.
+        // Even turning it on again doesn't turn that into a request to wake.
+        if is_henchman
+            && !state.config.with(|c| c.henchman.enabled && c.saved_panes.iter().any(|p| p.id == pane.id && !p.waiting))
+        {
+            continue;
+        }
+        if is_henchman && henchman::running(&state).is_some() {
+            let _ = state.config.update(|c| restore_failed(c, &pane));
+            continue;
+        }
         // Likewise: the spawn recorded it, so recording it again here is what
         // made every restart double the list. A pane that did not come back
         // keeps its entry, to be tried again at the next few launches.
@@ -263,7 +305,7 @@ pub fn restore_panes(app: &AppHandle) {
                     super::henchman_feed::interrupted(&p.id);
                 }
                 // Back at launch, it looks at everything once (HEN-12).
-                if super::henchman::is_henchman(&state, &p) {
+                if is_henchman {
                     super::henchman_feed::greet();
                 }
                 forget(&pane.id)
@@ -271,7 +313,11 @@ pub fn restore_panes(app: &AppHandle) {
             Back::Gone(_) => forget(&pane.id),
             Back::Failed(e) => {
                 eprintln!("could not restore a pane: {e}");
-                failed(&pane.id);
+                let _ = state.config.update(|c| restore_failed(c, &pane));
+                if is_henchman {
+                    super::notify(app, "error", format!("Couldn't restore Henchman: {e}. Wake it again from its tab."));
+                    let _ = app.emit("panes:waiting", ());
+                }
             }
         }
     }
@@ -465,33 +511,65 @@ pub async fn reopen_waiting_pane(app: AppHandle, id: String) -> Result<PaneInfo>
 }
 
 pub(crate) fn reopen_waiting_pane_inner(app: &AppHandle, state: &AppState, id: &str) -> Result<PaneInfo> {
-    // Taken off the list in the same write that finds it: a second click
-    // while the first was still starting would otherwise open it twice.
-    let pane = state
-        .config
-        .update(|c| {
-            let at = c.saved_panes.iter().position(|p| p.id == id && p.waiting)?;
-            Some(c.saved_panes.remove(at))
-        })?
-        .ok_or_else(|| Error::NotFound("That pane is no longer waiting to be reopened.".into()))?;
+    let is_henchman = state.config.with(|c| c.saved_panes.iter().any(|p| p.id == id && henchman::is_saved(p)));
+    let _lifecycle = henchman::lock_if(is_henchman);
+    let pane = take_waiting_pane(state, id)?;
+    if is_henchman {
+        if let Some(running) = henchman::running(state) {
+            return Ok(running);
+        }
+    }
     // Not over a conversation an open agent already continues.
     let mut resumed = open_agents(state);
     let out = match put_back(app, state, &pane, &mut resumed) {
         Back::Opened(p) => {
+            if is_henchman {
+                let _ = state.config.update(|c| c.saved_panes.retain(|p| p.id != id));
+            }
             if let Some(kept) = &pane.on_loop {
                 super::loops::resume_loop(app, state, &p, kept);
             }
             Ok(*p)
         }
-        Back::Gone(why) => Err(Error::NotFound(format!("It cannot be reopened: {why}."))),
+        Back::Gone(why) => {
+            if is_henchman {
+                let _ = state.config.update(|c| c.saved_panes.retain(|p| p.id != id));
+            }
+            Err(Error::NotFound(format!("It cannot be reopened: {why}.")))
+        }
         Back::Failed(e) => {
             // Back on the list, to try again or to forget.
-            let _ = state.config.update(|c| c.saved_panes.push(pane));
+            if !is_henchman {
+                let _ = state.config.update(|c| c.saved_panes.push(pane));
+            }
             Err(e)
         }
     };
     let _ = app.emit("panes:waiting", ());
     out
+}
+
+fn take_waiting_pane(state: &AppState, id: &str) -> Result<SavedPane> {
+    // Henchman reopens under its lifecycle lock. There is no need to claim
+    // the record on disk; leave it intact until its replacement is saved.
+    if let Some(pane) = state.config.with(|c| {
+        c.saved_panes.iter().find(|p| p.id == id && p.waiting && henchman::is_saved(p)).map(|p| {
+            henchman::require_enabled(c.henchman.enabled)?;
+            Ok(p.clone())
+        })
+    }) {
+        return pane;
+    }
+    // Take an ordinary pane in the same write that finds it, so two clicks
+    // cannot reopen it twice while the first one is still starting.
+    state.config.update(|c| {
+        let at = c
+            .saved_panes
+            .iter()
+            .position(|p| p.id == id && p.waiting)
+            .ok_or_else(|| Error::NotFound("That pane is no longer waiting to be reopened.".into()))?;
+        Ok(c.saved_panes.remove(at))
+    })?
 }
 
 /// Forget a waiting pane: the user does not want it back. Its CLI's
@@ -554,6 +632,29 @@ mod tests {
     }
 
     #[test]
+    fn a_disabled_henchman_does_not_take_a_restore_slot_or_lose_its_waiting_session() {
+        let mut config = crate::config::AppConfig::default();
+        config.henchman.enabled = false;
+        let mut henchman = pane("henchman", CHAT_TASK_ID, "agent");
+        henchman.cwd = Some("/w/_chat/henchman".into());
+        henchman.session = Some("existing-session".into());
+        config.saved_panes.push(henchman);
+        config.saved_panes.extend((0..RESTORE_LIMIT).map(|i| pane(&format!("task-{i}"), "t1", "agent")));
+        let (selected, waiting) = restore_batch(&mut config);
+        assert_eq!(selected.len(), RESTORE_LIMIT);
+        assert!(selected.iter().all(|p| p.task_id == "t1"));
+        assert_eq!(waiting, 0);
+        assert!(config.saved_panes[0].waiting);
+        let root = std::env::temp_dir().join(format!("vl-henchman-{}", uuid::Uuid::new_v4()));
+        let state = super::super::repos::tests::state(&root, config);
+        assert!(take_waiting_pane(&state, "henchman").unwrap_err().to_string().contains("Henchman is off"));
+        let saved = state.config.read().saved_panes;
+        assert_eq!(saved[0].session.as_deref(), Some("existing-session"));
+        assert_eq!(saved[0].failed, 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn a_pane_over_the_restore_limit_waits_instead_of_being_forgotten() {
         let mut saved = the_restart_that_lost_a_chat();
         saved.extend((0..3).map(|i| pane(&format!("late-{i}"), "t2", "agent")));
@@ -593,6 +694,55 @@ mod tests {
         assert_eq!(saved.len(), keep);
         let kept: Vec<&str> = saved.iter().take(5).map(|p| p.id.as_str()).collect();
         assert_eq!(kept, ["0", "1", "2", "3", "4"], "the oldest exited panes went, not the waiting or open ones");
+    }
+
+    #[test]
+    fn opening_more_panes_does_not_evict_the_parked_henchman() {
+        let mut saved = vec![
+            SavedPane {
+                cwd: Some("/w/_chat/henchman".into()),
+                waiting: true,
+                ..pane("henchman", CHAT_TASK_ID, "agent")
+            },
+            SavedPane { waiting: true, ..pane("another-waiting-pane", "t1", "agent") },
+            pane("new-pane", "t2", "agent"),
+        ];
+        trim(&mut saved, &["new-pane".into()].into(), 2);
+        assert_eq!(saved.into_iter().map(|p| p.id).collect::<Vec<_>>(), ["henchman", "new-pane"]);
+    }
+
+    #[test]
+    fn trying_to_wake_the_henchman_does_not_take_its_waiting_record_before_it_opens() {
+        let root = std::env::temp_dir().join(format!("vl-henchman-{}", uuid::Uuid::new_v4()));
+        let saved = SavedPane {
+            waiting: true,
+            acp: true,
+            cwd: Some("/w/_chat/henchman".into()),
+            session: Some("kept-session".into()),
+            ..pane("henchman", CHAT_TASK_ID, "agent")
+        };
+        let config = AppConfig { saved_panes: vec![saved], ..Default::default() };
+        let state = super::super::repos::tests::state(&root, config);
+        // A full or unwritable config folder must not erase the live copy.
+        std::fs::create_dir(state.config.folder().join("config.json.tmp")).unwrap();
+        let out = take_waiting_pane(&state, "henchman");
+        assert_eq!(state.config.read().saved_panes.len(), 1);
+        assert_eq!(out.unwrap().session.as_deref(), Some("kept-session"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_launch_parks_the_henchman_instead_of_counting_down_to_forgetting_it() {
+        let henchman = SavedPane {
+            cwd: Some("/w/_chat/henchman".into()),
+            session: Some("kept-session".into()),
+            failed: RESTORE_TRIES - 1,
+            ..pane("henchman", CHAT_TASK_ID, "agent")
+        };
+        let mut config = AppConfig { saved_panes: vec![henchman.clone()], ..Default::default() };
+        restore_failed(&mut config, &henchman);
+        assert!(config.saved_panes[0].waiting);
+        assert_eq!(config.saved_panes[0].session.as_deref(), Some("kept-session"));
     }
 
     /// A pane over the limit waited, then an agent was started in

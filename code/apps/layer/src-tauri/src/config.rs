@@ -515,8 +515,9 @@ impl ConfigStore {
         Ok(out)
     }
 
-    /// `update` for what the workspace sent (PROF-14): nothing is queued
-    /// back, and nothing is written unless `f` says it changed something.
+    /// A durable update for an incoming workspace change (PROF-14) or a
+    /// local-only value. Nothing is queued back, and memory changes only
+    /// after `f` reports a change and the write succeeds.
     pub fn mirror(&self, f: impl FnOnce(&mut AppConfig) -> bool) -> Result<bool> {
         let _disk = self.disk.lock();
         let mut snapshot = self.inner.read().clone();

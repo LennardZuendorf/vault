@@ -476,6 +476,8 @@ export interface Settings {
   agent_models: Record<string, ModelChoice[]>;
   /** What the Henchman is woken with (HEN-15). */
   henchman: HenchmanAgent;
+  henchman_enabled: boolean;
+  henchman_instructions: string;
   worktree_root: string;
   worktree_root_is_default: boolean;
   jira_connected: boolean;

@@ -27,6 +27,8 @@ pub struct Settings {
     pub agent_models: std::collections::HashMap<String, Vec<crate::config::ModelChoice>>,
     /// What the Henchman is woken with (HEN-15).
     pub henchman: crate::config::HenchmanAgent,
+    pub henchman_enabled: bool,
+    pub henchman_instructions: String,
     pub worktree_root: String,
     pub worktree_root_is_default: bool,
     pub jira_connected: bool,
@@ -96,6 +98,8 @@ pub fn get_settings(state: State<AppState>) -> Settings {
         slack_bot: c.slack_bot,
         agent_models: c.agent_models,
         henchman: c.henchman.agent,
+        henchman_enabled: c.henchman.enabled,
+        henchman_instructions: c.henchman.instructions,
     }
 }
 

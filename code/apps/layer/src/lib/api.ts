@@ -182,6 +182,9 @@ export const api = {
   /** What the Henchman is woken with from now on (HEN-15). */
   setHenchmanAgent: (agentId: string, model: string, effort: string) =>
     invoke<void>("set_henchman_agent", { agentId, model, effort }),
+  setHenchmanEnabled: (enabled: boolean) => invoke<void>("set_henchman_enabled", { enabled }),
+  setHenchmanInstructions: (instructions: string) =>
+    invoke<void>("set_henchman_instructions", { instructions }),
   /** Processes the panes started that still run (HEN-6). */
   runningProcesses: () => invoke<Process[]>("running_processes"),
   /** Stop one, and its children; the list after. */

@@ -23,6 +23,7 @@ export function HenchmanView() {
   const { restart, restarting } = useRestart(() => {});
   // The one running, else the last: an exited one says so and offers Resume.
   const pane = panes.find((p) => p.running) ?? panes[panes.length - 1];
+  const enabled = useStore((s) => s.settings?.henchman_enabled ?? true);
   const chosen = useStore((s) => s.settings?.henchman.agent_id);
   // The one chosen for it (HEN-15), else any that runs as a conversation.
   const usable = agents.filter((a) => a.installed && a.acp);
@@ -35,25 +36,25 @@ export function HenchmanView() {
     // it waiting.
     const left = useStore.getState().waiting.filter(isWaitingHenchman);
     const back = left[left.length - 1];
-    if (waking || (!back && !agent)) return;
+    if (!enabled || waking || (!back && !agent)) return;
     setWaking(true);
     failure.clear();
     try {
       const forget = (ids: string[]) =>
         Promise.all(ids.map((id) => api.forgetWaitingPane(id).catch(() => {})));
-      await forget(left.filter((w) => w !== back).map((w) => w.id));
       if (back) {
-        // One that cannot come back is let go, so the next click wakes a
-        // new one instead of failing again.
-        await api.reopenWaitingPane(back.id).catch(async (e: unknown) => {
-          await forget([back.id]);
-          throw e;
-        });
+        // A temporary failure does not give up the saved conversation.
+        await api.reopenWaitingPane(back.id);
+        await forget(left.filter((w) => w !== back).map((w) => w.id));
       } else if (agent) {
         await api.spawnHenchman(agent.id);
       }
       await Promise.all([refreshPanes(), useStore.getState().refreshWaiting()]);
     } catch (e) {
+      await useStore
+        .getState()
+        .refreshWaiting()
+        .catch(() => {});
       failure.fail(e);
     } finally {
       setWaking(false);
@@ -66,7 +67,12 @@ export function HenchmanView() {
   return (
     <div className="hench">
       <div className="hench-talk">
-        {pane ? (
+        {!enabled ? (
+          <div className="hench-empty">
+            <Hello at={null} />
+            <p className="muted">Henchman is off. Turn it on in Settings → Agents.</p>
+          </div>
+        ) : pane ? (
           <>
             <PaneExited pane={pane} busy={restarting.has(pane.id)} onResume={restart} />
             <div className="pane-stack">

@@ -93,6 +93,8 @@ const disconnected: Settings = {
   slack_bot: null,
   agent_models: {},
   henchman: { agent_id: "claude", model: "sonnet", effort: "medium" },
+  henchman_enabled: true,
+  henchman_instructions: "",
   worktree_root: "/Users/you/.villain-worktrees",
   worktree_root_is_default: true,
   jira_connected: false,

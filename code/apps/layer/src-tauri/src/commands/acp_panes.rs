@@ -80,8 +80,8 @@ pub(crate) fn start(app: &AppHandle, state: &AppState, def: &agents::AgentDef, s
         title_activity: None,
         title_topic: None,
     };
-    // Asked before the config is read: `is_room` reads it too.
-    let henchman = super::henchman::is_room(state, std::path::Path::new(&opts.cwd));
+    let henchman =
+        opts.task_id == super::panes::CHAT_TASK_ID && super::henchman::is_room(std::path::Path::new(&opts.cwd));
     let presets = launch_presets(&state.config.read(), &opts.cwd, henchman, def.id);
     let meta = henchman.then(super::henchman::session_meta);
     state.ptys.spawn_acp(app, opts, acp::Launch { mcp, pick, prompt, presets, meta, on_session: Some(on_session) })

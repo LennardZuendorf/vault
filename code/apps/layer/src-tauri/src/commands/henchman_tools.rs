@@ -483,7 +483,7 @@ async fn overview(app: &AppHandle) -> Result<Value> {
 
     let chats: Vec<Value> = panes
         .iter()
-        .filter(|p| p.task_id == CHAT_TASK_ID && p.kind == PaneKind::Agent && !is_henchman(&state, p))
+        .filter(|p| p.task_id == CHAT_TASK_ID && p.kind == PaneKind::Agent && !is_henchman(p))
         .map(|p| {
             let said = p
                 .acp
@@ -495,7 +495,7 @@ async fn overview(app: &AppHandle) -> Result<Value> {
         .collect();
     let chats_asking = panes
         .iter()
-        .filter(|p| p.task_id == CHAT_TASK_ID && p.running && p.activity == Activity::Asking && !is_henchman(&state, p))
+        .filter(|p| p.task_id == CHAT_TASK_ID && p.running && p.activity == Activity::Asking && !is_henchman(p))
         .count();
 
     Ok(json!({
@@ -530,7 +530,7 @@ fn read(state: &AppState, pane_id: &str, lines: usize) -> Result<Value> {
 
 pub(crate) fn tell(state: &AppState, pane_id: &str, text: &str) -> Result<Value> {
     let info = state.ptys.info(pane_id)?;
-    if is_henchman(state, &info) {
+    if is_henchman(&info) {
         return Err(Error::Other("that pane is you".into()));
     }
     if info.kind != PaneKind::Agent {
@@ -562,7 +562,7 @@ pub(crate) fn tell(state: &AppState, pane_id: &str, text: &str) -> Result<Value>
 /// the user's to restart.
 pub(crate) fn restart_exited(app: &AppHandle, state: &AppState, id: &str) -> Result<PaneInfo> {
     let info = state.ptys.info(id)?;
-    if is_henchman(state, &info) {
+    if is_henchman(&info) {
         return Err(Error::Other("that pane is you".into()));
     }
     if info.kind != PaneKind::Agent {

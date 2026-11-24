@@ -3,15 +3,31 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HenchmanConfig {
+    /// Whether this profile lets Henchman run (HEN-16).
+    pub enabled: bool,
+    /// The user's additional guidance for the next conversation open (HEN-17).
+    pub instructions: String,
     /// Standing orders, oldest first (HEN-7).
     pub orders: Vec<StandingOrder>,
     /// The tasks (by id) and chats (by room) it hears nothing of (HEN-8).
     pub left_alone: Vec<String>,
     /// What it is woken with (HEN-15).
     pub agent: HenchmanAgent,
+}
+
+impl Default for HenchmanConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            instructions: String::new(),
+            orders: Vec::new(),
+            left_alone: Vec::new(),
+            agent: HenchmanAgent::default(),
+        }
+    }
 }
 
 /// The agent the Henchman is woken with, and the model and effort its

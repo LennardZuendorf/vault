@@ -157,7 +157,7 @@ pub(crate) fn open_shell(
             title_topic: None,
         },
     )?;
-    remember_pane(app, state, &pane);
+    let _ = remember_pane(app, state, &pane, None);
     Ok(pane)
 }
 
@@ -308,7 +308,7 @@ pub(crate) fn start_agent(
         }
         let start = super::acp_panes::Start { task_id, checkout_id, cwd, title, prompt, resume };
         let pane = super::acp_panes::start(app, state, def, start)?;
-        remember_pane(app, state, &pane);
+        let _ = remember_pane(app, state, &pane, None);
         return Ok(pane);
     }
     let program =
@@ -358,7 +358,7 @@ pub(crate) fn start_agent(
             title_topic: agents::topic_reader(def.integration),
         },
     )?;
-    remember_pane(app, state, &pane);
+    let _ = remember_pane(app, state, &pane, None);
     Ok(pane)
 }
 
@@ -642,6 +642,14 @@ pub(crate) fn open_chat(
     resume: Resume,
     acp: bool,
 ) -> Result<PaneInfo> {
+    let henchman = room.as_deref().is_some_and(super::henchman::is_room);
+    let _lifecycle = super::henchman::lock_if(henchman);
+    if henchman {
+        super::henchman::require_enabled(state.config.with(|c| c.henchman.enabled))?;
+        if let Some(pane) = super::henchman::running(state) {
+            return Ok(pane);
+        }
+    }
     let def = agents::find(&agent_id).ok_or_else(|| Error::NotFound(format!("agent {agent_id}")))?;
 
     let dir = match room {
@@ -651,15 +659,22 @@ pub(crate) fn open_chat(
         }
         None => chat_room(state, &uuid::Uuid::new_v4().to_string()[..8])?,
     };
-    // Best effort: a context file that cannot be written is not a reason to
-    // refuse to start the agent. The Henchman's room gets its own (HEN-2).
-    let henchman = super::henchman::is_room(state, &dir);
-    let _ = if henchman { super::henchman::write_context(state, &dir) } else { write_chat_context(state, &dir) };
+    if henchman {
+        // The user may have just changed instructions. Do not open on stale ones.
+        super::henchman::write_context(state, &dir)?;
+    } else {
+        let _ = write_chat_context(state, &dir);
+    }
     let _ = crate::mcp::write_config(&dir);
     let name = if henchman { "Henchman" } else { def.name };
     let title = format!("{name}{}", if resume != Resume::No { " (resumed)" } else { "" });
 
     if acp {
+        // The process can be stopped before ACP reports its session again.
+        let requested_session = match &resume {
+            Resume::Restart { session, .. } if henchman => session.clone(),
+            _ => None,
+        };
         let cwd = dir.to_string_lossy().to_string();
         let start = super::acp_panes::Start {
             task_id: CHAT_TASK_ID.to_string(),
@@ -670,7 +685,10 @@ pub(crate) fn open_chat(
             resume,
         };
         let pane = super::acp_panes::start(app, state, def, start)?;
-        remember_pane(app, state, &pane);
+        if let Err(e) = remember_pane(app, state, &pane, requested_session) {
+            let _ = state.ptys.close(&pane.id);
+            return Err(e);
+        }
         return Ok(pane);
     }
     let program =
@@ -712,7 +730,10 @@ pub(crate) fn open_chat(
             title_topic: agents::topic_reader(def.integration),
         },
     )?;
-    remember_pane(app, state, &pane);
+    if let Err(e) = remember_pane(app, state, &pane, None) {
+        let _ = state.ptys.close(&pane.id);
+        return Err(e);
+    }
     Ok(pane)
 }
 
@@ -791,6 +812,14 @@ pub async fn restart_pane(app: AppHandle, pane_id: String) -> Result<PaneInfo> {
 
 pub(crate) fn restart(app: &AppHandle, state: &AppState, id: &str) -> Result<PaneInfo> {
     let old = state.ptys.info(id)?;
+    let henchman = super::henchman::is_henchman(&old);
+    let _lifecycle = super::henchman::lock_if(henchman);
+    if henchman {
+        super::henchman::require_enabled(state.config.with(|c| c.henchman.enabled))?;
+        if let Some(running) = super::henchman::running(state).filter(|p| p.id != id) {
+            return Ok(running);
+        }
+    }
     // Over ACP the conversation is picked up by its id, whatever the CLI
     // (ACP-9).
     let def = old
@@ -808,7 +837,13 @@ pub(crate) fn restart(app: &AppHandle, state: &AppState, id: &str) -> Result<Pan
         _ => def.program,
     };
     shellenv::which(program).ok_or_else(|| Error::NotFound(format!("{program} is not on your PATH")))?;
-    let session = state.ptys.session(id)?;
+    let session = state.ptys.session(id)?.or_else(|| {
+        if henchman {
+            state.config.with(|c| c.saved_panes.iter().find(|p| p.id == id).and_then(|p| p.session.clone()))
+        } else {
+            None
+        }
+    });
     // Without its id, `--continue` takes the folder's newest conversation,
     // and another agent there may be the one writing it.
     let shared = state
