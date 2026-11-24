@@ -646,6 +646,44 @@ mod tests {
     }
 
     #[test]
+    fn a_leftover_folder_holding_only_what_an_install_wrote_is_safe_and_a_users_file_makes_it_risky() {
+        let (root, cfg) = setup();
+        let state = state(&root, cfg);
+        let wrote = [
+            ".claude/skills/",
+            ".claude/skills/brainstorming/",
+            ".claude/skills/brainstorming/SKILL.md",
+            ".agents/skills/",
+            ".agents/skills/brainstorming/",
+            ".agents/skills/brainstorming/SKILL.md",
+        ];
+        for name in ["ACME-9", "ACME-10"] {
+            let left = root.join("tasks").join(name);
+            for rel in wrote.iter().filter(|r| !r.ends_with('/')) {
+                std::fs::create_dir_all(left.join(rel).parent().unwrap()).unwrap();
+                std::fs::write(left.join(rel), "skill").unwrap();
+            }
+            let record = serde_json::json!({ "toolset": "superpowers", "ok": true, "written": wrote });
+            std::fs::write(left.join(".spec-install.json"), record.to_string()).unwrap();
+        }
+        let mine = root.join("tasks/ACME-10/.claude/notes.md");
+        std::fs::write(&mine, "mine").unwrap();
+
+        let found = items(&state);
+        assert_eq!(verdict(&found, "folder", "ACME-9"), Some(Verdict::Safe), "{}", detail(&found, "folder", "ACME-9"));
+        assert_eq!(verdict(&found, "folder", "ACME-10"), Some(Verdict::Risky));
+        let why = detail(&found, "folder", "ACME-10");
+        assert!(why.contains("1 file the app did not make") && why.contains(".claude/notes.md"), "{why}");
+        assert!(!why.contains("SKILL.md"), "what the install wrote is not listed as the user's: {why}");
+
+        let ids: Vec<String> = found.iter().filter(|i| i.title == "ACME-9").map(|i| i.id.clone()).collect();
+        let done = apply(&state, Remote::default(), &ids);
+        assert!(succeeded(&done, &found, "folder", "ACME-9"), "{done:?}");
+        assert!(!root.join("tasks/ACME-9").exists() && mine.is_file());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn a_leftover_folder_holding_a_spec_keeps_the_spec_when_it_goes() {
         let (root, cfg) = setup();
         let state = state(&root, cfg);

@@ -337,13 +337,8 @@ pub(crate) fn start_agent(
     if state.config.with(|c| c.ui.agents_auto_mode) {
         args.extend(agents::auto_mode_args(def).iter().map(|a| a.to_string()));
     }
-    // Started in a worktree, it cannot see the skills a toolset installed in
-    // the task folder above it unless told to look there. Last: see the doc.
-    if own.is_none() {
-        if let Some(folder) = agent_file_dir(state, &task) {
-            args.extend(agents::task_folder_args(def, &folder));
-        }
-    }
+    // Last: see `agents::task_folder_args`.
+    args.extend(task_folder_args(def, agent_file_dir(state, &task).as_deref(), &cwd));
 
     let pane = state.ptys.spawn(
         app,
@@ -367,6 +362,17 @@ pub(crate) fn start_agent(
     )?;
     remember_pane(app, state, &pane);
     Ok(pane)
+}
+
+/// What shows an agent started in `cwd` the skills a toolset installed in the
+/// task folder `folder`: nothing when it starts in the folder itself, which it
+/// sees, or when the task has none. Every start of a task's agent, a restart
+/// and a restore included, is `start_agent`, so this is the one place.
+fn task_folder_args(def: &agents::AgentDef, folder: Option<&Path>, cwd: &str) -> Vec<String> {
+    match folder {
+        Some(folder) if Path::new(cwd) != folder => agents::task_folder_args(def, folder),
+        _ => Vec::new(),
+    }
 }
 
 /// Plug an agent into the app for this launch: how it says what it is doing,
@@ -892,6 +898,18 @@ mod tests {
         assert!(typeable(None, "CONFLICTS.md", &long).is_err(), "nowhere to leave it: refused, not cut");
         assert!(is_generated("CONFLICTS.md"), "deleting the task takes it too (DISK-2)");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn claude_started_in_a_worktree_is_shown_the_task_folder_and_one_started_in_it_is_not() {
+        let claude = agents::find("claude").unwrap();
+        let folder = Path::new("/tasks/T-1");
+        // Every start, a restart and a restore among them, goes through
+        // `start_agent`, which asks this with the folder it starts in.
+        assert_eq!(task_folder_args(claude, Some(folder), "/tasks/T-1/api"), ["--add-dir", "/tasks/T-1"]);
+        assert!(task_folder_args(claude, Some(folder), "/tasks/T-1").is_empty(), "it sees its own folder");
+        assert!(task_folder_args(claude, None, "/tasks/T-1/api").is_empty(), "no folder of its own to show");
+        assert!(task_folder_args(agents::find("gemini").unwrap(), Some(folder), "/tasks/T-1/api").is_empty());
     }
 
     #[test]

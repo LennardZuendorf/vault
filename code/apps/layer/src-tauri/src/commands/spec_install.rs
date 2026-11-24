@@ -8,7 +8,7 @@
 //! the toolset, and Retry runs it again. Nothing here may write inside a
 //! repository's worktree, which would show up in Diff and in commits.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -41,9 +41,11 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 /// How much of what the steps printed is kept in the record.
 const LOG_TAIL: usize = 4096;
 
-/// Beside a fetched copy: the URL and ref it came from. A copy fetched for
-/// another is not this one, whatever its folder is called.
-const FETCHED: &str = ".layer-fetched";
+/// What names the file beside a fetched copy's folder that says where it
+/// came from. Never inside the copy, which is someone else's repository and
+/// may hold a link of that name; and `@` is not in a version, so it can
+/// never be another copy's folder.
+const SOURCE: &str = "@source";
 
 /// The file an install leaves in the task folder.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -269,20 +271,25 @@ impl<'a> Work<'a> {
             .ok_or_else(|| refused(format!("{} fetches code but names no version; pin one", toolset.id)))?;
         let kept = self.state.config.folder().join("toolsets").join(&toolset.id);
         let cache = kept.join(version);
+        // The URL and ref it came from: a copy fetched for another is not
+        // this one, whatever its folder is called.
         let marker = format!("{url}\n{}\n", r#ref);
+        let source = kept.join(format!("{version}{SOURCE}"));
         let _one_at_a_time = FETCHING.lock();
-        if std::fs::read_to_string(cache.join(FETCHED)).is_ok_and(|m| m == marker) {
+        if std::fs::read_to_string(&source).is_ok_and(|m| m == marker) && cache.is_dir() {
             self.note(&format!("using the copy of {url} at {} kept from before", r#ref));
             return Ok(cache);
         }
         self.note(&format!("fetching {url} at {}", r#ref));
         std::fs::create_dir_all(&kept)?;
         // Ours, under the config folder, and named by a validated id and version.
+        let _ = std::fs::remove_file(&source);
         let _ = std::fs::remove_dir_all(&cache);
         let stage = kept.join(format!(".fetching-{}", uuid::Uuid::new_v4()));
+        // The marker last: a copy that stopped halfway has none.
         let made = runner.fetch(url, r#ref, &stage).and_then(|()| {
-            std::fs::write(stage.join(FETCHED), &marker)?;
-            Ok(std::fs::rename(&stage, &cache)?)
+            std::fs::rename(&stage, &cache)?;
+            Ok(std::fs::write(&source, &marker)?)
         });
         if made.is_err() {
             let _ = std::fs::remove_dir_all(&stage);
@@ -499,6 +506,15 @@ pub(crate) fn remove_written(dir: &Path) {
             let _ = std::fs::remove_dir(dir.join(rel));
         }
     }
+}
+
+/// The files, by path in the task folder `dir`, that its install wrote and
+/// that `remove_written` would take: for Clean up, to tell them from what
+/// someone else put there.
+pub(crate) fn written_files(dir: &Path) -> HashSet<String> {
+    read_record(dir)
+        .map(|r| r.written.into_iter().filter(|w| !w.ends_with('/') && ours(dir, w)).collect())
+        .unwrap_or_default()
 }
 
 /// Whether `rel`, from a record, may be removed from `dir`.
@@ -893,6 +909,24 @@ mod tests {
             assert!(!dir.join(skills).join("brainstorming/leak.md").exists(), "nor is a linked file");
         }
         assert!(record(&task).log_tail.contains("skills/evil"), "what was left out is said");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_link_in_the_fetched_repository_cannot_make_the_install_write_outside_the_cache() {
+        let (root, state, task) = world(&["api"], "superpowers");
+        let precious = root.join("precious.txt");
+        put(&precious, "keep me");
+        // A repository that tracks the marker's old name as a link.
+        let mut fake = superpowers_cache();
+        fake.links = vec![(".layer-fetched", precious.clone()), (".fetched", precious.clone())];
+
+        let done = install(&state, &task, &fake);
+
+        assert!(done.ok, "{done:?}");
+        assert_eq!(std::fs::read_to_string(&precious).unwrap(), "keep me");
+        assert!(install(&state, &task, &fake).ok);
+        assert_eq!(fake.fetched.borrow().len(), 1, "the kept copy is still taken for the next install");
         std::fs::remove_dir_all(&root).ok();
     }
 

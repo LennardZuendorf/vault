@@ -47,7 +47,7 @@ pub(super) fn leftover_folders(root: &Path, used: &InUse, out: &mut Vec<Planned>
         let mut worktrees = Vec::new();
         let mut files = 0;
         let mut problems = Vec::new();
-        let mut other = Other::default();
+        let mut other = Other { written: super::spec_install::written_files(&dir), ..Other::default() };
         for (rel, path) in contents(&dir) {
             if path.join(".git").is_file() {
                 if used.checkouts.contains(&canon(&path)) {
@@ -88,6 +88,7 @@ pub(super) fn leftover_folders(root: &Path, used: &InUse, out: &mut Vec<Planned>
                     if worktrees.len() == 1 { "s" } else { "" },
                 ));
             }
+            let files = files + other.wrote;
             if files > 0 {
                 held.push(format!("{files} file{} the app wrote", plural(files)));
             }
@@ -132,6 +133,11 @@ struct Other {
     first: Vec<String>,
     /// A folder that is a repository or worktree, by path in the task folder.
     repo: Option<String>,
+    /// What a toolset's install wrote, which its record names (`spec_install`):
+    /// the app's, though not one of `GENERATED_FILES`.
+    written: std::collections::HashSet<String>,
+    /// How many of those were found.
+    wrote: usize,
     unreadable: Option<String>,
 }
 
@@ -150,6 +156,10 @@ impl Other {
             return;
         };
         if !meta.is_dir() {
+            if meta.is_file() && self.written.contains(&rel) {
+                self.wrote += 1;
+                return;
+            }
             // A file, or a link, which is not followed.
             self.files += 1;
             self.bytes += meta.len();
