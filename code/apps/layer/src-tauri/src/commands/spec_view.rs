@@ -15,7 +15,7 @@ use super::spec::{check_of, Check};
 use super::spec_commit::{changed_since_commit, repositories};
 use super::spec_copy::{list_files, read_file, spec_dir, toolset_of};
 use super::spec_install::{state_of, InstallState};
-use super::spec_work::{remove_spec, with_spec_moved, write_spec};
+use super::spec_work::{remove_spec, with_spec_moved, write_checked};
 use super::AppState;
 
 /// The toolset as the tab shows it: its name, and which extras it has. Not the
@@ -148,10 +148,23 @@ pub async fn read_spec(app: tauri::AppHandle, task_id: String) -> Result<SpecVie
 
 /// Replace one file of the spec with `text`, as an agent's `spec_write` does,
 /// through the same lock and the same refusals: a path outside the spec
-/// folder, a file the toolset does not keep, a link.
+/// folder, a file the toolset does not keep, a link. An editor's save sends
+/// `base`, the text it began from, and is not written (false) when the file
+/// holds something else by then: an agent wrote it (SPEC-37). `force` is Save
+/// mine, which writes over it.
 #[tauri::command]
-pub async fn write_spec_file(app: tauri::AppHandle, task_id: String, path: String, text: String) -> Result<()> {
-    super::blocking(app, move |state| write_spec(state, &state.config.task(&task_id)?, &path, &text)).await
+pub async fn write_spec_file(
+    app: tauri::AppHandle,
+    task_id: String,
+    path: String,
+    text: String,
+    base: Option<String>,
+    force: Option<bool>,
+) -> Result<bool> {
+    super::blocking(app, move |state| {
+        write_checked(state, &state.config.task(&task_id)?, &path, &text, base.as_deref(), force.unwrap_or(false))
+    })
+    .await
 }
 
 /// Delete one file of the spec, for the Undo of a draft that made it: the
@@ -164,6 +177,7 @@ pub async fn remove_spec_file(app: tauri::AppHandle, task_id: String, path: Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::spec_work::write_spec;
     use crate::commands::spec_world::{get, put, world};
 
     #[test]

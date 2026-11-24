@@ -367,9 +367,12 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
   return {
     read_spec: (a) => view(a.taskId as string),
     write_spec_file: (a) => {
+      const disk = files(a.taskId as string)[a.path as string];
+      // The backend's refusal: the file is no longer what the editor began from.
+      if (typeof a.base === "string" && !a.force && (disk ?? "") !== a.base) return false;
       files(a.taskId as string)[a.path as string] = a.text as string;
       written(a.taskId as string);
-      return null;
+      return true;
     },
     remove_spec_file: (a) => {
       delete files(a.taskId as string)[a.path as string];

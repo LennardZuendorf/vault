@@ -20,9 +20,13 @@ import type {
 export const specApi = {
   /** The task's spec: the toolset's files with their steps, each repository's share, the install. */
   readSpec: (taskId: string) => invoke<SpecView>("read_spec", { taskId }),
-  /** Replace one file of the spec, as an agent's `spec_write` does. */
-  writeSpecFile: (taskId: string, path: string, text: string) =>
-    invoke<void>("write_spec_file", { taskId, path, text }),
+  /**
+   * Replace one file of the spec, as an agent's `spec_write` does. With `base`,
+   * the text an editor began from, it is not written (false) when an agent has
+   * changed the file since; `force` writes anyway (Save mine, SPEC-37).
+   */
+  writeSpecFile: (taskId: string, path: string, text: string, base?: string, force?: boolean) =>
+    invoke<boolean>("write_spec_file", { taskId, path, text, base, force }),
   /** Delete one file of the spec: Undo of a draft that made it, so no empty file is left. */
   removeSpecFile: (taskId: string, path: string) =>
     invoke<void>("remove_spec_file", { taskId, path }),

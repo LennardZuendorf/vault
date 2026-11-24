@@ -53,8 +53,12 @@ interface Specs {
   commitSpec: (taskId: string) => Promise<void>;
   load: (taskId: string) => Promise<void>;
   edit: (taskId: string, path: string, text: string) => void;
-  /** Write what an editor holds into its file. */
-  save: (taskId: string, path: string) => Promise<void>;
+  /**
+   * Write what an editor holds into its file. False when an agent wrote the file
+   * since the editing began: nothing is written, the text is kept and marked a
+   * conflict. `force` (Save mine) writes over it (SPEC-37).
+   */
+  save: (taskId: string, path: string, force?: boolean) => Promise<boolean>;
   /** Let go of what an editor holds: the file's text is shown again (Load theirs). */
   discard: (taskId: string, path: string) => void;
   /** Kiro's Draft: one part of the spec for the whole task. */
@@ -172,12 +176,20 @@ export const useSpecs = create<Specs>((set, get) => {
             };
       put(taskId, { edits, last: null });
     },
-    save: async (taskId, path) => {
+    save: async (taskId, path, force = false) => {
       const edit = state(taskId).edits[path];
-      if (!edit) return;
-      await api.writeSpecFile(taskId, path, edit.text);
+      if (!edit) return true;
+      // The backend checks `base` under the lock every write takes, so an agent's
+      // write between the last read and this save is not overwritten unseen.
+      const written = await api.writeSpecFile(taskId, path, edit.text, edit.base, force);
+      if (!written) {
+        put(taskId, { edits: { ...state(taskId).edits, [path]: { ...edit, conflict: true } } });
+        await get().load(taskId);
+        return false;
+      }
       put(taskId, { edits: without(state(taskId).edits, path) });
       await get().load(taskId);
+      return true;
     },
     discard: (taskId, path) => put(taskId, { edits: without(state(taskId).edits, path) }),
     draft: (taskId, part, kind) =>
@@ -198,7 +210,9 @@ export const useSpecs = create<Specs>((set, get) => {
     applyAnswers: async (taskId) => {
       // The run reads the file, so what the editor holds goes into it first.
       const path = requirementsPath(state(taskId).spec);
-      if (path) await get().save(taskId, path);
+      if (path && !(await get().save(taskId, path))) {
+        throw new Error(`${path} changed on disk. Load theirs or Save mine first.`);
+      }
       await streamed(taskId, async (requestId) => {
         const done = await api.applySpecAnswers(taskId, requestId);
         put(taskId, { last: { path: done.path, before: done.before, results: done } });

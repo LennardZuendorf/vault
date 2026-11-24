@@ -138,6 +138,35 @@ pub(crate) fn update_spec(
     Ok((now, text))
 }
 
+/// What `write_checked` answers inside `update_spec` when the file is no longer
+/// what the editor began from, so the write is not made.
+const CHANGED_UNDER_YOU: &str = "the file changed since it was read";
+
+/// The Spec tab's save (SPEC-37): `text`, unless the file no longer holds `base`,
+/// the text the editor began from, which an agent has written over since. Checked
+/// under the lock the write takes, so no agent write can land between the check
+/// and the write. False when it refused and left the file alone; `force` (Save
+/// mine) and no `base` write whatever is there.
+pub(crate) fn write_checked(
+    state: &AppState,
+    task: &Task,
+    path: &str,
+    text: &str,
+    base: Option<&str>,
+    force: bool,
+) -> Result<bool> {
+    let wrote = update_spec(state, task, path, |now| match base {
+        // A file that is not there yet holds nothing, which is what an editor over it began from.
+        Some(base) if !force && now.unwrap_or("") != base => Err(Error::Other(CHANGED_UNDER_YOU.into())),
+        _ => Ok(text.to_string()),
+    });
+    match wrote {
+        Ok(_) => Ok(true),
+        Err(Error::Other(why)) if why == CHANGED_UNDER_YOU => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 /// Delete one file of `task`'s spec, under the lock every write takes: the
 /// Spec tab's Undo of a draft that made the file.
 pub(crate) fn remove_spec(state: &AppState, task: &Task, path: &str) -> Result<()> {
@@ -450,6 +479,36 @@ mod tests {
 
     fn use_toolset(state: &AppState, id: &str) {
         state.config.update(|c| c.tasks.iter_mut().for_each(|t| t.toolset = Some(id.into()))).unwrap();
+    }
+
+    #[test]
+    fn a_save_over_what_an_agent_wrote_is_refused_until_forced() {
+        let (root, state, task) = world(&["api"]);
+        put(&spec_at(&root, "design.md"), "# Agent's\n");
+
+        let saved = write_checked(&state, &task, "design.md", "# Mine\n", Some("# What I began from\n"), false);
+        assert!(!saved.unwrap(), "the file is not what the editor began from");
+        assert_eq!(get(&spec_at(&root, "design.md")), "# Agent's\n", "refused, so untouched");
+
+        assert!(write_checked(&state, &task, "design.md", "# Mine\n", Some("# What I began from\n"), true).unwrap());
+        assert_eq!(get(&spec_at(&root, "design.md")), "# Mine\n", "Save mine writes over it");
+
+        assert!(write_checked(&state, &task, "design.md", "# Again\n", Some("# Mine\n"), false).unwrap());
+        assert!(write_checked(&state, &task, "design.md", "# Undo\n", None, false).unwrap(), "no base: unconditional");
+        assert_eq!(get(&spec_at(&root, "design.md")), "# Undo\n");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_save_of_a_new_file_is_checked_against_nothing() {
+        let (root, state, task) = world(&["api"]);
+
+        assert!(write_checked(&state, &task, "design.md", "# New\n", Some(""), false).unwrap());
+        put(&spec_at(&root, "bugfix.md"), "# An agent made it\n");
+        assert!(!write_checked(&state, &task, "bugfix.md", "# Mine\n", Some(""), false).unwrap());
+        assert_eq!(get(&spec_at(&root, "bugfix.md")), "# An agent made it\n");
+        assert!(write_checked(&state, &task, "../escape.md", "x", Some(""), false).is_err(), "refusals stay errors");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

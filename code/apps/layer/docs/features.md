@@ -2284,7 +2284,14 @@ requirements, then design, then tasks.
   `SpecEditor.tsx`). A file whose text is the disk's again has nothing left to
   keep. Cmd+S and Cmd+Enter save the file, except while it has changed on disk
   under the editor: over an agent's text is only the button. A file with an
-  unsaved or a conflicting edit is marked in the tree.
+  unsaved or a conflicting edit is marked in the tree. The backend holds the
+  line too, since a write can land between the tab's last read and its save: a
+  save sends the text the editor began from (`base`), and
+  `write_spec_file` checks it against the file under the lock every write takes
+  (`spec_work.rs`, `write_checked`) and writes nothing, answering false, when the
+  file holds something else. The tab then marks the edit a conflict and reads the
+  file again, and only Save mine (`force`) writes over it. Apply answers, which
+  saves first, stops with that message instead of running over the agent's text.
 ### Working to it
 
 - **SPEC-10** The context file (PANE-13, `commands/task_context.rs`) MUST have a

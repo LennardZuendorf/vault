@@ -29,11 +29,11 @@ export function SpecEditor({
   const pending = state?.edits[path];
   const conflict = pending?.conflict ?? false;
 
-  async function saveNow() {
+  async function saveNow(force = false) {
     if (!pending || readOnly) return;
     failure.clear();
     try {
-      await save(task.id, path);
+      await save(task.id, path, force);
     } catch (e) {
       failure.fail(e);
     }
@@ -56,7 +56,7 @@ export function SpecEditor({
                 Discard changes
               </button>
             )}
-            <button className="ui-button ui-button-primary" onClick={() => void saveNow()}>
+            <button className="ui-button ui-button-primary" onClick={() => void saveNow(conflict)}>
               {conflict ? "Save mine" : "Save"}
             </button>
           </>
