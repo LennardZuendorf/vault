@@ -480,33 +480,65 @@ pub async fn reopen_waiting_pane(app: AppHandle, id: String) -> Result<PaneInfo>
 }
 
 pub(crate) fn reopen_waiting_pane_inner(app: &AppHandle, state: &AppState, id: &str) -> Result<PaneInfo> {
-    // Taken off the list in the same write that finds it: a second click
-    // while the first was still starting would otherwise open it twice.
+    let henchman = state.config.with(|c| c.saved_panes.iter().any(|p| p.id == id && super::henchman::is_saved(p)));
+    // Held until its record is settled, so a second click waits and then
+    // finds it running (HEN-2).
+    let _held = super::henchman::hold(henchman);
+    if henchman {
+        if let Some(pane) = super::henchman::running(state) {
+            return Ok(pane);
+        }
+    }
     let pane = state
         .config
-        .update(|c| {
-            let at = c.saved_panes.iter().position(|p| p.id == id && p.waiting)?;
-            Some(c.saved_panes.remove(at))
-        })?
+        .update(|c| take_waiting(&mut c.saved_panes, id))?
         .ok_or_else(|| Error::NotFound("That pane is no longer waiting to be reopened.".into()))?;
+    let forget = || {
+        let _ = state.config.update(|c| c.saved_panes.retain(|p| p.id != id));
+    };
     // Not over a conversation an open agent already continues.
     let mut resumed = open_agents(state);
     let out = match put_back(app, state, &pane, &mut resumed) {
         Back::Opened(p) => {
+            if henchman {
+                forget();
+            }
             if let Some(kept) = &pane.on_loop {
                 super::loops::resume_loop(app, state, &p, kept);
             }
             Ok(*p)
         }
-        Back::Gone(why) => Err(Error::NotFound(format!("It cannot be reopened: {why}."))),
+        Back::Gone(why) => {
+            if henchman {
+                forget();
+            }
+            Err(Error::NotFound(format!("It cannot be reopened: {why}.")))
+        }
         Back::Failed(e) => {
-            // Back on the list, to try again or to forget.
-            let _ = state.config.update(|c| c.saved_panes.push(pane));
+            // Back on the list, to try again or to forget. The Henchman's
+            // never left it.
+            if !henchman {
+                let _ = state.config.update(|c| c.saved_panes.push(pane));
+            }
             Err(e)
         }
     };
     let _ = app.emit("panes:waiting", ());
     out
+}
+
+/// The waiting pane `id`, taken off the list in the same write that finds
+/// it: a second click while the first was still starting would otherwise
+/// open it twice. The Henchman's stays on the list until it is back
+/// (HEN-2): taken off first, an app that quit while it was starting forgot
+/// its conversation. Its lock and its running pane keep it from opening
+/// twice.
+fn take_waiting(saved: &mut Vec<SavedPane>, id: &str) -> Option<SavedPane> {
+    let at = saved.iter().position(|p| p.id == id && p.waiting)?;
+    if super::henchman::is_saved(&saved[at]) {
+        return Some(saved[at].clone());
+    }
+    Some(saved.remove(at))
 }
 
 /// Forget a waiting pane: the user does not want it back. Its CLI's
@@ -641,6 +673,25 @@ mod tests {
         let kept = &c.saved_panes[0];
         assert!(kept.waiting && kept.failed == 0);
         assert_eq!(kept.session.as_deref(), Some("its-conversation"));
+    }
+
+    #[test]
+    fn a_waiting_henchman_stays_on_the_list_while_it_is_woken_where_another_pane_is_taken_off() {
+        let waiting = |p: SavedPane| SavedPane { waiting: true, ..p };
+        let henchman = SavedPane {
+            cwd: Some("/w/_chat/henchman".into()),
+            session: Some("its-conversation".into()),
+            ..pane("henchman", CHAT_TASK_ID, "agent")
+        };
+        let mut saved = vec![waiting(henchman), waiting(pane("agent", "t1", "agent"))];
+
+        let taken = take_waiting(&mut saved, "henchman").map(|p| p.id);
+        assert_eq!(taken.as_deref(), Some("henchman"));
+        assert!(saved.iter().any(|p| p.id == "henchman" && p.waiting), "a quit while it starts loses nothing");
+
+        assert_eq!(take_waiting(&mut saved, "agent").map(|p| p.id).as_deref(), Some("agent"));
+        assert!(!saved.iter().any(|p| p.id == "agent"), "a second click cannot open it twice");
+        assert!(take_waiting(&mut saved, "agent").is_none());
     }
 
     /// A pane over the limit waited, then an agent was started in

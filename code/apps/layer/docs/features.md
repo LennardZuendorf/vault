@@ -3611,7 +3611,9 @@ Slack come later.
   open its tab. Unless it is off (HEN-16), it is restored at launch like
   any chat (PANE-7), and before every other agent, so the restore limit never leaves it
   waiting. One that waits all the same is woken from its tab where it
-  left off, in its own conversation. Before, it came back in the order
+  left off, in its own conversation. Its saved record stays until it is
+  back: taken off first, an app that quit while it was starting forgot
+  its conversation. Before, it came back in the order
   it was opened: with twelve agents open at a quit it waited, and Wake
   forgot it and began a new conversation. One that fails to come back at
   launch waits too, and the user is told: counted down like other panes
