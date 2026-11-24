@@ -155,6 +155,17 @@ pub fn validate(t: &Toolset) -> Result<(), String> {
     if t.name.trim().is_empty() {
         return Err(format!("{label}: it needs a name"));
     }
+    // The version names the fetch cache folder (`toolsets/<id>/<version>/`)
+    // and goes into refs and argv, so it must be one plain path segment.
+    if let Some(v) = &t.version {
+        let plain = !v.is_empty()
+            && v != "."
+            && v != ".."
+            && v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'));
+        if !plain {
+            return Err(format!("{label}: the version {v:?} must be letters, digits, . _ + or -"));
+        }
+    }
     if t.files.is_empty() {
         return Err(format!("{label}: it needs at least one file glob"));
     }
@@ -316,6 +327,23 @@ mod tests {
         t.files.clear();
         t.steps.clear();
         assert!(validate(&t).is_err());
+    }
+
+    #[test]
+    fn a_version_that_is_not_one_path_segment_is_refused() {
+        for bad in ["", "../../x", "..", ".", "1/2", "1\\2", "1 2", "v1;rm", "1.0\n"] {
+            let mut t = openspec();
+            t.version = Some(bad.into());
+            assert!(validate(&t).is_err(), "version {bad:?} should be refused");
+        }
+        for good in ["1.14.3", "7.0.2", "2026-11-24", "1.0.0+build_5", "..1"] {
+            let mut t = openspec();
+            t.version = Some(good.into());
+            assert_eq!(validate(&t), Ok(()), "version {good:?} should pass");
+        }
+        let mut t = openspec();
+        t.version = None;
+        assert_eq!(validate(&t), Ok(()), "a toolset may have no version");
     }
 
     #[test]
