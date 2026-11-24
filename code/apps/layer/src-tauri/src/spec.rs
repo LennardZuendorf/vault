@@ -9,6 +9,7 @@ mod sub_tasks;
 pub use sub_tasks::{sub_tasks, SubTask};
 
 pub mod glob;
+pub mod owned;
 pub mod toolset;
 
 /// One of a spec's files, in the order they are drafted and approved
@@ -377,7 +378,7 @@ fn outside_fences(text: &str) -> impl Iterator<Item = (&str, &str)> {
 }
 
 /// The text of a list item, without its bullet or number.
-fn list_item(line: &str) -> Option<&str> {
+pub(super) fn list_item(line: &str) -> Option<&str> {
     let rest = if let Some(rest) = line.strip_prefix(['-', '*', '+']) {
         rest
     } else {
@@ -394,7 +395,7 @@ fn list_item(line: &str) -> Option<&str> {
 }
 
 /// `[x] rest` as (true, "rest").
-fn checkbox(item: &str) -> Option<(bool, &str)> {
+pub(super) fn checkbox(item: &str) -> Option<(bool, &str)> {
     for (b, done) in [("[ ]", false), ("[x]", true), ("[X]", true)] {
         if let Some(rest) = item.strip_prefix(b) {
             return Some((done, rest.trim_start()));
