@@ -47,27 +47,39 @@ pub(crate) fn presets(chosen: &HenchmanAgent, agent: &str) -> Vec<(String, Strin
     presets
 }
 
-/// Whether `dir` is the Henchman's room. By path under the worktree root,
-/// not by creating it: this is asked of every chat pane.
-pub(crate) fn is_room(state: &AppState, dir: &Path) -> bool {
-    dir == state.config.worktree_root().join("_chat").join(ROOM)
+/// Whether `dir` is the Henchman's room: one called `henchman` in a chat
+/// folder, under any worktree root. Other chats' rooms are eight hex
+/// digits. Compared with the room under today's root, the Henchman saved
+/// under the root the user had before moving it was taken for any chat:
+/// restored after the other agents, its context file rewritten as a chat's
+/// and nothing fed to it, while the window, which matches the name, showed
+/// it as the Henchman. Not by creating it: this is asked of every chat
+/// pane.
+pub(crate) fn is_room(dir: &Path) -> bool {
+    dir.file_name().is_some_and(|name| name == ROOM)
+        && dir.parent().and_then(Path::file_name).is_some_and(|name| name == "_chat")
 }
 
 /// Whether a pane is the Henchman's, running or not.
-pub(crate) fn is_henchman(state: &AppState, pane: &PaneInfo) -> bool {
-    pane.task_id == CHAT_TASK_ID && is_room(state, Path::new(&pane.cwd))
+pub(crate) fn is_henchman(pane: &PaneInfo) -> bool {
+    pane.task_id == CHAT_TASK_ID && is_room(Path::new(&pane.cwd))
+}
+
+/// Whether a saved pane is the Henchman's (PANE-7).
+pub(crate) fn is_saved(pane: &SavedPane) -> bool {
+    pane.task_id == CHAT_TASK_ID && pane.cwd.as_deref().is_some_and(|cwd| is_room(Path::new(cwd)))
 }
 
 /// Whether the pane calling the MCP server is the Henchman's (HEN-4). The
 /// caller names itself (`X-Villain-Pane`, CHAT-3), so this only keeps the
 /// tools out of other agents' lists; none of them is dangerous.
 pub(crate) fn is_caller(state: &AppState, caller: Option<&str>) -> bool {
-    caller.and_then(|id| state.ptys.info(id).ok()).is_some_and(|p| is_henchman(state, &p))
+    caller.and_then(|id| state.ptys.info(id).ok()).is_some_and(|p| is_henchman(&p))
 }
 
 /// The Henchman's pane while it runs.
 pub(crate) fn running(state: &AppState) -> Option<PaneInfo> {
-    state.ptys.list(Some(CHAT_TASK_ID)).into_iter().find(|p| p.running && is_henchman(state, p))
+    state.ptys.list(Some(CHAT_TASK_ID)).into_iter().find(|p| p.running && is_henchman(p))
 }
 
 /// Wake the Henchman with an agent that speaks ACP, asked for a brief. While
@@ -94,14 +106,12 @@ pub async fn spawn_henchman(app: AppHandle, agent_id: String) -> Result<PaneInfo
 pub async fn set_henchman_on(app: AppHandle, on: bool) -> Result<()> {
     let handle = app.clone();
     super::blocking(app, move |state| {
-        // Read before the update: config locks are not reentrant.
-        let room = state.config.worktree_root().join("_chat").join(ROOM);
-        state.config.update(|c| switch(c, on, &room))?;
+        state.config.update(|c| switch(c, on))?;
         if on {
             return Ok(());
         }
         // An exited one too: left in the list, its Resume would wake it.
-        for pane in state.ptys.list(Some(CHAT_TASK_ID)).into_iter().filter(|p| is_henchman(state, p)) {
+        for pane in state.ptys.list(Some(CHAT_TASK_ID)).into_iter().filter(is_henchman) {
             state.ptys.close(&pane.id)?;
         }
         let _ = handle.emit("panes:waiting", ());
@@ -113,10 +123,9 @@ pub async fn set_henchman_on(app: AppHandle, on: bool) -> Result<()> {
 /// The switch and, turned off, every saved Henchman waiting, in one write:
 /// off with a saved pane not waiting, the next launch would try it, be
 /// refused, and after a few launches forget its conversation.
-fn switch(c: &mut AppConfig, on: bool, room: &Path) {
+fn switch(c: &mut AppConfig, on: bool) {
     c.henchman.off = !on;
-    let ours = |p: &SavedPane| p.task_id == CHAT_TASK_ID && p.cwd.as_deref().is_some_and(|d| Path::new(d) == room);
-    c.saved_panes.iter_mut().filter(|p| !on && ours(p)).for_each(|p| p.waiting = true);
+    c.saved_panes.iter_mut().filter(|p| !on && is_saved(p)).for_each(|p| p.waiting = true);
 }
 
 /// What `open_chat` says when the Henchman's room is asked for while it is
@@ -367,15 +376,32 @@ mod tests {
         state.config.update(|c| c.saved_panes = vec![saved("henchman", &room), saved("chat", &other)]).unwrap();
         assert!(refuse_while_off(&state).is_ok(), "on until turned off");
 
-        state.config.update(|c| switch(c, false, &room)).unwrap();
+        state.config.update(|c| switch(c, false)).unwrap();
         let waits = |id: &str| state.config.read().saved_panes.iter().any(|p| p.id == id && p.waiting);
         assert!(waits("henchman"), "kept, not put back at launch");
         assert!(!waits("chat"), "other chats come back as before");
         assert!(refuse_while_off(&state).is_err());
 
-        state.config.update(|c| switch(c, true, &room)).unwrap();
+        state.config.update(|c| switch(c, true)).unwrap();
         assert!(refuse_while_off(&state).is_ok());
         assert!(waits("henchman"), "its tab wakes it where it left off");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn its_room_under_a_worktree_root_the_user_has_since_moved_is_still_its() {
+        let root = std::env::temp_dir().join(format!("vl-henchman-{}", uuid::Uuid::new_v4()));
+        let state = super::super::repos::tests::state(&root, Default::default());
+        let today = state.config.worktree_root().join("_chat").join(ROOM);
+        let before = root.join("moved-away").join("_chat").join(ROOM);
+        assert!(is_room(&today) && is_room(&before));
+        for other in [root.join("_chat").join("1a2b3c4d"), root.join("my_chat").join(ROOM), root.join(ROOM)] {
+            assert!(!is_room(&other), "{}", other.display());
+        }
+        let pane = serde_json::json!({ "id": "h", "task_id": CHAT_TASK_ID, "kind": "agent", "cwd": before });
+        state.config.update(|c| c.saved_panes = vec![serde_json::from_value(pane).unwrap()]).unwrap();
+        state.config.update(|c| switch(c, false)).unwrap();
+        assert!(state.config.read().saved_panes[0].waiting, "turned off, the one under the old root waits too");
         let _ = std::fs::remove_dir_all(&root);
     }
 

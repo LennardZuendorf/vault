@@ -152,9 +152,9 @@ impl Heard {
         Heard { on: henchman, alone, threads }
     }
 
-    pub(crate) fn hears(&self, state: &AppState, p: &PaneInfo) -> bool {
+    pub(crate) fn hears(&self, p: &PaneInfo) -> bool {
         self.on
-            && !is_henchman(state, p)
+            && !is_henchman(p)
             && !self.alone.iter().any(|k| k == key_of(p))
             // A Slack thread's chat answers to its thread (§24).
             && !self.threads.contains(&p.cwd)
@@ -163,9 +163,9 @@ impl Heard {
 
 impl HenchmanFeed {
     pub fn pass(&mut self, state: &AppState, panes: &[(PaneInfo, bool)]) {
-        let henchman = panes.iter().map(|(p, _)| p).find(|p| p.running && is_henchman(state, p));
+        let henchman = panes.iter().map(|(p, _)| p).find(|p| p.running && is_henchman(p));
         let ears = Heard::new(state, henchman.is_some());
-        let heard = |p: &PaneInfo| ears.hears(state, p);
+        let heard = |p: &PaneInfo| ears.hears(p);
         let back = take_interrupted(henchman.is_some());
         let exited = self.newly_exited(panes, heard);
         let finished = self.newly_finished(panes.iter().map(|(p, _)| p), heard);

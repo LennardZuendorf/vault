@@ -3593,7 +3593,12 @@ Slack come later.
   as the others are.
 - **HEN-2** There MUST be one Henchman: a chat over ACP (§20) in a room
   of its own, `<worktree root>/_chat/henchman`, so it keeps its history
-  across restarts (CHAT-1) and holds no worktrees. It is woken from its
+  across restarts (CHAT-1) and holds no worktrees. A `henchman` room in
+  a `_chat` folder is its under any worktree root, so it stays the
+  Henchman after the user moves the root. Matched against today's root
+  only, the one under the old root was taken for any chat: put back after
+  the other agents, with a chat's context file, and fed nothing, while
+  its tab showed it as the Henchman. It is woken from its
   tab with the agent chosen for it (HEN-15), or else any that speaks
   ACP; waking it while it runs gives back
   the one running. Its context file says who it is, what its tools do,

@@ -2,7 +2,7 @@
 //! (PANE-7).
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -202,10 +202,7 @@ pub fn restore_panes(app: &AppHandle) {
         return;
     }
 
-    let henchman = |p: &SavedPane| {
-        p.task_id == CHAT_TASK_ID && p.cwd.as_deref().is_some_and(|c| super::henchman::is_room(&state, Path::new(c)))
-    };
-    let saved = panes_to_restore(state.config.read().saved_panes, RESTORE_LIMIT, henchman);
+    let saved = panes_to_restore(state.config.read().saved_panes, RESTORE_LIMIT, super::henchman::is_saved);
     // What does not come back now waits rather than being forgotten. It was
     // forgotten here, and the notice said only "Restored 12 of 14 panes":
     // nothing in the app could bring the other two back.
@@ -263,7 +260,7 @@ pub fn restore_panes(app: &AppHandle) {
                     super::henchman_feed::interrupted(&p.id);
                 }
                 // Back at launch, it looks at everything once (HEN-12).
-                if super::henchman::is_henchman(&state, &p) {
+                if super::henchman::is_henchman(&p) {
                     super::henchman_feed::greet();
                 }
                 forget(&pane.id)

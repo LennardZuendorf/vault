@@ -188,7 +188,7 @@ pub(crate) fn need_you(
 /// The needs to banner now, and how many wait for the user on the dock
 /// (HEN-13). Needs whose task is gone close here.
 pub fn henchman_needs(app: &AppHandle, state: &AppState, panes: &[(PaneInfo, bool)]) -> (usize, Vec<Need>) {
-    let henchman = panes.iter().map(|(p, _)| p).find(|p| p.running && is_henchman(state, p));
+    let henchman = panes.iter().map(|(p, _)| p).find(|p| p.running && is_henchman(p));
     let new = std::mem::take(&mut NEEDS.lock().new);
     let tasks: HashSet<String> = state.config.with(|c| c.tasks.iter().map(|t| t.id.clone()).collect());
     let waiting = change(app, state, |lair| {
@@ -204,7 +204,7 @@ pub fn henchman_needs(app: &AppHandle, state: &AppState, panes: &[(PaneInfo, boo
 /// it handles them and reaches the user itself. A permission question, a
 /// usage limit or a trust prompt still rings: only the user answers those.
 pub fn henchman_quiet<'a>(state: &AppState, panes: &'a [(PaneInfo, bool)]) -> Cow<'a, [(PaneInfo, bool)]> {
-    if !panes.iter().any(|(p, _)| p.running && is_henchman(state, p)) {
+    if !panes.iter().any(|(p, _)| p.running && is_henchman(p)) {
         return Cow::Borrowed(panes);
     }
     let heard = Heard::new(state, true);
@@ -212,7 +212,7 @@ pub fn henchman_quiet<'a>(state: &AppState, panes: &'a [(PaneInfo, bool)]) -> Co
         panes
             .iter()
             .map(|(p, stopping)| {
-                if p.kind == PaneKind::Agent && heard.hears(state, p) {
+                if p.kind == PaneKind::Agent && heard.hears(p) {
                     hushed(p, *stopping)
                 } else {
                     (p.clone(), *stopping)

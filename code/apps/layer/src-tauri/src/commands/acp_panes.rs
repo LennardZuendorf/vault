@@ -80,8 +80,7 @@ pub(crate) fn start(app: &AppHandle, state: &AppState, def: &agents::AgentDef, s
         title_activity: None,
         title_topic: None,
     };
-    // Asked before the config is read: `is_room` reads it too.
-    let henchman = super::henchman::is_room(state, std::path::Path::new(&opts.cwd));
+    let henchman = super::henchman::is_room(std::path::Path::new(&opts.cwd));
     // A routine's run, on its routine's model and effort (ROUT-4).
     let presets = match super::routines::run_agent(app, state, &opts.cwd) {
         Some(chosen) => super::henchman::presets(&chosen, def.id),

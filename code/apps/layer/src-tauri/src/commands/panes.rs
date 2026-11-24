@@ -658,7 +658,7 @@ pub(crate) fn open_chat(
     };
     // Best effort: a context file that cannot be written is not a reason to
     // refuse to start the agent. The Henchman's room gets its own (HEN-2).
-    let henchman = super::henchman::is_room(state, &dir);
+    let henchman = super::henchman::is_room(&dir);
     if henchman {
         super::henchman::refuse_while_off(state)?;
     }
