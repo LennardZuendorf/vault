@@ -68,7 +68,7 @@ export function CheckCommand({ p, onSave }: { p: Project; onSave: (command: stri
   );
 }
 
-/** What Commit spec puts in a repository (SPEC-12), as the person reads it. */
+/** What Commit spec puts in a repository (SPEC-35), as the person reads it. */
 const COMMITS: { value: SpecCommit; label: string }[] = [
   { value: "whole", label: "commits the whole spec" },
   { value: "own", label: "commits its own part" },

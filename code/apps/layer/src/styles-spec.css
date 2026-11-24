@@ -101,7 +101,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* The file changed under unsaved text: kept, and said so (SPEC-16). */
+/* The file changed under unsaved text: kept, and said so (SPEC-37). */
 .spec-conflict {
   margin: 0 14px 4px;
   padding: 6px 10px;
@@ -176,7 +176,7 @@
 .spec-tasks li.done .mark {
   color: var(--status-ok-ink);
 }
-/* Open questions beside the requirements (SPEC-26). */
+/* Open questions beside the requirements (SPEC-19, SPEC-20). */
 .spec-questions {
   display: flex;
   flex-direction: column;

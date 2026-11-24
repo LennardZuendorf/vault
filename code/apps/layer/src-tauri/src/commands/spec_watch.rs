@@ -17,7 +17,7 @@ use super::spec_copy::spec_dir;
 static WATCHER: SpecWatcher = SpecWatcher::new();
 
 /// Follow the spec folder of `task_id`, the task whose Spec tab is on screen,
-/// and say `spec:changed` when something in it changes (SPEC-15). `None`, or
+/// and say `spec:changed` when something in it changes (SPEC-36). `None`, or
 /// a task with no spec to show, follows nothing. One task at a time.
 #[tauri::command]
 pub async fn watch_spec(app: AppHandle, task_id: Option<String>) -> Result<()> {

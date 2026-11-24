@@ -266,7 +266,7 @@ fn merged(sections: Vec<(String, String)>) -> Option<String> {
 
 /// What `task`'s spec was, as files of Kiro's layout, from where earlier
 /// builds kept it: what was approved with the drafts written since; else the
-/// repositories' own copies; else the single `SPEC.md` (SPEC-29).
+/// repositories' own copies; else the single `SPEC.md` (SPEC-17).
 fn old_files(state: &AppState, task: &Task, dest: &Path) -> Vec<(String, String)> {
     let old = old_of(state, task);
     let kind = old.kind();
@@ -360,7 +360,7 @@ pub(crate) fn move_old_spec(state: &AppState, task: &Task) -> Result<bool> {
 
 /// Copy `task`'s spec folder to the config folder's `specs/<task>/`, so a
 /// spec never committed (or kept off the repository) outlives the task on
-/// this Mac (SPEC-2). It copies and leaves the folder: removing it is the
+/// this Mac (SPEC-3). It copies and leaves the folder: removing it is the
 /// caller's, once this has succeeded. A spec already kept there (a task with
 /// no folder of its own) or without a file is not copied. A name taken by
 /// another task's archive gets `-2`, `-3`, and so on.

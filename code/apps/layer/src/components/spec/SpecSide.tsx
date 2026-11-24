@@ -9,7 +9,7 @@ const VERDICT_MARK: Record<string, string> = { met: "✓", "not met": "✗", unc
 /**
  * Beside the editor: what the file being edited needs first (`children`: the
  * open questions of the requirements), and each repository's share of the
- * spec: how far its steps are (SPEC-14) and where Commit spec stands for it,
+ * spec: how far its steps are (SPEC-8) and where Commit spec stands for it,
  * with what the last Commit spec did there. With Kiro's Check against spec,
  * each repository's last check.
  */

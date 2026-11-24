@@ -4,7 +4,7 @@
  * web, with a check: Kiro's by default, OpenSpec's or superpowers' with
  * `?toolset=` (`spec-worlds.ts`), and `?install=failed|running` shows the
  * install it would be made with. ACME-130 has requirements drafted and half
- * answered (SPEC-26). Draft streams a file in a line at a time, as
+ * answered (SPEC-19). Draft streams a file in a line at a time, as
  * `spec:draft`; Apply answers and Check answer from the requirements.
  * `__mock.spec.write(task, path, text)` is an agent writing a file. Parsing is
  * rough, as far as the seeded texts need; `spec/owned.rs` is the real thing.
@@ -124,7 +124,7 @@ Six requests for one address (R-1); two addresses (R-2).
 `,
 };
 
-/** ACME-130's requirements, drafted and half answered (SPEC-26). */
+/** ACME-130's requirements, drafted and half answered (SPEC-19). */
 const AUDIT_DRAFT = `## Goal
 Admins can see who changed what in the workspace, and when.
 
@@ -149,7 +149,7 @@ Admins can see who changed what in the workspace, and when.
 `;
 
 /**
- * What Apply answers does here (SPEC-26), roughly: each answered question
+ * What Apply answers does here (SPEC-20), roughly: each answered question
  * becomes a requirement and leaves the list. The real run rewrites the ones
  * it decides instead.
  */
@@ -231,7 +231,7 @@ async function stream(requestId: unknown, path: string, text: string, pause = 40
   return sent;
 }
 
-/** An agent writing a file of a task's spec, for the console: the tab follows it (SPEC-15). */
+/** An agent writing a file of a task's spec, for the console: the tab follows it (SPEC-36). */
 export const specDisk = {
   /** Repositories whose Commit spec fails, by folder (`["web"]`); the others keep theirs. */
   commitFails: [] as string[],
@@ -390,7 +390,7 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
       return running;
     },
     // Commit spec: each repository's own mode decides; one in
-    // `__mock.spec.commitFails` fails, the others keep theirs (SPEC-12).
+    // `__mock.spec.commitFails` fails, the others keep theirs (SPEC-35).
     commit_spec_cmd: (a) => {
       const taskId = a.taskId as string;
       return checkouts(taskId).map((c): RepoResult => {

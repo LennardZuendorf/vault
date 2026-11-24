@@ -1,5 +1,5 @@
 //! What the app keeps about a task's spec besides its files (§19): the last
-//! check of each repository against the requirements (SPEC-27). The spec
+//! check of each repository against the requirements (SPEC-15). The spec
 //! itself is the files in `<task>/spec/` (`spec_copy.rs`); a check is a
 //! verdict on the work at one commit, so it is kept beside them, where no
 //! agent is told to look and no commit takes it.
@@ -18,7 +18,7 @@ use super::AppState;
 /// `.spec-checks/api.json`.
 pub(crate) const CHECKS: &str = ".spec-checks";
 
-/// The last check against the spec (SPEC-27).
+/// The last check against the spec (SPEC-15).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Check {
     /// The commit it was checked at.

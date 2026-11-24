@@ -533,7 +533,7 @@ pub struct StartedSubTask {
     pub moved: Option<String>,
 }
 
-/// Start `agent_id` on a sub-task's spec, with the work prompt (SPEC-21),
+/// Start `agent_id` on a sub-task's spec, with the work prompt (SPEC-12),
 /// and move its ticket, and the epic's while that is still to do, as Start
 /// work does (EPIC-8). One that waits is refused unless `anyway`.
 pub(crate) async fn start_sub_task_inner(

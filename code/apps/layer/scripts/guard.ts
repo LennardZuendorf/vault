@@ -720,7 +720,7 @@ const CEILINGS: Record<string, number> = {
   "src-tauri/src/git.rs": 1150,
   "src-tauri/src/commands/diff.rs": 700,
   // Every field of config.json is declared here, each with its reason and
-  // its serde default; a repository's spec settings (SPEC-5) and its
+  // its serde default; a repository's spec settings (SPEC-28) and its
   // check command (LOOP-1) took it past 600, and a field split from its
   // struct is harder to find than a long file. `ConfigStore::with`, the
   // borrowing read beside `read` that the hot paths use, took it to 661; it
@@ -734,7 +734,7 @@ const CEILINGS: Record<string, number> = {
   // Oxfmt broke these files' long lines and took them past the default, with
   // no new code: TicketsView 637, types 613.
   "src/components/tickets/TicketsView.tsx": 660,
-  // Settings gained spec_first (SPEC-20), the one line that is the mirror of the backend.
+  // Settings gained spec_first (SPEC-38), the one line that is the mirror of the backend.
   "src/lib/types.ts": 645,
 };
 

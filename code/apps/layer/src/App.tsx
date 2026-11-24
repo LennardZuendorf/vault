@@ -230,7 +230,7 @@ function TaskMain({ task }: { task: TaskView }) {
   const paneCount = useStore((s) => s.panes.filter((p) => p.task_id === task.id).length);
   const [updating, setUpdating] = useState(false);
   // The Spec tab's badge says how far the work is through its steps, or how
-  // many requirements there are before it has any (SPEC-14), so the spec is
+  // many requirements there are before it has any (SPEC-8), so the spec is
   // read with the task.
   const specBadge = useSpecs((s) => specProgress(s.byTask[task.id]?.spec ?? null));
   const loadSpec = useSpecs((s) => s.load);

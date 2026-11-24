@@ -29,10 +29,10 @@ export const specApi = {
   /** Kiro's Draft: one part for the whole task, streamed as `spec:draft`, then written into its file. */
   draftSpec: (taskId: string, part: SpecPart, kind: SpecKind | null, requestId: string) =>
     invoke<Drafted>("draft_spec", { taskId, part, kind, requestId }),
-  /** Kiro's Apply answers: the answered open questions built into the requirements file (SPEC-26). */
+  /** Kiro's Apply answers: the answered open questions built into the requirements file (SPEC-20). */
   applySpecAnswers: (taskId: string, requestId: string) =>
     invoke<AppliedAnswers>("apply_spec_answers", { taskId, requestId }),
-  /** Kiro's Check against spec, for one repository (SPEC-27). */
+  /** Kiro's Check against spec, for one repository (SPEC-15). */
   checkSpec: (taskId: string, checkoutId: string) =>
     invoke<SpecCheck>("check_spec", { taskId, checkoutId }),
   /** Install the task's spec toolset again, after a failure; announced as `spec:install`. */

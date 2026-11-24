@@ -343,8 +343,8 @@ export function Watchers() {
     };
   }, [refreshPanes]);
 
-  // A spec being drafted (SPEC-25), into whichever task's editors asked for
-  // it, shown or not; and a step an agent ticked (SPEC-23).
+  // A spec being drafted (SPEC-5), into whichever task's editors asked for
+  // it, shown or not; and a step an agent ticked (SPEC-13).
   useEffect(() => {
     const p = listen<{ request_id: string; path: string; text: string }>("spec:draft", (e) => {
       useSpecs.getState().chunk(e.payload.request_id, e.payload.path, e.payload.text);
@@ -362,7 +362,7 @@ export function Watchers() {
   }, []);
 
   // The spec folder of the task whose Spec tab is on screen, followed so an
-  // agent's writes show as they happen (SPEC-15); none when it is not. A
+  // agent's writes show as they happen (SPEC-36); none when it is not. A
   // failure only means no live updates: the tab still reads on opening.
   const specOf = useStore((s) => {
     const task = selectedTask(s);

@@ -58,7 +58,7 @@ pub async fn github_open_prs(
         let dir = PathBuf::from(&checkout.path);
         let project = state.config.project(&checkout.project_id)?;
         let repo = project.name.clone();
-        // The spec goes to review with the code (SPEC-13): what Commit spec
+        // The spec goes to review with the code (SPEC-35): what Commit spec
         // put in this repository above. One that could not be committed is
         // named, and its code is not opened without it.
         if let Some(row) = spec_rows.remove(&checkout.id) {

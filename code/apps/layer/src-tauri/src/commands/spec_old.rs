@@ -11,7 +11,7 @@ use crate::spec::{self, Kind, Part};
 use super::panes::agent_file_dir;
 use super::AppState;
 
-/// Where a spec was kept before it was kept in the repository (SPEC-29).
+/// Where a spec was kept before it was kept in the repository (SPEC-17).
 pub(crate) const LEGACY_FILE: &str = "SPEC.md";
 
 /// The task folder's drafts and what was approved, from before the spec was

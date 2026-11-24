@@ -3,7 +3,7 @@ import { isSaveShortcut, mergeDisk, shortcutSaves } from "../src/lib/spec-edit";
 import { reconcile } from "../src/lib/specs";
 import type { SpecView } from "../src/lib/types";
 
-describe("a spec file changing on disk under its editor (SPEC-16)", () => {
+describe("a spec file changing on disk under its editor (SPEC-37)", () => {
   test("a clean editor takes the file from disk", () => {
     const merged = mergeDisk(
       { text: "- [ ] 1. A", dirty: false, base: "- [ ] 1. A" },
@@ -52,7 +52,7 @@ describe("the save shortcut", () => {
 const file = (path: string, text: string) => ({ path, text, steps: [] });
 const specOf = (files: ReturnType<typeof file>[]) => ({ files }) as unknown as SpecView;
 
-describe("the editors once the files are read again (SPEC-16)", () => {
+describe("the editors once the files are read again (SPEC-37)", () => {
   const typed = { text: "mine", base: "was", conflict: false };
 
   test("an agent writing the file under a dirty editor is a conflict, and the text is kept", () => {

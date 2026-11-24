@@ -43,7 +43,7 @@ export function StartWorkDialog({
   /** The base this dialog last filled in itself, as opposed to one typed. */
   const autoBase = useRef("");
   const [starting, setStarting] = useState(false);
-  /** SPEC-22: the agent starts told to write the spec first, and the task opens on Spec. */
+  /** SPEC-18: the agent starts told to write the spec first, and the task opens on Spec. */
   const [writeFirst, setWriteFirst] = useState(() => read("specFirst", true));
   /** The toolset picked; none until one is, which follows the suggestion. */
   const [chosenToolset, setChosenToolset] = useState<string | null>(null);
@@ -53,7 +53,7 @@ export function StartWorkDialog({
   // no agent starts on it (EPIC-2).
   const epic = isEpicType(types, issue.issue_type);
   const selected = projects.filter((p) => picked.includes(p.id));
-  // Spec first (SPEC-20) already tells every agent: for a launch it cannot be turned off.
+  // Spec first (SPEC-38) already tells every agent: for a launch it cannot be turned off.
   const locked = settings?.spec_first ?? false;
   const toolsets = settings?.toolsets ?? [];
   const toolset =

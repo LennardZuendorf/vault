@@ -258,7 +258,7 @@ Don't make the UI ask on a timer.
 ## Add a spec toolset
 
 A toolset (§19) is data: a manifest and a paragraph. A team adds one of its
-own in Settings → Code, as JSON, with no release (SPEC-4). Ship one with
+own in Settings → Code, as JSON, with no release (SPEC-27). Ship one with
 Layer only when everyone should have it.
 
 1. **Write the manifest**, `src-tauri/toolsets/<id>.json`: `id`, `name`, an
@@ -271,16 +271,16 @@ Layer only when everyone should have it.
    `commit_to`. A step names exactly one kind and `run` is an argv, never a
    shell string. Pin the version of anything it fetches or runs.
 2. **Write the paragraph**, `src-tauri/toolsets/<id>.md`: what agents are told
-   about the toolset, in the context file's Spec section (SPEC-18). Write
+   about the toolset, in the context file's Spec section (SPEC-10). Write
    `{spec_dir}` where the working copy's absolute path goes, and say where its
    files are saved, by that path, so a skill or tool never writes into a
    repository's worktree. Say how its steps are grouped for several
-   repositories (`## <repo>` headings or `[repo]` tags, SPEC-11).
+   repositories (`## <repo>` headings or `[repo]` tags, SPEC-34).
 3. **List it** in `builtin()` in `src-tauri/src/spec/toolset.rs`, a pair of
    `include_str!`. The order there is the order of every pick list. Settings,
    Start work and the Repos view read the list; nothing else names it.
 4. **Mirror a repository's root.** Commit spec puts a file at the same path in a
-   repository (SPEC-12), which is what a toolset wants. Only Kiro's flat files go
+   repository (SPEC-35), which is what a toolset wants. Only Kiro's flat files go
    elsewhere, by its id (`spec_commit.rs`, `target_path`; `spec_work.rs`,
    `pr_section`). Do not add a toolset that needs another place without
    changing that deliberately, and `commit_to` alone does not move a file.
@@ -305,12 +305,12 @@ Layer only when everyone should have it.
 7. **Mock harness**: a world for it in `src/__mock__/spec-worlds.ts` and a
    `toolset` value in `docs/testing.md`, so the tab is clicked through with its
    files and steps.
-8. **Docs**: list it in SPEC-3 in `docs/features.md` §19, with its files, steps
+8. **Docs**: list it in SPEC-26 in `docs/features.md` §19, with its files, steps
    and install, and change any requirement the toolset makes untrue.
 9. **Say what you ran.** Install it into a task and read what it wrote in the
    task folder (`.spec-install.json` lists it), start an agent and ask it for
    its skills (an agent CLI Layer does not give the task folder to will not see
-   them from a worktree, SPEC-9), and tick a step from the Spec tab, the file and
+   them from a worktree, SPEC-32), and tick a step from the Spec tab, the file and
    `spec_task`. If you could not, say so.
 
 ## Fix a bug

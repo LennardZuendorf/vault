@@ -9,7 +9,7 @@
 //! as a draft elsewhere.
 //!
 //! Every file is drafted in one run for the whole task, however many
-//! repositories it touches (SPEC-25): the requirements, so the split of the
+//! repositories it touches (SPEC-5): the requirements, so the split of the
 //! work is decided in one place; the design, reading every repository's
 //! code, so both sides of an endpoint are described once; and every
 //! repository's tasks, so what comes first across them is decided in one
@@ -58,7 +58,7 @@ pub struct Drafted {
     pub before: Option<String>,
 }
 
-/// What Apply answers did to the requirements (SPEC-26), by id, and what the
+/// What Apply answers did to the requirements (SPEC-20), by id, and what the
 /// file held before, for Undo.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AppliedAnswers {
@@ -143,7 +143,7 @@ fn reading_dir(state: &AppState, task: &Task, repos: &[Repo]) -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
-/// Draft one file of the spec (SPEC-25), streamed as `spec:draft` into its
+/// Draft one file of the spec (SPEC-5), streamed as `spec:draft` into its
 /// editor and then written into the file: the requirements (a bug's analysis,
 /// when the spec is a bug's or `kind` says so for the first draft), the design,
 /// or every repository's tasks. Returns what the file held before.
@@ -216,7 +216,7 @@ fn draft_inner(
             let ticket = agent_file_dir(state, task).and_then(|d| std::fs::read_to_string(d.join(TICKET_FILE)).ok());
             // What the user answered on the draft before is decided: a
             // redraft from the ticket alone asked it all again and threw the
-            // answers away (SPEC-25).
+            // answers away (SPEC-5).
             let decided = text_of(&dir, &t, rel)?.map(|text| spec::answered(&text)).unwrap_or_default();
             let prompt =
                 requirements_prompt(task, kind, &folders, &task_repos(state, task), ticket.as_deref(), &decided);
@@ -263,7 +263,7 @@ fn draft_inner(
     };
     // Written from the file as it is now: the run took minutes, and an agent
     // may have ticked a step in them. Done stays done, and a step left without
-    // its requirements is marked, not dropped (SPEC-25).
+    // its requirements is marked, not dropped (SPEC-5).
     let (before, out) = update_spec(state, task, rel, |current| {
         Ok(match body {
             Body::Whole(text) => text,
@@ -337,7 +337,7 @@ fn sectioned(folders: &[String], drafted: &[(String, String)], before: &[(String
     parts.join("\n")
 }
 
-/// Build the answered open questions into the requirements (SPEC-26): one
+/// Build the answered open questions into the requirements (SPEC-20): one
 /// run over the requirements as the file holds them (the tab saves them
 /// first). Streamed as `spec:draft`, then written into the file; what it held
 /// before is returned, for Undo.
@@ -384,7 +384,7 @@ fn apply_inner(state: &AppState, task: &Task, say: &dyn Fn(&str, &str), run: Run
 }
 
 /// Check one repository's work against the requirements that name it
-/// (SPEC-27): a run that may read the worktree, over the requirements and the
+/// (SPEC-15): a run that may read the worktree, over the requirements and the
 /// design as the working copy holds them now, and the branch's changes from
 /// its branch point. Kept with the commit it was checked at.
 #[tauri::command]

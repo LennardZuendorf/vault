@@ -51,7 +51,7 @@ pub struct Project {
     /// loop runs only a command that is this, word for word (LOOP-1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_approved: Option<String>,
-    /// Where specs are committed here (SPEC-5), from its root. None: `specs`.
+    /// Where specs are committed here (SPEC-28), from its root. None: `specs`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_folder: Option<String>,
     /// The spec toolset this repository prefers, by id: only the default

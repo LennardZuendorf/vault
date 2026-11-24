@@ -6,7 +6,8 @@ Status: implemented (see docs/features.md §19) · 2026-11-24 · replaced `docs/
 
 `docs/features.md` §19 says what the code does; where it differs from this
 design, §19 wins. The SPEC-n ids in the rest of this document are those of
-§19 before it was rewritten, not its present ids. The differences:
+§19 before it was rewritten. §19 keeps an id only where the behaviour goes on,
+updated; the others are struck through there, with what replaced them. The differences:
 
 - **Manifests are JSON, not TOML.** `config.json` is JSON and nothing depends
   on a TOML parser. The built-ins are `src-tauri/toolsets/<id>.json` with the

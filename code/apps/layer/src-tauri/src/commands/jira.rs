@@ -227,7 +227,7 @@ pub async fn task_prompt(
     with_spec(app, task, prompt).await
 }
 
-/// `prompt` with the spec's line after it (SPEC-19, SPEC-20): where the spec is,
+/// `prompt` with the spec's line after it (SPEC-11, SPEC-38): where the spec is,
 /// and with Spec first on, to write it before any code. A route that adds to
 /// `bare_prompt` (a handoff, a sub-task's work prompt) calls this once on the
 /// whole, so the line is the last thing the agent reads.

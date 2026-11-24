@@ -465,7 +465,7 @@ export const api = {
   serverOpen: (id: string) => invoke<void>("server_open", { id }),
   serverResume: () => invoke<WorkspacePlace>("server_resume"),
   openMembers: () => invoke<void>("open_members"),
-  /** Spec first (SPEC-20): every agent Layer starts is told to write the spec before any code. */
+  /** Spec first (SPEC-38): every agent Layer starts is told to write the spec before any code. */
   setSpecFirst: (on: boolean) => invoke<void>("set_spec_first", { on }),
   setWorktreeRoot: (path: string | null) => invoke<void>("set_worktree_root", { path }),
   setUiPrefs: (ui: UiPrefs) => invoke<void>("set_ui_prefs", { ui }),

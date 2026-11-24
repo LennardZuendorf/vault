@@ -10,7 +10,7 @@
 //!
 //! It also carries what earlier tasks learned about each repository here
 //! (MEM-4), with how likely each note is to be out of date, and where the
-//! task's spec is and how its toolset works (SPEC-18).
+//! task's spec is and how its toolset works (SPEC-10).
 
 use std::path::Path;
 
@@ -39,7 +39,7 @@ pub(crate) const TICKET_FILE: &str = "TICKET.md";
 /// read into every turn of every agent in the task.
 const MAX_DESCRIPTION: usize = 8_000;
 
-/// The same for the start of the toolset's entry file (SPEC-18). Past it,
+/// The same for the start of the toolset's entry file (SPEC-10). Past it,
 /// the file has the rest.
 const MAX_ENTRY: usize = 8_000;
 
@@ -321,7 +321,7 @@ This task reviews pull request {}#{}{}, at commit `{}`: {}.              `{}` is
     md
 }
 
-/// The Spec section of the context file (SPEC-18): where the working copy
+/// The Spec section of the context file (SPEC-10): where the working copy
 /// is, the toolset's own paragraph, how to tick a step, the MCP tools, the
 /// conventions for several repositories, and the start of the toolset's
 /// entry file. Unlike the ticket it is not quoted: it is the user's and the
@@ -415,7 +415,7 @@ fn spec_section(t: &Toolset, dir: &Path, folders: &[String], entry: Option<(Stri
     md
 }
 
-/// The file of `t`'s spec that says what the work is (SPEC-18), as its path
+/// The file of `t`'s spec that says what the work is (SPEC-10), as its path
 /// in the spec folder and its text: Kiro's `requirements.md` (or a bug's
 /// `bugfix.md`), OpenSpec's newest change's `proposal.md`, superpowers'
 /// newest design, by modification time. None when it is not written yet, or

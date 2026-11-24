@@ -13,7 +13,7 @@ export interface ToolsetChoice {
 
 /** The spec's part of the app's settings (§19), which `Settings` extends. */
 export interface SpecSettings {
-  /** Agents are told to write the spec before any code (SPEC-20). */
+  /** Agents are told to write the spec before any code (SPEC-38). */
   spec_first: boolean;
   /** The toolset a task gets when nothing else says; null is Kiro. */
   default_toolset: string | null;
@@ -23,7 +23,7 @@ export interface SpecSettings {
   custom_toolsets: unknown[];
 }
 
-/** One part of a Kiro spec, for Draft (SPEC-25). */
+/** One part of a Kiro spec, for Draft (SPEC-5). */
 export type SpecPart = "requirements" | "design" | "tasks";
 export type SpecKind = "feature" | "bugfix";
 
@@ -74,7 +74,7 @@ export interface SpecVerdict {
   evidence: string;
 }
 
-/** The last check against the spec (SPEC-27). `stale`: the branch moved on since. */
+/** The last check against the spec (SPEC-15). `stale`: the branch moved on since. */
 export interface SpecCheck {
   sha: string;
   at: number;
@@ -111,7 +111,7 @@ export interface Drafted {
   before: string | null;
 }
 
-/** What Apply answers did to the requirements, by id, and what the file held before (SPEC-26). */
+/** What Apply answers did to the requirements, by id, and what the file held before (SPEC-20). */
 export interface AppliedAnswers {
   path: string;
   before: string;

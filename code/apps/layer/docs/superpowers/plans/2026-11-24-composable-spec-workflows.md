@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Note:** The SPEC-n ids in this plan are those of `docs/features.md` §19 before it was rewritten (some of them from this branch's own earlier drafts), not its present ids.
+
 **Goal:** Replace Layer's app-owned Kiro spec pipeline with a file-first spec working copy at the task root, driven by pluggable toolset manifests (Kiro, OpenSpec, superpowers, custom), installed per task, editable by agents over files or MCP.
 
 **Architecture:** A toolset manifest (JSON data) tells generic Rust code where spec files live, which hold checkbox steps, how to install the toolset into the task folder, and what the root `AGENTS.md` says. The working copy is `<task>/spec/`, a mirror of a repository root; Commit spec copies it into each repository per that repository's setting. A `notify` watcher pushes `spec:changed` to the Spec tab.

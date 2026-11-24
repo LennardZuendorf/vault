@@ -100,7 +100,7 @@ __mock.on("github_open_prs", () => [{ checkout_id: "c-login-api", repo: "api", o
 __mock.world.panes[0].activity = "done"; __mock.emit("pty:activity", "pane-claude")
 __mock.emit("system-notify-click", "pane:t-login:pane-shell")   // a banner clicked (NOTE-4)
 __mock.print("pane-shell", "hello\r\n")    // a pane prints, live over its terminal's channel
-__mock.spec.write("t-login", "tasks.md", text)   // an agent writes a spec file: the Spec tab follows (SPEC-15)
+__mock.spec.write("t-login", "tasks.md", text)   // an agent writes a spec file: the Spec tab follows (SPEC-36)
 __mock.spec.commitFails = ["web"]             // Commit spec fails in web, and keeps api's
 ```
 
