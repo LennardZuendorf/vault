@@ -59,7 +59,7 @@ export function SpecSettings() {
       <div className="switch-list" style={{ marginBottom: 14 }}>
         <Switch
           label="Always write a spec first"
-          detail="Every agent Layer starts is told to write or update the spec before it changes any code. Instructions only: nothing stops an agent that ignores them."
+          detail="Every agent Layer starts is told to write or update the spec, then stop until you say go. Sub-tasks work from their epic's spec and are not told. Instructions only: nothing stops an agent that ignores them."
           checked={settings.spec_first}
           onChange={(on) => void save(() => setSpecFirst(on))}
         />

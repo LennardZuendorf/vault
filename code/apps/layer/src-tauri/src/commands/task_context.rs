@@ -241,7 +241,7 @@ fn task_context(
 ) -> String {
     let mut md = format!("# {}\n\n", task.name);
     if let Some(line) = spec_first {
-        md.push_str(&format!("{line} Then implement it step by step, ticking each step.\n\n"));
+        md.push_str(&format!("{line} Once they do, implement it step by step, ticking each step.\n\n"));
     }
     md.push_str(&format!(
         "Written by Layer. You are in the task folder, not inside a \
@@ -728,11 +728,13 @@ mod tests {
 
     #[test]
     fn spec_first_puts_its_line_at_the_top_of_the_context() {
-        let line = "Write or update the spec in /work/acme-12/spec before you change any code.";
+        let line = crate::commands::spec_work::spec_first_line(Path::new("/work/acme-12/spec"));
+        let line = line.as_str();
         let md = task_context(&task(), &[], None, Some(&section("kiro", &["api"])), Some(line));
         let body = md.split_once("\n\n").unwrap().1;
         assert!(body.starts_with(line), "{md}");
-        assert!(md.contains("Then implement it step by step, ticking each step."));
+        assert!(line.ends_with("change no code until the user tells you to go on."), "{line}");
+        assert!(md.contains("Once they do, implement it step by step, ticking each step."));
         assert!(md.find(line).unwrap() < md.find("## The spec").unwrap());
     }
 
@@ -799,7 +801,7 @@ mod tests {
         state.config.update(|c| c.spec_first = true).unwrap();
         write_task_context(&state, &task).unwrap();
         let md = get(&root.join("tasks/T-1/CLAUDE.md"));
-        let line = format!("Write or update the spec in {} before you change any code.", spec.display());
+        let line = crate::commands::spec_work::spec_first_line(&spec);
         assert!(md.split_once("\n\n").unwrap().1.starts_with(&line), "{md}");
         std::fs::remove_dir_all(&root).ok();
     }

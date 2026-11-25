@@ -336,7 +336,7 @@ export function StartWorkDialog({
               />
               {locked
                 ? "Write a spec first: on for every agent, in Settings → Code"
-                : "Write a spec first: the agent starts by writing the spec, and the task opens on the Spec tab"}
+                : "Write a spec first: the agent writes the spec and waits for your go; the task opens on the Spec tab"}
             </label>
           )}
         </>

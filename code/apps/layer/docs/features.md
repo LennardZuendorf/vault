@@ -1483,7 +1483,7 @@ Known gaps:
 | Agents: Henchman's custom instructions | none | HEN-17 |
 | Agents: Task folder location | `~/.villain-worktrees` | where task folders go |
 | Keep awake (the cup in the top bar) | off | STATE-7, PHONE-8 |
-| Code: Always write a spec first | off | every agent is told to write the spec before any code (SPEC-38), and Start work's "Write a spec first" is on and locked; `set_spec_first` |
+| Code: Always write a spec first | off | every agent is told to write the spec before any code, then wait for your go (SPEC-38), and Start work's "Write a spec first" is on and locked; `set_spec_first` |
 | Code: Default toolset | Kiro | the spec toolset a new task gets unless Start work's pick, or a sub-task's epic, says otherwise (SPEC-28, SPEC-29); `set_default_toolset`, which refuses an id no toolset has |
 | Code: Custom toolsets | none | the user's own toolsets as the JSON of their manifests, on this Mac only, never shared; one whose `run` steps execute as written (SPEC-27; `set_custom_toolsets`, refused whole when one is not a manifest) |
 | Repos: a repository's spec toolset, Commit spec mode and spec folder | no toolset (the app's), `whole`, `specs` | which toolset Start work starts from for it; what Commit spec puts in it (`whole`, `own`, `none`); and, for Kiro, the folder (SPEC-28, SPEC-35); `set_project_specs`, shared with the team |
@@ -2464,12 +2464,15 @@ requirements, then design, then tasks.
 - **SPEC-38** With **Spec first** on (an app setting, off by default,
   `set_spec_first`; the switch is Settings → Code, "Always write a spec first",
   `SpecSettings.tsx`) every agent Layer starts MUST be told, in words only, to
-  write or update the spec in `<task>/spec/` before it changes any code:
-  `Write or update the spec in <path> before you change any code.` followed by
-  "Then implement it step by step, ticking each step." is the first line of the
-  context file's body, and the first sentence is the last line of every opening
+  write or update the spec in `<task>/spec/` before it changes any code, and
+  then to stop until the user says go (`spec_first_line`): `Write or update the
+  spec in <path> before you change any code. Then stop: say the spec is ready,
+  and change no code until the user tells you to go on.` followed by "Once they
+  do, implement it step by step, ticking each step." is the first line of the
+  context file's body, and the two sentences are the last line of every opening
   prompt (SPEC-11), also while the spec folder is still empty. A review is never
-  told it. Nothing blocks an agent that ignores it. Start work's "Write a spec
+  told it, nor a sub-task: it works from its epic's spec, already agreed
+  (EPIC-8). Nothing blocks an agent that ignores it. Start work's "Write a spec
   first" (SPEC-18) is on and cannot be turned off while the setting is on.
 - **SPEC-12** The work prompt (a sub-task's agent starts with it, EPIC-8;
   `spec_work.rs`, `work_prompt`) MUST send an agent through the spec's steps:
@@ -2490,7 +2493,7 @@ requirements, then design, then tasks.
   added, and refuse a toolset nothing has before a folder is made. With an agent
   picked it MUST offer "Write a spec first" (`write_spec`), on until turned off
   and remembered. With it the task is made and the ticket moved as without it,
-  the picked agent starts at once with the Spec first sentence (SPEC-38) at the
+  the picked agent starts at once with the Spec first sentences (SPEC-38) at the
   end of its prompt, and the task opens on its Spec tab. With Spec first on as a
   setting the option is on and locked. An epic-level ticket makes an epic
   (EPIC-2), starts no agent and opens on Spec.

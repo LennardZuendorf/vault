@@ -325,16 +325,28 @@ pub async fn spec_call(app: &tauri::AppHandle, args: Value, caller: Option<&str>
     .await
 }
 
-/// The sentence that tells an agent to write the spec first (Spec first,
-/// SPEC-38), naming the working copy by its full path.
+/// What tells an agent to write the spec first and then wait for the user's
+/// go (Spec first, SPEC-38), naming the working copy by its full path. Only
+/// "before any code" was said before, and an agent wrote the spec and went
+/// straight on into code nobody had agreed to.
 pub(crate) fn spec_first_line(dir: &Path) -> String {
-    format!("Write or update the spec in {} before you change any code.", dir.display())
+    format!(
+        "Write or update the spec in {} before you change any code. Then stop: say the spec is ready, \
+         and change no code until the user tells you to go on.",
+        dir.display()
+    )
 }
 
-/// That sentence, when the setting is on and the task is one an agent writes
-/// code in: a review changes none, and has no spec of its own.
+/// Whether a task is told Spec first at all: one an agent writes code in from
+/// a spec of its own. A review changes no code; a sub-task works from its
+/// epic's spec, already agreed, and would only stop before it.
+fn told_spec_first(task: &Task) -> bool {
+    task.review.is_none() && task.sub_task.is_none()
+}
+
+/// That sentence, when the setting is on and the task is told it.
 pub(crate) fn spec_first_for(state: &AppState, task: &Task) -> Option<String> {
-    (state.config.with(|c| c.spec_first) && task.review.is_none()).then(|| spec_first_line(&spec_dir(state, task)))
+    (state.config.with(|c| c.spec_first) && told_spec_first(task)).then(|| spec_first_line(&spec_dir(state, task)))
 }
 
 /// What an opening prompt gains for a task's spec (SPEC-11): where the
@@ -371,7 +383,7 @@ pub(crate) fn with_spec_line(state: &AppState, task: &Task, prompt: String) -> S
 /// `write_first` asks for it (Start work's "Write a spec first") and the
 /// setting has not put it there already. A review is never told it.
 pub(crate) fn with_spec_first(state: &AppState, task: &Task, prompt: String, write_first: bool) -> String {
-    if !write_first || task.review.is_some() || state.config.with(|c| c.spec_first) {
+    if !write_first || !told_spec_first(task) || state.config.with(|c| c.spec_first) {
         return prompt;
     }
     format!("{prompt}\n\n{}", spec_first_line(&spec_dir(state, task)))
@@ -765,7 +777,7 @@ mod tests {
         let (root, state, task) = world(&["api"]);
         on(&state);
         let dir = root.join("tasks/T-1/spec");
-        let line = format!("{FIRST}{} before you change any code.", dir.display());
+        let line = spec_first_line(&dir);
 
         // Even with no spec written yet, which is when it matters.
         assert_eq!(prompt_line(&state, &task).as_deref(), Some(line.as_str()));
@@ -877,10 +889,10 @@ mod tests {
     }
 
     #[test]
-    fn the_spec_first_line_is_last_in_a_handoff_and_in_a_sub_tasks_prompt() {
+    fn the_spec_first_line_is_last_in_a_handoff_and_a_sub_task_working_from_its_epics_spec_is_not_told_it() {
         let (root, state, task) = world(&["api"]);
         on(&state);
-        let line = format!("{FIRST}{} before you change any code.", root.join("tasks/T-1/spec").display());
+        let line = spec_first_line(&root.join("tasks/T-1/spec"));
         let opening = crate::commands::jira::plain_prompt(&task, &[], true);
 
         let handoff = crate::commands::jira::handoff_text(&opening, "", Some(("claude", "tail")));
@@ -890,11 +902,13 @@ mod tests {
         assert_eq!(handoff.matches(&line).count(), 1);
 
         let work = "Work through the steps in tasks.md".to_string();
+        let mut sub_task = task.clone();
+        sub_task.sub_task = Some(crate::config::SubTaskOf { epic: "T-0".into(), title: "API".into() });
         let sub = crate::commands::epics::sub_task_prompt(opening.clone(), work.clone());
-        let sub = with_spec_line(&state, &task, sub);
-        assert!(sub.find(&work).unwrap() < sub.find(&line).unwrap(), "{sub}");
-        assert!(sub.ends_with(&line), "{sub}");
-        assert_eq!(sub.matches(&line).count(), 1);
+        let sub = with_spec_line(&state, &sub_task, sub);
+        assert!(sub.contains(&work), "{sub}");
+        assert!(!sub.contains(FIRST), "{sub}");
+        assert_eq!(with_spec_first(&state, &sub_task, work.clone(), true), work);
         std::fs::remove_dir_all(&root).ok();
     }
 
