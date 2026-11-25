@@ -2227,8 +2227,15 @@ requirements, then design, then tasks.
   the repository's other settings (`config/project.rs`, `config/shared.rs`,
   `crates/domain`, migration `0007_spec_toolsets.sql`). `specs_in_app = true`,
   which earlier builds had, reads as `spec_commit = none` wherever it is found:
-  the config, the changes still queued for the workspace, and the database. A
-  toolset id is checked as a manifest's is. The app's own settings, on this Mac
+  the config, the changes still queued for the workspace, the database, and a
+  change an older Layer sends the server (`layer_domain::specs_in_app`, in the
+  sync rules' create and update). An older Layer's `specs_in_app = false` MUST
+  change nothing: it reads every repository as `false` and sends that with any
+  change, so taking it as `whole` would undo `own` and `none`. A toolset id is
+  checked as a manifest's is. The web app's repository settings offer the same
+  three (`web/src/repositories.tsx`): the built-in toolsets or each Mac's
+  default, plus a team's own id when one is set, and the folder only where
+  Kiro or the default is in force. The app's own settings, on this Mac
   only, are the default toolset (Kiro unless changed; `set_default_toolset`,
   which refuses an id no toolset has) and the custom toolsets (SPEC-27); Spec
   first is SPEC-38.

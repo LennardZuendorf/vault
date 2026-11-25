@@ -41,6 +41,6 @@ pub use protocol::{
 };
 pub use repository::{
     Repository, RepositoryCreate, RepositoryPatch, SpecCommit, UpdateBy, remote_key,
-    repository_folder,
+    repository_folder, specs_in_app,
 };
 pub use user::User;

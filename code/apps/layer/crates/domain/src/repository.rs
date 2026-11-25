@@ -76,6 +76,11 @@ pub struct RepositoryCreate {
     pub spec_folder: Option<String>,
     pub spec_toolset: Option<String>,
     pub spec_commit: Option<SpecCommit>,
+    /// Layer before 0.17 sends this instead of `spec_commit`; `true` is
+    /// `none` (see [`specs_in_app`]). Never sent back.
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
+    pub specs_in_app: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
@@ -91,6 +96,11 @@ pub struct RepositoryPatch {
     pub spec_folder: Option<Option<String>>,
     pub spec_toolset: Option<Option<String>>,
     pub spec_commit: Option<SpecCommit>,
+    /// Layer before 0.17 sends this instead of `spec_commit`; `true` is
+    /// `none` (see [`specs_in_app`]). Never sent back.
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
+    pub specs_in_app: Option<bool>,
 }
 
 impl Validate for RepositoryCreate {
@@ -147,6 +157,21 @@ fn toolset_id(value: &str) -> Result<(), ValidationError> {
         invalid(format!(
             "{value:?} can't be a toolset's id: lowercase letters, digits, - or _."
         ))
+    }
+}
+
+/// Says an older client's `specs_in_app` as `spec_commit`, in the fields
+/// it sent, so a team whose Macs are not all on one version still syncs.
+/// `true` is `none`. `false` is dropped: an older client never sees `none`
+/// (it reads a missing `specs_in_app` as `false`) and sends `false` with
+/// every change, so taking it as `whole` would undo `own` or `none` each
+/// time someone on an older Layer touched the repository.
+pub fn specs_in_app(data: &mut serde_json::Map<String, serde_json::Value>) {
+    let Some(old) = data.remove("specs_in_app") else {
+        return;
+    };
+    if old.as_bool() == Some(true) && !data.contains_key("spec_commit") {
+        data.insert("spec_commit".into(), serde_json::json!(SpecCommit::None));
     }
 }
 
