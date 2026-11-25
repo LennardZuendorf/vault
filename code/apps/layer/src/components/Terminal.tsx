@@ -5,7 +5,9 @@ import { Terminal } from "@xterm/xterm";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { api } from "../lib/api";
 import { whenBehind } from "../lib/catchUp";
+import { saveDroppedImages, terminalPaths } from "../lib/chatDrop";
 import { afterDrag, isDragging } from "../lib/drag";
+import { optionTypedAt } from "../lib/optionAt";
 import { unframe } from "../lib/paneFeed";
 import { decode, TERMINAL_FONT, terminalTheme } from "../lib/terminal";
 import { currentTheme, type Theme } from "../lib/theme";
@@ -104,6 +106,8 @@ class PaneTerminal {
   private disposed = false;
   private readonly subs: { dispose(): void }[] = [];
   private readonly ro: ResizeObserver;
+  /** Dropped images still being saved: a second drop waits for them. */
+  private saving = false;
 
   constructor(private readonly id: string) {
     this.el.className = "term-host";
@@ -124,6 +128,13 @@ class PaneTerminal {
       macOptionClickForcesSelection: true,
     });
     this.term.loadAddon(this.fit);
+    this.term.attachCustomKeyEventHandler((e) => {
+      if (!optionTypedAt(e)) return true;
+      e.preventDefault();
+      e.stopPropagation();
+      this.term.input(e.key);
+      return false;
+    });
     // xterm reports every mouse movement to such an agent as input, and
     // input clears the selection: one made with ⌥-drag was gone the moment
     // the mouse moved, before ⌘C. Hovering is held back while there is a
@@ -135,6 +146,16 @@ class PaneTerminal {
       },
       true,
     );
+    this.el.addEventListener("dragover", (e) => {
+      if (!e.dataTransfer?.types.includes("Files")) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    });
+    this.el.addEventListener("drop", (e) => {
+      if (!e.dataTransfer?.types.includes("Files")) return;
+      e.preventDefault();
+      void this.dropImages(e.dataTransfer.files);
+    });
     this.subs.push(
       this.term.onData((d) => {
         void api.ptyWrite(id, d).catch(() => {});
@@ -206,6 +227,33 @@ class PaneTerminal {
     this.dropGpu();
     this.term.dispose();
     this.el.remove();
+  }
+
+  /**
+   * Save dropped images beside the task and paste their paths, as a Mac
+   * terminal pastes a dropped file's (PANE-19). The page cannot see where a
+   * dropped file lives, only what is in it, so the copy is what gets a path.
+   * Pasted, not typed: bracketed paste is how an agent tells a path handed
+   * to it from one typed a key at a time.
+   */
+  private async dropImages(files: FileList) {
+    const { fail } = useStore.getState();
+    if (this.saving) {
+      fail("Still saving images. Drop them again when it finishes.");
+      return;
+    }
+    if (!files.length) return;
+    this.saving = true;
+    try {
+      const { paths, errors } = await saveDroppedImages(this.id, files);
+      if (paths.length && !this.disposed) {
+        this.term.paste(`${terminalPaths(paths)} `);
+        this.term.focus();
+      }
+      if (errors.length) fail(errors.join(" "));
+    } finally {
+      this.saving = false;
+    }
   }
 
   /** Fit to the size on screen, if it is on screen. */

@@ -1,4 +1,5 @@
 import { CHAT_TASK_ID, paneName, taskTotals } from "./derive";
+import { isRoutineRun } from "./routines";
 import type { CheckoutPr, PaneInfo, TaskView } from "./types";
 
 /**
@@ -11,6 +12,23 @@ export type LairGroup = "needs_you" | "to_finish" | "moving" | "not_started" | "
 /** The Henchman's pane: a chat in its own room (HEN-2). */
 export function isHenchman(p: Pick<PaneInfo, "task_id" | "cwd">): boolean {
   return p.task_id === CHAT_TASK_ID && /[/\\]_chat[/\\]henchman[/\\]?$/.test(p.cwd);
+}
+
+/**
+ * Whether the top bar's Chat tab shows its live dot (§15): a chat at work,
+ * not one merely running. Chats restored at launch sit running at their
+ * prompt, so "running" alone kept the dot green with every chat idle. The
+ * Henchman and routine runs have tabs of their own.
+ */
+export function chatAtWork(panes: readonly PaneInfo[]): boolean {
+  return panes.some(
+    (p) =>
+      p.task_id === CHAT_TASK_ID &&
+      p.running &&
+      p.activity === "working" &&
+      !isHenchman(p) &&
+      !isRoutineRun(p),
+  );
 }
 
 export interface Facts {
@@ -137,7 +155,8 @@ export function waiting(
     out.push({ w: { id: task.id, key, why, task, pane, finish }, rank: finish ? 9 : s.rank });
   }
   for (const p of panes) {
-    if (p.task_id !== CHAT_TASK_ID || p.kind !== "agent" || isHenchman(p)) continue;
+    if (p.task_id !== CHAT_TASK_ID || p.kind !== "agent" || isHenchman(p) || isRoutineRun(p))
+      continue;
     if (!p.running || p.activity !== "asking") continue;
     const w = { id: p.id, key: "Chat", why: `“${paneName(p)}” asks you`, task: null, pane: p };
     out.push({ w: { ...w, finish: false }, rank: 0.5 });

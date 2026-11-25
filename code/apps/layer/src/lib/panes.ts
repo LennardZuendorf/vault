@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useStore } from "../store";
 import { fleetAgents, taskAgents } from "./derive";
 import { isHenchman } from "./lair";
+import { isRoutineRun } from "./routines";
 import type { PaneInfo } from "./types";
 
 /**
@@ -19,7 +20,9 @@ export function usePanesOf(taskId: string): { panes: PaneInfo[]; ids: string[] }
   // compared item by item this is the same list until one of these moves.
   // The Henchman is a chat with a tab of its own (HEN-2), not one of Chat's.
   const panes = useStore(
-    useShallow((s) => s.panes.filter((p) => p.task_id === taskId && !isHenchman(p))),
+    useShallow((s) =>
+      s.panes.filter((p) => p.task_id === taskId && !isHenchman(p) && !isRoutineRun(p)),
+    ),
   );
   // What depends on which panes there are, not on what they are doing,
   // follows the ids alone.

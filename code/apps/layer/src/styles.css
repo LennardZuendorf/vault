@@ -519,235 +519,182 @@ body.dragging * {
   justify-content: center;
 }
 
-/* --------------------------------------------------------------- browser */
-
-/* A task's tab beside its terminals (BRW-9). The page is a picture Chrome
-   draws, so the screen is plain: the canvas is the page's own size. */
-.browser-side {
-  flex: none;
-  min-width: 320px;
+/* Settings → Browser (BRW-3, BRW-18). Sites are chips that wrap, so a long
+   list stays a few lines and the field to add one sits above it. */
+.browser-add {
   display: flex;
-  overflow: hidden;
+  gap: 8px;
+  margin-bottom: 10px;
 }
-.browser {
+.browser-add .ui-field,
+.sign-in-fields .ui-field {
+  height: 28px;
+  padding: 0 8px;
+  min-width: 0;
+}
+.browser-add .ui-field {
   flex: 1;
-  min-width: 0;
+}
+.site-chips {
   display: flex;
-  flex-direction: column;
-  background: var(--surface);
-  border-radius: var(--radius-lg);
-  margin: 0 8px 8px 0;
-  overflow: hidden;
-}
-.browser-tabs {
-  display: flex;
-  align-items: center;
-  padding: 5px 6px 0;
-  overflow-x: auto;
-}
-.browser-tabs.locked {
-  opacity: 0.55;
-}
-.browser-tabs.locked .browser-tab {
-  cursor: not-allowed;
-}
-.browser-tab {
-  display: flex;
-  align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  min-width: 0;
-  max-width: 200px;
-  flex: 0 1 auto;
+  margin: 0;
   padding: 0;
-  font-size: var(--type-ui-small-size);
-  color: var(--muted);
-  cursor: pointer;
-  white-space: nowrap;
+  list-style: none;
 }
-.browser-tab-name {
-  min-width: 0;
-  max-width: 180px;
-}
-.browser-tab .name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.browser-tab .x {
+.site-chip {
   display: inline-flex;
-  padding: 2px;
-  border-radius: var(--radius-sm);
-  color: var(--faint);
-  opacity: 0;
+  align-items: center;
+  height: 24px;
+  padding: 0 3px 0 10px;
+  color: var(--fg);
+  font-weight: 400;
 }
-.browser-tab:hover .x,
-.browser-tab.active .x {
+.site-chip code,
+.sign-in-site,
+.sign-in-fields .ui-field:first-child {
+  font-family: var(--font-mono);
+  font-size: var(--type-ui-code-size);
+}
+.site-chip-mac {
+  padding: 0 10px;
+  color: var(--muted);
+  font-weight: var(--type-control-weight);
+}
+/* Quiet until the chip is hovered or the button has focus: fourteen
+   crosses always on screen read as fourteen warnings. */
+.site-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 1px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  cursor: pointer;
+}
+.site-chip:hover .site-chip-remove,
+.site-chip-remove:focus-visible {
   opacity: 1;
 }
-.browser-tab .x:hover:not(:disabled) {
-  color: var(--status-danger-ink);
+.site-chip-remove:hover {
   background: var(--hover);
+  color: var(--fg);
 }
-.browser-tab-new {
-  margin: 0 0 3px 2px;
-  flex: none;
+.site-chip-remove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
-.browser-bar {
+.sign-ins {
   display: flex;
+  flex-direction: column;
+  margin: 0 -8px 8px;
+}
+.sign-in-row {
+  display: grid;
+  grid-template-columns: 150px 1fr auto auto;
   align-items: center;
-  gap: 4px;
-  padding: 5px 6px;
-  background: var(--panel);
+  gap: 12px;
+  height: 32px;
+  padding: 0 10px 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
-.browser-address {
-  flex: 1;
-  min-width: 0;
-  display: flex;
+.sign-in-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
-.browser-address input {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--type-ui-small-size);
-  padding: 4px 8px;
-}
-/* Not white: the screen shows before the first frame, and a resize clears
-   the canvas until the next one, and white there was a flash in a dark app. */
-.browser-screen {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  overflow: hidden;
-  background: var(--bg);
-  outline: none;
-}
-.browser-screen.focused {
-  box-shadow: inset 0 0 0 2px var(--accent);
-}
-.browser-screen canvas {
-  position: absolute;
-  inset: 0;
-  display: block;
-  cursor: default;
-}
-.browser-screen .empty {
-  position: absolute;
-  inset: 0;
-  background: var(--panel);
-}
-.browser-starting {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
+.sign-in-site {
   color: var(--muted);
-  background: var(--panel);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-/* Off screen but focusable: where the page's keys and pastes arrive. */
-.browser-keys {
-  position: absolute;
-  left: -9999px;
-  top: 0;
-  width: 1px;
-  height: 1px;
+.sign-in-user {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sign-in-note {
+  color: var(--faint);
+  font-size: var(--type-ui-small-size);
+}
+.sign-in-change {
+  color: var(--muted);
+  font-size: var(--type-control-size);
+  font-weight: var(--type-control-weight);
   opacity: 0;
 }
-.browser-marker {
+.sign-in-row:hover .sign-in-change,
+.sign-in-row:focus-visible .sign-in-change {
+  opacity: 1;
+}
+.sign-ins .sign-in-form {
+  padding: 6px 8px 8px;
+}
+.sign-in-fields {
+  display: grid;
+  grid-template-columns: 150px 1fr 1fr;
+  gap: 8px;
+}
+.password-field {
+  position: relative;
+  display: flex;
+}
+.password-field .ui-field {
+  flex: 1;
+  padding-right: 32px;
+}
+.password-eye {
   position: absolute;
-  width: 26px;
-  height: 26px;
-  margin: -13px 0 0 -13px;
-  border-radius: 50%;
-  border: 2px solid var(--fg);
-  background: color-mix(in srgb, var(--fg) 20%, transparent);
-  pointer-events: none;
-  z-index: 2;
-  animation: browser-ping 1.2s ease-out forwards;
-}
-@keyframes browser-ping {
-  from {
-    transform: scale(0.4);
-    opacity: 1;
-  }
-  to {
-    transform: scale(1.6);
-    opacity: 0;
-  }
-}
-.browser-status {
+  top: 2px;
+  right: 2px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  font-size: var(--type-ui-small-size);
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-}
-.browser-status > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.browser-off {
-  color: var(--status-warn-ink);
-}
-.browser-ask {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  font-size: var(--type-ui-small-size);
-  background: color-mix(in srgb, var(--warn) var(--status-tint), var(--panel));
-}
-.browser-ask > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.browser-dialog {
-  background: color-mix(in srgb, var(--info) var(--status-tint), var(--panel));
-}
-.browser-dialog input {
-  width: 180px;
-  font-size: var(--type-ui-small-size);
-  padding: 3px 6px;
-}
-.browser-held {
-  color: var(--status-info-ink);
-}
-/* An agent has the page (BRW-15): a tint and a frame, so the page still reads. */
-.browser-driving {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: flex;
   justify-content: center;
-  align-items: flex-start;
-  padding-top: 12px;
-  background: color-mix(in srgb, var(--fg) var(--chip-tint), transparent);
-  cursor: not-allowed;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
 }
-.browser-driving-card {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 8px 7px 12px;
-  max-width: calc(100% - 24px);
-  border-radius: var(--radius-lg);
-  background: var(--dialog);
+.password-eye:hover,
+.password-eye[aria-pressed="true"] {
   color: var(--fg);
+}
+.password-eye:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.sign-in-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+/* A way out, not an action: the quiet button, without its fill. */
+.sign-in-cancel {
+  background: transparent;
+  padding: 0 8px;
+}
+.sign-in-help {
+  flex: 1;
+  color: var(--faint);
   font-size: var(--type-ui-small-size);
-  cursor: default;
-}
-.browser-driving-card > span:nth-child(2) {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.site-row {
-  padding: 2px 0;
 }
 /* Settings → Agents: an agent, where it is, and a line on it as a conversation (ACP-17). */
 .agent-row {

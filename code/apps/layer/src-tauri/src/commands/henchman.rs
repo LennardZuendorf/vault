@@ -5,9 +5,10 @@
 
 use std::path::Path;
 
-use tauri::{AppHandle, State};
+use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
+use tauri::{AppHandle, Emitter, State};
 
-use crate::config::HenchmanAgent;
+use crate::config::{AppConfig, HenchmanAgent, SavedPane};
 use crate::error::{Error, Result};
 use crate::pty::PaneInfo;
 
@@ -16,6 +17,19 @@ use super::AppState;
 
 /// The Henchman's room under the chat root.
 const ROOM: &str = "henchman";
+
+/// Held while the Henchman is woken and while it is turned off (HEN-16).
+/// Unheld, a wake that had found it on started its pane just after Off had
+/// stopped every one running, and it ran while off; two wakes at once both
+/// found none running and woke two. Reentrant: a wake from its tab holds it,
+/// then opens the chat, which holds it again.
+static LIFECYCLE: ReentrantMutex<()> = ReentrantMutex::new(());
+
+/// The hold on `LIFECYCLE`, for the Henchman's room only: other chats open
+/// without waiting on it.
+pub(crate) fn hold(henchman: bool) -> Option<ReentrantMutexGuard<'static, ()>> {
+    henchman.then(|| LIFECYCLE.lock())
+}
 
 /// What it is asked when woken (HEN-3): what it may do itself first, then
 /// a brief short enough to read, so the user is not asked about each
@@ -47,27 +61,39 @@ pub(crate) fn presets(chosen: &HenchmanAgent, agent: &str) -> Vec<(String, Strin
     presets
 }
 
-/// Whether `dir` is the Henchman's room. By path under the worktree root,
-/// not by creating it: this is asked of every chat pane.
-pub(crate) fn is_room(state: &AppState, dir: &Path) -> bool {
-    dir == state.config.worktree_root().join("_chat").join(ROOM)
+/// Whether `dir` is the Henchman's room: one called `henchman` in a chat
+/// folder, under any worktree root. Other chats' rooms are eight hex
+/// digits. Compared with the room under today's root, the Henchman saved
+/// under the root the user had before moving it was taken for any chat:
+/// restored after the other agents, its context file rewritten as a chat's
+/// and nothing fed to it, while the window, which matches the name, showed
+/// it as the Henchman. Not by creating it: this is asked of every chat
+/// pane.
+pub(crate) fn is_room(dir: &Path) -> bool {
+    dir.file_name().is_some_and(|name| name == ROOM)
+        && dir.parent().and_then(Path::file_name).is_some_and(|name| name == "_chat")
 }
 
 /// Whether a pane is the Henchman's, running or not.
-pub(crate) fn is_henchman(state: &AppState, pane: &PaneInfo) -> bool {
-    pane.task_id == CHAT_TASK_ID && is_room(state, Path::new(&pane.cwd))
+pub(crate) fn is_henchman(pane: &PaneInfo) -> bool {
+    pane.task_id == CHAT_TASK_ID && is_room(Path::new(&pane.cwd))
+}
+
+/// Whether a saved pane is the Henchman's (PANE-7).
+pub(crate) fn is_saved(pane: &SavedPane) -> bool {
+    pane.task_id == CHAT_TASK_ID && pane.cwd.as_deref().is_some_and(|cwd| is_room(Path::new(cwd)))
 }
 
 /// Whether the pane calling the MCP server is the Henchman's (HEN-4). The
 /// caller names itself (`X-Villain-Pane`, CHAT-3), so this only keeps the
 /// tools out of other agents' lists; none of them is dangerous.
 pub(crate) fn is_caller(state: &AppState, caller: Option<&str>) -> bool {
-    caller.and_then(|id| state.ptys.info(id).ok()).is_some_and(|p| is_henchman(state, &p))
+    caller.and_then(|id| state.ptys.info(id).ok()).is_some_and(|p| is_henchman(&p))
 }
 
 /// The Henchman's pane while it runs.
 pub(crate) fn running(state: &AppState) -> Option<PaneInfo> {
-    state.ptys.list(Some(CHAT_TASK_ID)).into_iter().find(|p| p.running && is_henchman(state, p))
+    state.ptys.list(Some(CHAT_TASK_ID)).into_iter().find(|p| p.running && is_henchman(p))
 }
 
 /// Wake the Henchman with an agent that speaks ACP, asked for a brief. While
@@ -76,6 +102,7 @@ pub(crate) fn running(state: &AppState) -> Option<PaneInfo> {
 pub async fn spawn_henchman(app: AppHandle, agent_id: String) -> Result<PaneInfo> {
     let handle = app.clone();
     super::blocking(app, move |state| {
+        let _held = hold(true);
         if let Some(pane) = running(state) {
             return Ok(pane);
         }
@@ -83,6 +110,56 @@ pub async fn spawn_henchman(app: AppHandle, agent_id: String) -> Result<PaneInfo
         open_chat(&handle, state, agent_id, Some(BRIEF.into()), Some(room), Resume::No, true)
     })
     .await
+}
+
+/// Turn the Henchman off or on again (HEN-16). Off, it is stopped and its
+/// conversation waits (PANE-7), so it is not put back at launch and its
+/// tab, once it is on again, wakes it where it left off. Closed instead of
+/// waiting, the next wake began a new conversation. Off the command thread:
+/// stopping waits up to five seconds for the agent to save.
+#[tauri::command]
+pub async fn set_henchman_on(app: AppHandle, on: bool) -> Result<()> {
+    let handle = app.clone();
+    super::blocking(app, move |state| {
+        turn(state, on)?;
+        if !on {
+            let _ = handle.emit("panes:waiting", ());
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// The switch, held against a wake (`LIFECYCLE`): one under way finishes
+/// first, and its pane is stopped with the rest.
+fn turn(state: &AppState, on: bool) -> Result<()> {
+    let _held = hold(true);
+    state.config.update(|c| switch(c, on))?;
+    if on {
+        return Ok(());
+    }
+    // An exited one too: left in the list, its Resume would wake it.
+    for pane in state.ptys.list(Some(CHAT_TASK_ID)).into_iter().filter(is_henchman) {
+        state.ptys.close(&pane.id)?;
+    }
+    Ok(())
+}
+
+/// The switch and, turned off, every saved Henchman waiting, in one write:
+/// off with a saved pane not waiting, the next launch would try it, be
+/// refused, and after a few launches forget its conversation.
+fn switch(c: &mut AppConfig, on: bool) {
+    c.henchman.off = !on;
+    c.saved_panes.iter_mut().filter(|p| !on && is_saved(p)).for_each(|p| p.waiting = true);
+}
+
+/// What `open_chat` says when the Henchman's room is asked for while it is
+/// off: every way of waking it ends there (HEN-16).
+pub(crate) fn refuse_while_off(state: &AppState) -> Result<()> {
+    if state.config.with(|c| c.henchman.off) {
+        return Err(Error::Other("The Henchman is off. Turn it on in Settings → Agents.".into()));
+    }
+    Ok(())
 }
 
 /// The agent the Henchman is woken with, and its model and effort, empty
@@ -96,6 +173,32 @@ pub fn set_henchman_agent(state: State<AppState>, agent_id: String, model: Strin
     }
     let agent = HenchmanAgent { agent_id, model: model.trim().to_string(), effort: effort.trim().to_string() };
     state.config.update(|c| c.henchman.agent = agent)
+}
+
+/// The most the user's own instructions hold (HEN-17): it reads them with
+/// the rest of its context at every wake.
+const INSTRUCTIONS_MAX: usize = 4000;
+
+/// The user's own instructions for the Henchman (HEN-17), in their words.
+/// Read each time it is woken: the one running reads them when it is next
+/// woken. Empty, there are none.
+#[tauri::command]
+pub fn set_henchman_instructions(state: State<AppState>, instructions: String) -> Result<()> {
+    let instructions = cleaned(instructions)?;
+    state.config.update(|c| c.henchman.instructions = instructions)
+}
+
+/// Instructions as kept: without the blank lines around them, and refused
+/// past the limit rather than cut, which would drop the user's last words.
+fn cleaned(instructions: String) -> Result<String> {
+    let instructions = instructions.trim();
+    let count = instructions.chars().count();
+    if count > INSTRUCTIONS_MAX {
+        return Err(Error::Other(format!(
+            "Custom instructions hold at most {INSTRUCTIONS_MAX} characters; these have {count}."
+        )));
+    }
+    Ok(instructions.to_string())
 }
 
 /// The Henchman's own context file, in place of a chat's (HEN-2): who it
@@ -203,6 +306,16 @@ pub(crate) fn write_context(state: &AppState, dir: &Path) -> Result<()> {
             md.push_str(&format!("- {}\n", p.name));
         }
     }
+    // Last, after Layer's own rules, so they read as within them (HEN-17).
+    if !cfg.henchman.instructions.is_empty() {
+        if !md.ends_with("\n\n") {
+            md.push('\n');
+        }
+        md.push_str("## Custom instructions\n\n");
+        md.push_str("The user's own instructions for you. Follow them within the rules above.\n\n");
+        md.push_str(&cfg.henchman.instructions);
+        md.push('\n');
+    }
     std::fs::write(dir.join("CLAUDE.md"), &md)?;
     std::fs::write(dir.join("AGENTS.md"), &md)?;
     // Where its settings were, which auto mode never read (`session_meta`).
@@ -272,5 +385,107 @@ mod tests {
         assert!(room.join("CLAUDE.md").exists());
         assert!(!room.join(".claude").join("settings.json").exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn turned_off_the_henchman_waits_where_it_left_off_and_cannot_be_woken() {
+        let root = std::env::temp_dir().join(format!("vl-henchman-{}", uuid::Uuid::new_v4()));
+        let state = super::super::repos::tests::state(&root, Default::default());
+        let room = state.config.worktree_root().join("_chat").join(ROOM);
+        let saved = |id: &str, cwd: &Path| -> SavedPane {
+            let pane =
+                serde_json::json!({ "id": id, "task_id": CHAT_TASK_ID, "kind": "agent", "cwd": cwd, "acp": true });
+            serde_json::from_value(pane).unwrap()
+        };
+        let other = root.join("_chat").join("a-chat");
+        state.config.update(|c| c.saved_panes = vec![saved("henchman", &room), saved("chat", &other)]).unwrap();
+        assert!(refuse_while_off(&state).is_ok(), "on until turned off");
+
+        state.config.update(|c| switch(c, false)).unwrap();
+        let waits = |id: &str| state.config.read().saved_panes.iter().any(|p| p.id == id && p.waiting);
+        assert!(waits("henchman"), "kept, not put back at launch");
+        assert!(!waits("chat"), "other chats come back as before");
+        assert!(refuse_while_off(&state).is_err());
+
+        state.config.update(|c| switch(c, true)).unwrap();
+        assert!(refuse_while_off(&state).is_ok());
+        assert!(waits("henchman"), "its tab wakes it where it left off");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn its_room_under_a_worktree_root_the_user_has_since_moved_is_still_its() {
+        let root = std::env::temp_dir().join(format!("vl-henchman-{}", uuid::Uuid::new_v4()));
+        let state = super::super::repos::tests::state(&root, Default::default());
+        let today = state.config.worktree_root().join("_chat").join(ROOM);
+        let before = root.join("moved-away").join("_chat").join(ROOM);
+        assert!(is_room(&today) && is_room(&before));
+        for other in [root.join("_chat").join("1a2b3c4d"), root.join("my_chat").join(ROOM), root.join(ROOM)] {
+            assert!(!is_room(&other), "{}", other.display());
+        }
+        let pane = serde_json::json!({ "id": "h", "task_id": CHAT_TASK_ID, "kind": "agent", "cwd": before });
+        state.config.update(|c| c.saved_panes = vec![serde_json::from_value(pane).unwrap()]).unwrap();
+        state.config.update(|c| switch(c, false)).unwrap();
+        assert!(state.config.read().saved_panes[0].waiting, "turned off, the one under the old root waits too");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn turning_it_off_waits_for_a_wake_under_way_and_the_next_wake_is_refused() {
+        let root = std::env::temp_dir().join(format!("vl-henchman-{}", uuid::Uuid::new_v4()));
+        let state = super::super::repos::tests::state(&root, Default::default());
+        let (done, turned) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            // A wake that found it on and is starting its pane.
+            let waking = hold(true);
+            assert!(refuse_while_off(&state).is_ok());
+            let state = &state;
+            s.spawn(move || {
+                turn(state, false).unwrap();
+                done.send(()).unwrap();
+            });
+            let wait = std::time::Duration::from_millis(200);
+            assert!(turned.recv_timeout(wait).is_err(), "off waits until the pane is started, then stops it");
+            assert!(refuse_while_off(state).is_ok());
+            drop(waking);
+            turned.recv().unwrap();
+        });
+        assert!(refuse_while_off(&state).is_err(), "a wake after it is refused");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_config_from_before_the_switch_keeps_the_henchman_on() {
+        let config: AppConfig = serde_json::from_value(serde_json::json!({ "henchman": { "orders": [] } })).unwrap();
+        assert!(!config.henchman.off);
+        assert!(!AppConfig::default().henchman.off);
+    }
+
+    #[test]
+    fn the_users_instructions_come_after_its_own_rules_in_both_files_and_go_when_cleared() {
+        let root = std::env::temp_dir().join(format!("vl-henchman-{}", uuid::Uuid::new_v4()));
+        let state = super::super::repos::tests::state(&root, Default::default());
+        let room = root.join("_chat").join(ROOM);
+        std::fs::create_dir_all(&room).unwrap();
+        let read = |file: &str| std::fs::read_to_string(room.join(file)).unwrap();
+        for (said, kept) in [("\n  Raise only what blocks a release.\n- Be brief.\n\n", true), ("  \n ", false)] {
+            let instructions = cleaned(said.into()).unwrap();
+            state.config.update(|c| c.henchman.instructions = instructions).unwrap();
+            write_context(&state, &room).unwrap();
+            let md = read("CLAUDE.md");
+            assert_eq!(md, read("AGENTS.md"));
+            assert_eq!(md.contains("## Custom instructions"), kept);
+            assert_eq!(md.contains("\n\nRaise only what blocks a release.\n- Be brief.\n"), kept);
+            let rules = md.find("## How to write").unwrap();
+            assert!(md.find("## Custom instructions").is_none_or(|at| at > rules));
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn instructions_past_the_limit_are_refused_whole_and_say_how_many_fit() {
+        assert!(cleaned("x".repeat(INSTRUCTIONS_MAX)).is_ok());
+        let refused = cleaned("x".repeat(INSTRUCTIONS_MAX + 1)).unwrap_err().to_string();
+        assert!(refused.contains("at most 4000 characters; these have 4001"));
     }
 }

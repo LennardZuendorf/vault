@@ -3,7 +3,9 @@ import { useShallow } from "zustand/react/shallow";
 import { AGENT_SORT_LABEL, AGENT_SORTS, sortAgents, type AgentSort } from "../lib/agentSort";
 import { api } from "../lib/api";
 import { CHAT_TASK_ID, needsYou, paneScope, paneState } from "../lib/derive";
+import { goTo } from "../lib/goto";
 import { readOneOf, write } from "../lib/persist";
+import { isRoutineRun } from "../lib/routines";
 import { markStopping, useStore } from "../store";
 import { Ago } from "./Ago";
 import { PickMenu } from "./tickets/PickMenu";
@@ -137,6 +139,8 @@ const AgentCard = memo(function AgentCard({
   if (!pane) return null;
 
   const isChat = pane.task_id === CHAT_TASK_ID;
+  // A routine's run is a chat kept on the Routines tab, named for its routine (ROUT-1).
+  const isRun = isRoutineRun(pane);
   const st = paneState(pane);
 
   return (
@@ -161,9 +165,15 @@ const AgentCard = memo(function AgentCard({
       </div>
 
       <div className="ctx">
-        <div className="task">{isChat ? "Chat" : (task?.name ?? "(task removed)")}</div>
+        <div className="task">
+          {isRun ? "Routine" : isChat ? "Chat" : (task?.name ?? "(task removed)")}
+        </div>
         <div className="branch">
-          {isChat ? pane.cwd : `${task?.branch ?? "?"} · ${paneScope(pane) ?? ""}`}
+          {isRun
+            ? pane.title
+            : isChat
+              ? pane.cwd
+              : `${task?.branch ?? "?"} · ${paneScope(pane) ?? ""}`}
         </div>
       </div>
 
@@ -174,7 +184,8 @@ const AgentCard = memo(function AgentCard({
       <button
         className="ui-button"
         onClick={() => {
-          if (isChat) setView("chat");
+          if (isRun) goTo(`pane:${CHAT_TASK_ID}:${pane.id}`);
+          else if (isChat) setView("chat");
           else if (task) select(task.id);
         }}
       >

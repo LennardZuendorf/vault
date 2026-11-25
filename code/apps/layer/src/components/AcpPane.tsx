@@ -8,18 +8,27 @@ import {
   type ClipboardEvent,
   type ReactNode,
 } from "react";
+import { suggestedCommands } from "../lib/acpCommands";
 import { layerSaid } from "../lib/acpEntries";
-import { heldConversation, holdConversation, pruneConversations } from "../lib/acpPool";
+import {
+  heldConversation,
+  heldDraft,
+  holdConversation,
+  holdDraft,
+  pruneConversations,
+} from "../lib/acpPool";
 import { onAcpUpdate } from "../lib/acpUpdates";
 import { api } from "../lib/api";
+import { appendAttachmentPaths, useChatDrop } from "../lib/chatDrop";
 import type { IssueKeys } from "../lib/issue-keys";
 import { pastedImages, readImage, type PastedImage } from "../lib/pastedImage";
-import type { AcpEntry, AcpImage, AcpToolContent, AcpView, PaneInfo } from "../lib/types";
+import type { AcpEntry, AcpToolContent, AcpView, PaneInfo } from "../lib/types";
 import { useStore } from "../store";
+import { SentImages } from "./AcpSentImages";
 import { useIssueKeys } from "./IssueKeyLink";
 import { Markdown } from "./Markdown";
 import { TerminalPane } from "./Terminal";
-import { ErrorMessage, Modal, useFailure } from "./ui";
+import { ErrorMessage, useFailure } from "./ui";
 
 /* oxlint-disable react/no-array-index-key -- what an agent sent, in order: its plan's steps, tool output and pasted images have no ids */
 
@@ -42,7 +51,8 @@ export const PaneView = memo(function PaneView({
   ask?: string;
 }) {
   return pane.acp ? (
-    <AcpPane pane={pane} visible={visible} head={head} ask={ask} />
+    // Keyed: what it holds is seeded from the pools for one pane.
+    <AcpPane key={pane.id} pane={pane} visible={visible} head={head} ask={ask} />
   ) : (
     <TerminalPane pane={pane} visible={visible} />
   );
@@ -70,6 +80,7 @@ function AcpPane({
   // above it for a question answered in the log (NOTE-6).
   const failure = useFailure();
   const fail = failure.fail;
+  const dropFailure = useFailure();
   const textSize = useStore((s) => s.settings?.ui.conversation_font_size ?? 14);
   const keys = useIssueKeys();
   const shown = visible && appActive;
@@ -125,9 +136,21 @@ function AcpPane({
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
   }, [entries, shown]);
 
-  const [draft, setDraft] = useState("");
-  const [images, setImages] = useState<PastedImage[]>([]);
+  // Kept in `acpPool.ts` too, so leaving the pane and coming back finds
+  // what was typed (ACP-21).
+  const [draft, setDraft] = useState(() => heldDraft(pane.id).text);
+  const [images, setImages] = useState<PastedImage[]>(() => heldDraft(pane.id).images);
+  useEffect(() => holdDraft(pane.id, { text: draft, images }), [pane.id, draft, images]);
+  const over = !pane.running || (view?.exited ?? false);
+  const { dragging, setDragging, saving, savingRef, drop } = useChatDrop(
+    pane.id,
+    over,
+    (paths) => setDraft((now) => appendAttachmentPaths(now, paths)),
+    dropFailure.fail,
+    dropFailure.clear,
+  );
   const send = async () => {
+    if (savingRef.current) return;
     const text = draft.trim();
     if (!text && images.length === 0) return;
     const sent = images;
@@ -142,8 +165,8 @@ function AcpPane({
         sent.map(({ mimeType, data }) => ({ mimeType, data })),
       );
     } catch (e) {
-      setDraft(text);
-      setImages(sent);
+      setDraft((now) => text + (now ? `\n${now}` : ""));
+      setImages((now) => [...sent, ...now]);
       fail(e);
     }
   };
@@ -172,11 +195,7 @@ function AcpPane({
     attempt(() => api.acpSet(pane.id, setting, value));
 
   const busy = view?.busy ?? false;
-  const over = !pane.running || (view?.exited ?? false);
-  const commands =
-    draft.startsWith("/") && !draft.includes(" ")
-      ? (view?.commands ?? []).filter((c) => c.name.startsWith(draft.slice(1))).slice(0, 8)
-      : [];
+  const commands = suggestedCommands(view?.commands ?? [], draft);
 
   return (
     // oxlint-disable-next-line jsx-a11y/no-static-element-interactions -- not a control: it hears Esc from anything in the pane
@@ -235,7 +254,19 @@ function AcpPane({
               ))}
             </div>
           )}
-          <div className="ui-field acp-box">
+          <div
+            className={`ui-field acp-box${dragging ? " acp-box-dragging" : ""}`}
+            onDragOver={(e) => {
+              if (!over && e.dataTransfer.types.includes("Files")) {
+                e.preventDefault();
+                setDragging(true);
+              }
+            }}
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+            }}
+            onDrop={drop}
+          >
             {images.length > 0 && (
               <div className="acp-images">
                 {images.map((img, i) => (
@@ -311,7 +342,7 @@ function AcpPane({
               ) : (
                 <button
                   className={`ui-button${over || (!draft.trim() && images.length === 0) ? "" : " ui-button-primary"}`}
-                  disabled={over || (!draft.trim() && images.length === 0)}
+                  disabled={over || saving || (!draft.trim() && images.length === 0)}
                   onClick={() => void send()}
                 >
                   Send
@@ -320,6 +351,7 @@ function AcpPane({
             </div>
           </div>
           <ErrorMessage>{failure.error}</ErrorMessage>
+          <ErrorMessage>{dropFailure.error}</ErrorMessage>
         </div>
       </div>
     </div>
@@ -335,34 +367,6 @@ import.meta.hot?.dispose(unsubscribe);
 
 function kilo(n: number): string {
   return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
-}
-
-/**
- * What the user sent with their words (ACP-16), small; a click shows one
- * whole. It was only named "[image]", so a screenshot sent an hour ago could
- * not be told from another.
- */
-function SentImages({ images }: { images: AcpImage[] }) {
-  const [open, setOpen] = useState<number | null>(null);
-  const url = (img: AcpImage) => `data:${img.mimeType};base64,${img.data}`;
-  return (
-    <div className="acp-images">
-      {images.map((img, i) => (
-        <button key={i} className="acp-sent-image" title="Show it whole" onClick={() => setOpen(i)}>
-          <img src={url(img)} alt={`Sent ${i + 1}`} />
-        </button>
-      ))}
-      {open !== null && images[open] && (
-        <Modal
-          title={images.length > 1 ? `Image ${open + 1} of ${images.length}` : "Image"}
-          className="acp-image-view"
-          onClose={() => setOpen(null)}
-        >
-          <img src={url(images[open])} alt={`Sent ${open + 1}`} />
-        </Modal>
-      )}
-    </div>
-  );
 }
 
 /** One entry. Redrawn only when it changed: a reply streams in token by token. */

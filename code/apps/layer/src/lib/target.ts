@@ -10,6 +10,7 @@
 export type Step =
   | { view: "work"; task: string | null; tab?: "pr"; pane?: string }
   | { view: "chat"; pane?: string }
+  | { view: "routines"; routine?: string }
   | { view: "reviews"; review?: string }
   | { view: "tickets"; issue?: string };
 
@@ -60,6 +61,10 @@ export function route(target: string, known: Known): Step | null {
 
   const issue = after(target, "ticket:");
   if (issue) return { view: "tickets", issue };
+
+  // A routine whose run has news (ROUT-10); a deleted one falls to the first.
+  const routine = after(target, "routine:");
+  if (routine) return { view: "routines", routine };
 
   const review = after(target, "review:");
   if (review) return { view: "reviews", review };

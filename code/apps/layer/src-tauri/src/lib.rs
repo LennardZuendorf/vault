@@ -19,6 +19,7 @@ mod phone;
 mod previous;
 mod profiles;
 mod pty;
+mod routines;
 mod runs;
 mod secrets;
 mod shellenv;
@@ -247,6 +248,9 @@ pub fn run() {
             });
 
             attention::spawn(handle.clone())?;
+            // Close the browser tabs of tasks nobody has used for a while (BRW-6):
+            // open, every task's tabs kept Chrome at over a gigabyte.
+            browser::sleep::spawn(handle.clone())?;
             news::spawn(handle.clone());
             // Pull requests read for the Henchman while the window is away (HEN-12).
             commands::spawn_henchman_watch(handle.clone());
@@ -326,12 +330,20 @@ pub fn run() {
             commands::spawn_chat,
             commands::spawn_henchman,
             commands::set_henchman_agent,
+            commands::set_henchman_on,
+            commands::set_henchman_instructions,
             commands::henchman_orders,
             commands::henchman_order_add,
             commands::henchman_order_remove,
             commands::henchman_leave_alone,
             commands::henchman_lair,
             commands::henchman_need_done,
+            commands::routines_list,
+            commands::routine_create,
+            commands::routine_update,
+            commands::routine_delete,
+            commands::routine_run_now,
+            commands::routine_open_run,
             commands::running_processes,
             commands::stop_process,
             commands::pty_write,
@@ -346,6 +358,7 @@ pub fn run() {
             commands::restart_pane,
             commands::acp_view,
             commands::acp_prompt,
+            commands::save_chat_image,
             commands::acp_cancel,
             commands::acp_answer,
             commands::acp_set,
@@ -401,6 +414,9 @@ pub fn run() {
             commands::checkout_branches,
             commands::task_branch_facts,
             commands::github_retarget_pr,
+            commands::github_set_pr_draft,
+            commands::pr_image_offer,
+            commands::drop_pr_image_offer,
             commands::github_open_prs,
             commands::show_pr_images,
             commands::github_pr_feedback,
@@ -461,6 +477,7 @@ pub fn run() {
             commands::browser_sign_in_window,
             commands::browser_sign_in_done,
             commands::add_browser_sign_in,
+            commands::change_browser_sign_in,
             commands::forget_browser_sign_in,
             commands::browser_sign_in_form,
             commands::browser_save_sign_in,

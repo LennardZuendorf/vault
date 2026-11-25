@@ -24,6 +24,8 @@ pub enum Target<'a> {
     Ticket(&'a str),
     /// `owner/repo#number`, as `news::identity` writes it.
     Review(&'a str),
+    /// A routine's page (ROUT-10).
+    Routine(&'a str),
 }
 
 impl<'a> Target<'a> {
@@ -48,6 +50,7 @@ impl fmt::Display for Target<'_> {
             Target::Pane { task, pane } => write!(f, "pane:{task}:{pane}"),
             Target::Ticket(key) => write!(f, "ticket:{key}"),
             Target::Review(id) => write!(f, "review:{id}"),
+            Target::Routine(id) => write!(f, "routine:{id}"),
         }
     }
 }

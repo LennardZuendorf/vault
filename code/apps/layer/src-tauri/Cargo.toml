@@ -1,6 +1,6 @@
 [package]
 name = "villain-layer"
-version = "0.14.0"
+version = "0.16.1"
 description = "Layer - an agent development environment"
 authors = ["Code Villain <codevillain@proton.me>"]
 license = "MIT OR Apache-2.0"
@@ -32,6 +32,8 @@ tokio = { version = "1", features = [
   "process",
   "io-util",
   "net",
+  # The browser's download (BRW-24), written as it comes.
+  "fs",
 ] }
 axum = "0.8"
 portable-pty = "0.9"

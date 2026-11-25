@@ -217,6 +217,8 @@ impl Browser {
         let mut inner = self.inner.lock();
         inner.wanted.take_if(|(_, t)| t == task);
         let Some(w) = inner.watch.take_if(|w| w.task == task) else { return };
+        // Its idle time counts from when the panel stopped showing it.
+        inner.used.insert(task.to_string(), Instant::now());
         if let Some(r) = inner.running.as_ref() {
             r.cdp.send("Page.stopScreencast", json!({}), Some(&w.session));
         }

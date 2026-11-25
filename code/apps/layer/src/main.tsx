@@ -11,12 +11,17 @@ import "./styles-profiles.css";
 import "./styles-observability.css";
 import "./styles-settings.css";
 import "./styles-henchman.css";
+import "./styles-routines.css";
+import "./styles-browser.css";
 import App from "./App";
 import { Splash } from "./components/Splash";
+import { preventFileNavigation } from "./lib/chatDrop";
 import { fontsReady } from "./lib/terminal";
 import { paintRemembered } from "./lib/theme";
 
 paintRemembered();
+window.addEventListener("dragover", preventFileNavigation);
+window.addEventListener("drop", preventFileNavigation);
 
 // The mark breathes from the first frame (WIN-4); the app itself waits for
 // the fonts, which xterm measures its cells with.

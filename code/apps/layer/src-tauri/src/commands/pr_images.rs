@@ -8,13 +8,13 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use crate::config::{Checkout, Task};
 use crate::error::{Error, Result};
 use crate::git;
 use crate::integrations::github::{self, Image, MAX_BYTES, MAX_IMAGES};
-use crate::mcp::{bool_prop, required, str_prop, tool};
+use crate::mcp::{required, str_prop, tool};
 
 use super::diff::RepoResult;
 use super::github::github_client;
@@ -28,8 +28,10 @@ pub fn pr_images_tools() -> Vec<Value> {
          replaces them. They go in a section of the description the app keeps, and the \
          rest of the description is left as written. Files must be PNG, JPEG, GIF or WebP \
          (browser_screenshot with save: true writes one). Open the PR first with open_prs. \
-         Needs confirm: true after the user agrees: the images are stored in the repository, \
-         for everyone who can read it.",
+         Nothing is published by this call: Layer shows the images to the user on the \
+         task's Pull requests tab, and they are stored in the repository, for everyone \
+         who can read it, only when the user adds them there. Tell the user they are \
+         waiting there. task_prs shows the PR's description once they are added.",
         json!({
             "task_id": str_prop("Task id from list_tasks"),
             "repo": str_prop("The repository's name as list_tasks shows it; may be left out when the task has one"),
@@ -45,10 +47,6 @@ pub fn pr_images_tools() -> Vec<Value> {
                     "required": ["path"],
                 },
             },
-            "confirm": bool_prop(
-                "Set true only after the user agrees. Calls without it are refused — \
-                 this tool changes shared state that is hard to undo.",
-            ),
         }),
         vec!["task_id", "images"],
     )]
@@ -58,18 +56,37 @@ pub fn pr_images_owns(name: &str) -> bool {
     name == "pr_images"
 }
 
-/// The confirm gate is `mcp.rs`'s: `pr_images` is in its `DANGER` list.
-pub async fn pr_images_call(state: &AppState, args: Value) -> Result<Value> {
+/// Offers the images rather than publishing them (`pr_image_offers.rs`):
+/// the user's click on the Pull requests tab is the yes.
+pub async fn pr_images_call(app: &AppHandle, args: Value) -> Result<Value> {
+    let state = app.state::<AppState>();
     let task = state.config.task(required(&args, "task_id")?)?;
     super::pr_task::not_a_review(&task, "given images")?;
-    let checkout = checkout_for(state, &task.id, args.get("repo").and_then(Value::as_str))?;
+    let checkout = checkout_for(&state, &task.id, args.get("repo").and_then(Value::as_str))?;
     let repo = state.config.project(&checkout.project_id)?.name;
 
-    let (url, shown) = show_in_pr(state, &task, &checkout, wanted(&args)?).await?;
+    // Read and checked now, so a key file renamed `.png` is refused to the
+    // agent rather than shown to the user.
+    let wanted = wanted(&args)?;
+    let images = off_runtime(move || read_images(&wanted).map(|read| (wanted, read))).await??;
+    let images = images
+        .0
+        .into_iter()
+        .zip(images.1)
+        .map(|((path, _), image)| DraftImage {
+            path: path.to_string_lossy().into_owned(),
+            caption: image.caption,
+            repo: Some(repo.clone()),
+            preview: String::new(),
+        })
+        .collect::<Vec<_>>();
+    let count = images.len();
+    super::pr_image_offers::offer(app, &task.id, super::pr_image_offers::Offer { repo: repo.clone(), images });
     Ok(json!({
         "repo": repo,
-        "pull_request": url,
-        "images": shown.iter().map(|(caption, url)| json!({ "caption": caption, "url": url })).collect::<Vec<_>>(),
+        "offered": count,
+        "published": false,
+        "next": "The user adds them from the task's Pull requests tab in Layer; nothing is in the pull request until then.",
     }))
 }
 
@@ -185,7 +202,7 @@ pub(crate) fn listed_images(list: &Path) -> (Vec<DraftImage>, Vec<String>) {
     (images, problems)
 }
 
-fn preview(image: &Image) -> String {
+pub(super) fn preview(image: &Image) -> String {
     use base64::Engine;
     let kind = if image.ext == "jpg" { "jpeg" } else { image.ext };
     format!("data:image/{kind};base64,{}", base64::engine::general_purpose::STANDARD.encode(&image.bytes))
@@ -205,7 +222,8 @@ async fn show_in_pr(
     let dir = PathBuf::from(&checkout.path);
     let (owner, name) = off_runtime(move || git::origin_slug_cached(&dir)).await??;
     let (client, _) = github_client(state)?;
-    let pr = client.pull_for_branch(&owner, &name, &task.branch).await?.ok_or_else(|| {
+    let branches = super::pr_branches::branches(checkout, &task.branch).await?;
+    let pr = super::pr_branches::open_pull(&client, &owner, &name, &branches).await?.ok_or_else(|| {
         Error::Other(format!("{repo} has no open pull request for {}: open it with open_prs first", task.branch))
     })?;
     let shown = client.show_images(&owner, &name, pr.number, &pr.url, &images).await?;
@@ -258,7 +276,7 @@ fn read_images(wanted: &[(PathBuf, Option<String>)]) -> Result<Vec<Image>> {
     wanted.iter().map(|(path, caption)| read_image(path, caption.as_deref())).collect()
 }
 
-fn read_image(path: &Path, caption: Option<&str>) -> Result<Image> {
+pub(super) fn read_image(path: &Path, caption: Option<&str>) -> Result<Image> {
     let shown = path.display();
     if !path.is_absolute() {
         return Err(Error::Other(format!("{shown}: give an absolute path")));

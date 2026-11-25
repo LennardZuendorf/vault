@@ -26,8 +26,8 @@ pub use store::{
 };
 pub use upkeep::{
     branch_tips, delete_branch_at, delete_origin_branch, fast_forward, fetch_store, holds, is_bare, list_worktrees,
-    only_here, origin_branches, origin_url, remote_key, same_remote, standing, synced_at, update_style, user_email,
-    Forwarded, OriginBranch,
+    only_here, origin_branches, origin_default, origin_url, remote_key, same_remote, standing, synced_at, update_style,
+    user_email, Forwarded, OriginBranch,
 };
 
 fn command(dir: &Path, args: &[&str]) -> Command {
@@ -132,6 +132,18 @@ pub fn repo_root(dir: &Path) -> Result<String> {
 
 pub fn current_branch(dir: &Path) -> Result<String> {
     Ok(run(dir, &["rev-parse", "--abbrev-ref", "HEAD"])?.trim().to_string())
+}
+
+/// The branch a task's folder is on when it is not the task's own (PR-14):
+/// an agent may cut one and open its pull request from there. Not its base
+/// or the repo's default branch, whose pull requests are everyone's, and
+/// none when HEAD is detached.
+pub fn other_branch(dir: &Path, task_branch: &str, base: &str) -> Option<String> {
+    let on = run(dir, &["symbolic-ref", "-q", "--short", "HEAD"]).ok()?.trim().to_string();
+    if on.is_empty() || on == task_branch || on == base || on == default_branch(dir) {
+        return None;
+    }
+    Some(on)
 }
 
 /// The repo's default branch, best-effort: origin/HEAD, then main, then master.

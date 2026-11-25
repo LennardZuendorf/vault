@@ -1,13 +1,13 @@
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errMessage } from "../lib/api";
 import { key, mouse, pagePoint, wheel } from "../lib/browserInput";
 import { copyText } from "../lib/clipboard";
 import { ago } from "../lib/time";
 import type { BrowserInput, BrowserView } from "../lib/types";
 import { useStore } from "../store";
+import { BrowserDownloadFailed, BrowserDownloading } from "./BrowserDownload";
 import { BrowserScreenshot } from "./BrowserScreenshot";
 import { OpenOutside, SigningIn } from "./BrowserSignInWindow";
 import { BrowserTabs } from "./BrowserTabs";
@@ -124,7 +124,7 @@ export function BrowserPanel({
       ro.disconnect();
       window.clearTimeout(timer);
     };
-  }, [view?.chrome]);
+  }, []);
 
   // Frames only while on screen (BRW-9), and not while the window is away:
   // a page animating behind another app still sent up to 60 Retina JPEGs a
@@ -132,12 +132,15 @@ export function BrowserPanel({
   // browser, the first time; a new tab (the browser restarted) is watched
   // afresh, as is the same tab when the window comes back.
   const tab = view?.tab ?? null;
-  const chrome = view?.chrome ?? false;
+  // The app's own Chrome, coming down or not come (BRW-24). Watching waits
+  // on the download; a failed one is watched again once the panel retries.
+  const download = view?.download ?? null;
+  const downloadFailed = view?.download_failed ?? null;
   // While the sign-in window has the profile (BRW-23), watching would only
   // be told the browser waits; its quitting is a change, and this runs again.
   const signingIn = view?.signing_in ?? false;
   useEffect(() => {
-    if (!visible || !appActive || !chrome || !size || signingIn) return;
+    if (!visible || !appActive || !size || signingIn) return;
     let current = true;
     let pending: ArrayBuffer | null = null;
     let drawing = false;
@@ -175,7 +178,7 @@ export function BrowserPanel({
       current = false;
       void api.browserUnwatch(taskId).catch(() => {});
     };
-  }, [visible, appActive, chrome, size, tab, taskId, attempt, signingIn]);
+  }, [visible, appActive, size, tab, taskId, attempt, signingIn]);
 
   // Where an agent clicked, for a moment (BRW-10).
   const last = view?.last_action ?? null;
@@ -210,42 +213,49 @@ export function BrowserPanel({
   drivingRef.current = driving;
 
   // The wheel is a native listener: React's is passive, and the panel's own
-  // scrolling must not happen as well as the page's.
+  // scrolling must not happen as well as the page's. It goes on the canvas
+  // as the canvas mounts. It was an effect keyed on what the panel shows in
+  // the canvas's place, which left out the sign-in window (BRW-23): the
+  // canvas that came back after a sign-in had no listener, and the trackpad
+  // did nothing until the panel was opened again.
   const sizeRef = useRef(size);
   sizeRef.current = size;
-  const showing = chrome && !error;
-  useEffect(() => {
-    const el = canvasRef.current;
-    if (!el) return;
-    // A trackpad reports far more wheel events than frames are drawn:
-    // summed, and sent once per animation frame.
-    let pending: BrowserInput | null = null;
-    let frame = 0;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      if (drivingRef.current) return;
-      const page = sizeRef.current;
-      if (!page) return;
-      const next = wheel(e, pagePoint(e, el.getBoundingClientRect(), page));
-      if (pending?.kind === "wheel" && next.kind === "wheel") {
-        pending = { ...next, dx: pending.dx + next.dx, dy: pending.dy + next.dy };
-      } else {
-        pending = next;
-      }
-      if (!frame) {
-        frame = requestAnimationFrame(() => {
-          frame = 0;
-          if (pending) send(pending);
-          pending = null;
-        });
-      }
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => {
-      el.removeEventListener("wheel", onWheel);
-      cancelAnimationFrame(frame);
-    };
-  }, [showing, taskId]); // eslint-disable-line react-hooks/exhaustive-deps -- `send` reads only taskId
+  const canvas = useCallback(
+    (el: HTMLCanvasElement) => {
+      canvasRef.current = el;
+      // A trackpad reports far more wheel events than frames are drawn:
+      // summed, and sent once per animation frame.
+      let pending: BrowserInput | null = null;
+      let frame = 0;
+      const onWheel = (e: WheelEvent) => {
+        e.preventDefault();
+        if (drivingRef.current) return;
+        const page = sizeRef.current;
+        if (!page) return;
+        const next = wheel(e, pagePoint(e, el.getBoundingClientRect(), page));
+        if (pending?.kind === "wheel" && next.kind === "wheel") {
+          pending = { ...next, dx: pending.dx + next.dx, dy: pending.dy + next.dy };
+        } else {
+          pending = next;
+        }
+        if (!frame) {
+          frame = requestAnimationFrame(() => {
+            frame = 0;
+            if (pending) send(pending);
+            pending = null;
+          });
+        }
+      };
+      el.addEventListener("wheel", onWheel, { passive: false });
+      return () => {
+        el.removeEventListener("wheel", onWheel);
+        cancelAnimationFrame(frame);
+        canvasRef.current = null;
+      };
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `send` reads only taskId
+    [taskId],
+  );
 
   function send(input: BrowserInput) {
     void api.browserInput(taskId, input).catch(() => {});
@@ -532,25 +542,10 @@ export function BrowserPanel({
       )}
 
       <div className={`browser-screen${focused ? " focused" : ""}`} ref={screenRef}>
-        {view && !view.chrome ? (
-          <div className="empty">
-            <h2>No Chrome to run</h2>
-            <p>
-              The browser runs on Google Chrome (or Chromium), with a profile of its own: your
-              Chrome's sign-ins and extensions stay out of it. Install Chrome, and it starts the
-              next time it is needed.
-            </p>
-            <div className="row">
-              <button
-                className="ui-button ui-button-primary"
-                onClick={() => void openUrl("https://www.google.com/chrome/")}
-              >
-                Get Chrome ↗
-              </button>
-            </div>
-          </div>
-        ) : signingIn ? (
+        {signingIn ? (
           <SigningIn />
+        ) : downloadFailed ? (
+          <BrowserDownloadFailed reason={downloadFailed} onRetry={() => setAttempt((n) => n + 1)} />
         ) : error ? (
           <div className="empty">
             <h2>The browser could not start</h2>
@@ -564,7 +559,7 @@ export function BrowserPanel({
         ) : (
           <>
             <canvas
-              ref={canvasRef}
+              ref={canvas}
               width={size ? Math.round(size.width * (window.devicePixelRatio || 1)) : 0}
               height={size ? Math.round(size.height * (window.devicePixelRatio || 1)) : 0}
               style={size ? { width: size.width, height: size.height } : undefined}
@@ -573,11 +568,14 @@ export function BrowserPanel({
               onMouseMove={(e) => onMouse("mouseMoved", e)}
               onContextMenu={(e) => e.preventDefault()}
             />
-            {!tab && (
-              <div className="browser-starting">
-                <Spinner /> Starting the browser…
-              </div>
-            )}
+            {!tab &&
+              (download ? (
+                <BrowserDownloading done={download.done} total={download.total} />
+              ) : (
+                <div className="browser-starting">
+                  <Spinner /> Starting the browser…
+                </div>
+              ))}
             {driving && driver && (
               // Over the page and taking its clicks: the user's input would
               // land in the middle of the agent's.

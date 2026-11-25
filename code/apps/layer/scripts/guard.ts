@@ -691,7 +691,9 @@ const CEILINGS: Record<string, number> = {
   // Oxfmt's line breaks took DiffView to 1103 and PrPanel to 871.
   "src/components/DiffView.tsx": 1150,
   "src/components/PrPanel.tsx": 900,
-  "src/store.ts": 800,
+  // The Routines tab (§29) made VIEWS too long for one line; Oxfmt gave
+  // each view a line of its own: 807.
+  "src/store.ts": 820,
   "src/components/Terminals.tsx": 700,
   // The panel and its bar are one view (BRW-9); each control in the bar
   // that does more than a call is its own component (SaveSignIn,
@@ -709,8 +711,9 @@ const CEILINGS: Record<string, number> = {
   // dispatch is here, the line that took it to 1101. The epic chat's tools
   // (EPIC-12) are in commands/epic_tools.rs; their dispatch and confirm gate
   // took it to 1113. The trackers' tools (TKT-20) moved out to
-  // commands/tracker_tools.rs, which brought it back to 944.
-  "src-tauri/src/mcp.rs": 960,
+  // commands/tracker_tools.rs, which brought it back to 944. The routine
+  // tools (§29) and set_base joining the spec tools' dispatch took it to 963.
+  "src-tauri/src/mcp.rs": 970,
   // The same for the browser's tools (BRW-*); each tool's work lives in
   // its own module (sign_in.rs, session.rs, tabs.rs), its definition here.
   "src-tauri/src/browser/tools.rs": 700,
@@ -736,6 +739,9 @@ const CEILINGS: Record<string, number> = {
   "src/components/tickets/TicketsView.tsx": 660,
   // Settings gained spec_first (SPEC-38), the one line that is the mirror of the backend.
   "src/lib/types.ts": 645,
+  // Every command's wrapper must live here (api-only); the routines' six
+  // (§29) took it to 607.
+  "src/lib/api.ts": 640,
 };
 
 for (const f of files) {

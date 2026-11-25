@@ -76,7 +76,11 @@ a loop runs (LOOP-1).
   origin deleted and taking tags origin moved (an Actions repo moves `v1`
   each release; refused, it failed every Sync of a user whose git fetches
   all tags), and carry the clone's repo-local settings again. A failed
-  fetch says git's reason, not only that it failed. In the
+  fetch says git's reason, not only that it failed. When origin's HEAD
+  names another branch than the repo's default, and the copy has it, that
+  branch becomes the default, and the row says so: a clone's `origin/HEAD`
+  never moves after it is cloned, so a team that moved from `dev` to `main`
+  kept being synced and cut tasks from `dev`. In the
   clone it only ever fast-forwards the default branch, and only when that
   branch has no commits of its own and, if checked out, no uncommitted
   changes to tracked files. It never merges or rebases there, so how a team
@@ -201,7 +205,12 @@ count, running agents, uncommitted changes and the review verdict.
 - **TASK-6** Adding a repo to a task MUST tell the task's running agents,
   typed into each, and rewrite the folder's context files. The new
   checkout is cut from the base the rest of the task shares, when this
-  repo has that branch, and otherwise from its own default branch. Removing one
+  repo has that branch, and otherwise from its own default branch. A base
+  the rest share only because it is each one's own default is not shared:
+  a task in customer-portal, on `main` as its default, gave core-service
+  `main` too, though core-service's work goes to `development`. An agent
+  puts a wrong base right with `set_base`, as the PR panel's base field
+  does, to a branch the remote has. Removing one
   stops panes in that checkout, and refuses when it has uncommitted changes
   unless forced.
 - **TASK-7** Deleting a task MUST check for uncommitted changes *before*
@@ -395,7 +404,7 @@ Each of them can also run as a conversation the app draws, over ACP (§20).
   newest were the ones lost: a chat with a day's work in it went, at a
   restart with 12 agents and 2 shells open. Two agents in one folder never
   both resume the same conversation. A pane that fails to come back three launches in a row is
-  forgotten. Only a conversation the CLI would continue counts: Claude
+  forgotten, except the Henchman, which waits (HEN-2). Only a conversation the CLI would continue counts: Claude
   Code's one-shot runs (`claude -p`, the app's own PR description drafts)
   do not. Counted, a draft in the task folder had an agent restarted there,
   where Claude found "No conversation found to continue", while its real
@@ -409,8 +418,9 @@ Each of them can also run as a conversation the app draws, over ACP (§20).
   except a full-screen program (on the alternate screen, as OpenCode is):
   its screen and modes are kept, and it MUST be made to draw its whole
   screen again, as a window resize would. Keystrokes echo immediately,
-  even while the pane is printing heavily. Output is batched to about 30
-  frames a second otherwise.
+  even while the pane is printing heavily. A layout that types `@` with
+  Option MUST send a literal `@` to the CLI without changing other Option
+  shortcuts. Output is batched to about 30 frames a second otherwise.
 - **PANE-9** Handoff moves the work, not the conversation: no CLI can
   resume another's session. It MUST give the new agent a briefing: the task prompt,
   the commits and changed files per repo since the branch point, and the
@@ -494,10 +504,22 @@ Each of them can also run as a conversation the app draws, over ACP (§20).
   (BOT-12), and the Henchman always starts in it (HEN-2). An agent that
   offers no `auto` mode keeps its own. Turned off, an agent asks as its
   own settings say; one already running keeps its mode.
+- **PANE-19** Images dropped on a terminal MUST be saved as ACP-20 saves
+  them (up to ten PNG, JPEG, GIF or WebP, 10 MiB each, in `attachments/`
+  of the task root or chat room) and their paths pasted at the cursor,
+  escaped as a Mac terminal escapes a dropped file, so Claude Code takes
+  each as an image. The window cannot see where a dropped file lives, so
+  the copy is what gets a path; other files are refused, with the reason.
+  Before this, a drop on a terminal did nothing.
 
 Code: `pty.rs`, `agents.rs`, `commands/panes.rs` (`restart_pane`),
-`Terminals.tsx`, `Terminal.tsx`, `AgentsView.tsx` (`lib/agentSort.ts`),
+`Terminals.tsx`, `Terminal.tsx` (drops through `lib/chatDrop.ts` and
+`commands/attachments.rs`, PANE-19), `AgentsView.tsx` (`lib/agentSort.ts`),
 `PaneNotice.tsx`.
+
+Verify PANE-8 in the mock harness: open the Claude Code terminal, type `@`
+with an Option-based layout, and check `__mock.calls` for one `pty_write`
+with `data: "@"`, not an escape sequence.
 
 Known gaps:
 - Resume, pre-trust, and drafting PR and ticket descriptions are Claude
@@ -731,7 +753,8 @@ Known gaps:
 The Pull requests tab shows, per repo, the open PR, or an earlier one if
 none is open. It shows checks, the latest review per reviewer, the verdict,
 and how far behind the base it is. From here: push everything, open PRs,
-retarget a PR onto the checkout's base or take the PR's base for the
+mark a PR ready for review or back to draft, retarget a PR onto the
+checkout's base or take the PR's base for the
 checkout (GitHub moves a PR itself when its base is merged and deleted),
 send feedback to an agent, and finish a merged task.
 
@@ -881,9 +904,15 @@ send feedback to an agent, and finish a merged task.
   to check again: the next sweep reads the repos again on its own, as
   behaviour.md asks of a connection. The chip says "needs single sign-on". It used to show GitHub's "SAML enforcement" JSON beside every
   repo, Settings said "connected", and no task ever showed as in review.
-- **PR-13** An agent MAY show images in a task's open pull request with
-  `pr_images` (after the user agrees): screenshots of a visible change,
-  night and day. GitHub has no API for the attachments its own editor
+- **PR-13** An agent MAY offer images for a task's open pull request with
+  `pr_images`: screenshots of a visible change, night and day. The call
+  publishes nothing. The task's Pull requests tab shows them, each with a
+  preview the user can leave out, and only the user's Add to pull request
+  stores them; Dismiss forgets them. A later offer replaces the one before.
+  The app holds offers in memory, so a restart forgets them. Before, the
+  agent published on its own `confirm: true`, and Claude Code's auto mode
+  refused that as a possible leak when the user's yes was only a "go on"
+  in the chat. GitHub has no API for the attachments its own editor
   uploads, so the app stores the images in the repository, in a commit
   that only `refs/pr-images/<number>` points at: not a branch, so no
   branch list, clone or pull fetches or shows it. Each PR has its own,
@@ -900,8 +929,26 @@ send feedback to an agent, and finish a merged task.
   `browser_screenshot` with `save` writes the tab's image to a file for
   this. A repository with no open pull request is refused: images are
   added to a PR, never the reason one is opened.
+- **PR-14** A repository's pull requests are those from the task's branch
+  and, when its folder is on another branch, from that branch too: the PR
+  tab, the sweep (PR-8), feedback (PR-6), retargeting and `pr_images`
+  (PR-13) all look in both. The folder's own base and the repository's
+  default branch don't count as another branch. Open pull requests (PR-1)
+  still pushes and opens from the task's branch, and agents are told to
+  commit, push and open pull requests there. Before, an agent that
+  put a repository on a branch of its own and opened its PR from there
+  left the task saying "no PR" while the PR waited on GitHub. A PR from a
+  branch the folder has since left is still not found.
+- **PR-15** An open pull request's card MUST move it between draft and
+  ready for review: a draft has a Ready for review button beside its draft
+  chip, and a ready one a quiet Back to draft link under its title. GitHub
+  does it, through GraphQL (its REST API ignores `draft` on an existing
+  PR), and the card shows the new state once read again; a refusal, such as
+  a token that may read the PR but not change it, is shown on the tab.
+  Before, Open PRs opened drafts (PR-1) and only GitHub could take one out
+  of draft.
 
-Code: `commands/github.rs`, `commands/open_prs.rs`, `commands/pr_images.rs`, `commands/outgoing.rs`, `git/outgoing.rs`, `Outgoing.tsx`, `commands/landed.rs`, `git/landed.rs`, `integrations/github.rs`, `integrations/github/images.rs`, `PrPanel.tsx`, `PrReadErrors.tsx`,
+Code: `commands/github.rs`, `commands/pr_branches.rs`, `commands/pr_draft.rs`, `integrations/github/ready.rs`, `commands/open_prs.rs`, `commands/pr_images.rs`, `commands/pr_image_offers.rs`, `PrImageOffer.tsx`, `commands/outgoing.rs`, `git/outgoing.rs`, `Outgoing.tsx`, `commands/landed.rs`, `git/landed.rs`, `integrations/github.rs`, `integrations/github/images.rs`, `PrPanel.tsx`, `PrReadErrors.tsx`,
 `PrFeedback.tsx`, `Markdown.tsx`, `lib/markdown.ts`; its connection in `CodeSettings.tsx`.
 
 Known gaps:
@@ -1332,11 +1379,12 @@ never hold credentials themselves.
 | `pane_output` | a pane's recent output (needs "Let agents read terminal output") | |
 | `task_prs` | a task's PRs, checks and reviews | |
 | `add_repo` | add a repo to a task, telling its agents | |
+| `set_base` | change the branch a task's repo is measured against and opens its next PR into (TASK-6) | |
 | `forget_repo` | unregister a repo (never deletes files) | yes |
 | `create_task` | a task with no ticket | |
 | `open_prs` | push and open PRs for a task | yes |
 | `finish_task` | finish a landed task: agents, worktrees, covered branches, ticket to done (TASK-18) | yes |
-| `pr_images` | show image files in a repo's open PR, in a section the app owns (PR-13) | yes |
+| `pr_images` | offer image files for a repo's open PR, shown there in a section the app owns once the user adds them (PR-13) | |
 | `repo_notes` | a repository's notes, with what changed since each was checked (MEM-5) | |
 | `remember` | keep a lasting fact about a repository, after asking the user (MEM-1) | yes |
 | `check_note` | say a note still holds, as of now | |
@@ -1358,6 +1406,11 @@ never hold credentials themselves.
 | `order_remove` | the Henchman's: drop a standing order (HEN-7) | |
 | `leave_alone` | the Henchman's: hear nothing of a task or chat until handed back (HEN-8) | |
 | `need_you` | the Henchman's: reach the user, a banner and a count on the dock, for what really needs them (HEN-13) | |
+| `list_routines` | a chat's: the routines on this Mac, when each runs next, and its newest runs (ROUT-11) | |
+| `create_routine` | a chat's: make a routine, its prompt, schedule and agent (ROUT-11) | |
+| `update_routine` | a chat's: change a routine; a field left out stays (ROUT-11) | |
+| `run_routine` | a chat's: run a routine now, as a new chat (ROUT-11) | |
+| `delete_routine` | a chat's: delete a routine and its runs (ROUT-11) | yes |
 | `browser_navigate` | open a page in the task's browser tab (BRW-3), and get its outline | |
 | `browser_back` | back one page | |
 | `browser_snapshot` | the page as an outline, each element it can act on numbered | |
@@ -1423,7 +1476,9 @@ Known gaps:
 | Agents: Start Claude Code in auto mode | on | PANE-18 |
 | Agents: Let agents read terminal output | **off** | MCP `pane_output`, `handoff_prompt` |
 | Agents: Most terminals running at once | 32 | 32, 48 or 64 (PANE-2) |
+| Agents: Henchman | on | HEN-16 |
 | Agents: Henchman's agent, model and effort | Claude Code, Sonnet, Medium | HEN-15 |
+| Agents: Henchman's custom instructions | none | HEN-17 |
 | Agents: Task folder location | `~/.villain-worktrees` | where task folders go |
 | Keep awake (the cup in the top bar) | off | STATE-7, PHONE-8 |
 | Code: Always write a spec first | off | every agent is told to write the spec before any code (SPEC-38), and Start work's "Write a spec first" is on and locked; `set_spec_first` |
@@ -1561,6 +1616,7 @@ Known gaps:
 | `~/.claude.json` | trust entries for the app's own folders only (PANE-10) |
 | `<config folder>/specs/`, `<config folder>/toolsets/` | `specs/<task>/`: the spec of a deleted task or of a task folder Clean up removed, and `specs/<repository>/<task>/`: the spec of a task with no folder of its own (SPEC-3). `toolsets/<id>/<version>/`: the copy a toolset's install fetched, kept for the next task (SPEC-30) |
 | `<config folder>/browser/` | the browser's own Chrome profile (BRW-1): cookies, sign-ins and storage of the pages opened there |
+| `~/Library/Caches/eu.codevillain.villain-layer/chrome/` | the browser's own Chrome, a folder per version (BRW-24), shared by every profile |
 | `~/Library/Logs/villain-layer/panic.log` | a crash's location and backtrace |
 
 The dev build uses `eu.codevillain.villain-layer.dev` for its config folder
@@ -1609,7 +1665,7 @@ tasks run down the left in the frame's tone, and every view sits in an
 inset panel (Layer's exception to `studio/design/layouts/app-window.md`). A
 view's count shows only when it asks for something: agents that need you
 on Work, the reviews on Reviews (waiting on you, then yours), repositories
-to fix on Repos. A running agent or chat is a live dot.
+to fix on Repos. A running agent, or a chat at work, is a live dot.
 
 - **WIN-1** The window MUST move when you drag any empty part of the top
   bar, and zoom when you double-click it, as a native title bar does. Its
@@ -1804,10 +1860,30 @@ to help an agent that is stuck. Under it is what an agent last did, and a
 ring marks where it clicked.
 
 - **BRW-1** There MUST be one browser for the app, started when it is first
-  needed, with one tab per task. It is the Google Chrome (or Chromium)
-  installed on the Mac, run headless with a profile of its own in the
-  app's config folder: never the user's own Chrome profile, its sign-ins or
-  its extensions. Without Chrome, the tools say what to install.
+  needed, with one tab per task. It is the app's own Chrome (BRW-24), run
+  headless with a profile of its own in the app's config folder: never the
+  user's own Chrome profile, its sign-ins or its extensions, and never a
+  Chrome installed on the Mac. macOS takes any Chrome run from Google
+  Chrome.app for the user's own, and while the app's ran, opening Chrome
+  from the Dock or Finder showed nothing. The profile's cookies are not
+  locked with a key in the keychain (`--use-mock-keychain`): Chrome for
+  Testing is signed for no one, so macOS took each new version for a new
+  app and asked for "Chromium Safe Storage" again.
+- **BRW-24** The app MUST get its own Chrome, with nothing for the user to
+  install: Chrome for Testing, Google's build of Chrome for programs to
+  drive, downloaded from Google the first time the browser is needed, into
+  `~/Library/Caches/<identifier>/chrome/`, one copy for every profile. The
+  panel says how much has come ("Downloading the browser: 84 of 200 MB"),
+  and agents wait meanwhile, as while the browser starts. A connection that
+  breaks off is asked for the rest, from where it stopped; a download that
+  still fails, after five tries in a row that bring nothing, says why in the
+  panel, which tries again a minute later. Each time the browser starts, and
+  at most once a day, the app asks Google for the current stable version and
+  downloads a newer one in the background; the browser runs it from its next
+  start. A version no browser runs from any more is deleted. Only an address
+  on Google's own storage
+  (`https://storage.googleapis.com/chrome-for-testing-public/`) is
+  downloaded.
 - **BRW-2** An agent's tools MUST act on its own task's tab, found from the
   pane that calls (`X-Villain-Pane`). The chats have one browser between
   them, as a task's agents share the task's, shown beside them by the
@@ -1914,7 +1990,11 @@ ring marks where it clicked.
   in `config.json`. A site is a host with or without a port: `localhost`
   alone is every port of this machine's (one app runs on :4200 for one
   task and :4210 for another), and a site elsewhere without a port is
-  its default port only. A site's subdomains are other sites.
+  its default port only. A site's subdomains are other sites. A saved
+  sign-in MAY be changed in place: its site, its username, and its
+  password only when a new one is typed (an empty one keeps it). The
+  password is never shown again, and a change that would save the same
+  account on the same site twice is refused.
 - **BRW-19** An agent MUST NOT see a saved password. `browser_sign_in`
   has the app fill the username, the password, or both (a login asks
   for them on one page or on two) into the fields the agent names, and
@@ -1955,7 +2035,7 @@ ring marks where it clicked.
 - **BRW-23** On a Google sign-in page (`accounts.google.com`), the bar's ↗
   MUST open a sign-in window instead of the user's own browser: Google
   refuses to sign anyone in to a browser that a program drives. The
-  app closes its browser, opens the Mac's Chrome on the same profile as an
+  app closes its browser, opens its Chrome (BRW-24) on the same profile as an
   ordinary window, with nothing driving it, on the page the sign-in was
   for (Google's `continue` address, else the page itself), and the
   panel says to sign in there and quit that Chrome (⌘Q), or press Done,
@@ -1969,7 +2049,11 @@ ring marks where it clicked.
   the task's browser is next needed. The chats' are kept the same way
   (`browser.chat_tabs`). A config from before tabs had one
   page, which comes back as one tab. Deleting or finishing a task closes
-  its tabs.
+  its tabs. A task's tabs that nobody has used for 15 minutes (no agent's
+  call, not shown in the panel, not held by the user, no dialog waiting)
+  are closed the same way and come back when next needed, each page
+  loaded again: what was typed into it and not sent is gone. Once no task
+  has tabs open, the browser stops too.
 - **BRW-7** The browser MUST stop with the app: asked to close, then its
   process group killed after 3 seconds, alongside the agents' own grace
   period. A browser that dies is started again when next needed.
@@ -1979,7 +2063,8 @@ ring marks where it clicked.
   a port: with a debugging port open, any process on the Mac could drive
   the browser and every site signed in to there.
 
-Code: `browser/` (`chrome.rs` finding and running it, `cdp.rs` the
+Code: `browser/` (`install.rs` getting the app's Chrome, `chrome.rs`
+running it, `cdp.rs` the
 protocol, `page.rs` a tab's actions, `snapshot.rs` the outline, `sites.rs`
 BRW-3, `tools.rs` the tools, `panel.rs` and `input.rs` the panel's side,
 `requests.rs` BRW-11, `control.rs` BRW-12, BRW-13 and BRW-15, `tabs.rs`
@@ -2692,8 +2777,11 @@ count and banner treats it like any other.
 - **ACP-9** An ACP agent MUST pick a conversation up by its id. Restart
   (PANE-14) and a restore (PANE-7) use the id the agent gave, kept with the
   saved pane: `session/load`, which replays it into the pane, or else
-  `session/resume`. Resume with no id takes the newest the agent lists for
-  the folder (`session/list`). One that cannot be picked up is started
+  `session/resume`. Until the agent gives one, the pane keeps the id it
+  was opened to pick up: one stopped or quit before its agent said so was
+  started new, and its conversation lost. Resume with no id takes the
+  newest the agent lists for the folder (`session/list`). One that cannot
+  be picked up is started
   new, and the pane says why. So two agents in one folder never pick up
   the same conversation, and Restart works for every ACP agent. A replay
   shows what the user wrote, without a CLI's record of its own local
@@ -2759,12 +2847,30 @@ count and banner treats it like any other.
   words, muted and folded to its first line with its tag ("Layer ·
   finished"), and open on a click. The Henchman is sent one each time
   agents stop (HEN-9), and its conversation was nothing but those.
+- **ACP-20** Dropping up to ten PNG, JPEG, GIF or WebP images, each at
+  most 10 MiB, onto a conversation copies them to `attachments/` in the
+  task root or standalone chat room. Layer detects the format from the
+  bytes, never overwrites a file or writes into a checkout, and appends
+  quoted absolute paths to the editable draft. Saving blocks sending, not
+  typing; failed images show an inline error and successful ones remain.
+- **ACP-21** What is typed or pasted into a conversation's message box and
+  not sent MUST still be there when the user leaves the pane (another task,
+  another view, the Henchman) and comes back, until it is sent or the pane
+  is closed. A send that fails puts it back.
+- **ACP-22** `/clear` and `/new`, sent alone, MUST start a new
+  conversation in the same pane, on the model and in the mode the old one
+  had, and show only a note that says so; the next prompt goes to the new
+  one. They are refused while a turn runs or a question is open. An agent
+  that offers a command by that name gets it instead, and the message
+  box's suggestions list Layer's own after the agent's.
 
 Code: `acp/` (`conn.rs` the protocol, `user.rs`, `conversation.rs`,
 `entry.rs`, `read.rs`, `process.rs`, `version.rs` for ACP-17), `pty/acp.rs`,
 `commands/acp_panes.rs`, `agents.rs` (`AcpCommand`), `AcpPane.tsx`,
 `lib/acpUpdates.ts`, `lib/types-acp.ts`, `AgentSettings.tsx`, `lib/issue-keys.ts` and
-`IssueKeyLink.tsx` (ACP-18), `lib/acpEntries.ts` (`layerSaid`, ACP-19). A real agent is checked with
+`IssueKeyLink.tsx` (ACP-18), `lib/acpEntries.ts` (`layerSaid`, ACP-19),
+`commands/attachments.rs` and `lib/chatDrop.ts` (ACP-20), `lib/acpPool.ts`
+(ACP-21), `user.rs`, `Conversation::clear` and `lib/acpCommands.ts` (ACP-22). A real agent is checked with
 `VILLAIN_ACP_AGENT="opencode acp" cargo test --lib real_agent -- --ignored`.
 
 Known gaps:
@@ -3889,19 +3995,34 @@ Slack come later.
   as the others are.
 - **HEN-2** There MUST be one Henchman: a chat over ACP (§20) in a room
   of its own, `<worktree root>/_chat/henchman`, so it keeps its history
-  across restarts (CHAT-1) and holds no worktrees. It is woken from its
+  across restarts (CHAT-1) and holds no worktrees. A `henchman` room in
+  a `_chat` folder is its under any worktree root, so it stays the
+  Henchman after the user moves the root. Matched against today's root
+  only, the one under the old root was taken for any chat: put back after
+  the other agents, with a chat's context file, and fed nothing, while
+  its tab showed it as the Henchman. It is woken from its
   tab with the agent chosen for it (HEN-15), or else any that speaks
   ACP; waking it while it runs gives back
-  the one running. Its context file says who it is, what its tools do,
+  the one running, and two wakes at once wake one. Its context file says who it is, what its tools do,
   and what it never does: write code, edit files, merge, or answer anyone
   in Jira, GitHub or Slack without asking. It is not listed in Chat and
   does not count as a chat that is working; its banners and messages
-  open its tab. It is restored at launch like any chat (PANE-7), and
-  before every other agent, so the restore limit never leaves it
+  open its tab. Unless it is off (HEN-16), it is restored at launch like
+  any chat (PANE-7), and before every other agent, so the restore limit never leaves it
   waiting. One that waits all the same is woken from its tab where it
-  left off, in its own conversation. Before, it came back in the order
+  left off, in its own conversation. Its saved record stays until it is
+  back: taken off first, an app that quit while it was starting forgot
+  its conversation. One that fails to come back keeps waiting, and its
+  tab offers a new conversation beside the error: let go at any failure,
+  the pane limit reached or its CLI missing for a moment lost the
+  conversation. Before, it came back in the order
   it was opened: with twelve agents open at a quit it waited, and Wake
-  forgot it and began a new conversation. It
+  forgot it and began a new conversation. One that fails to come back at
+  launch waits too, and the user is told: counted down like other panes
+  (PANE-7), three launches without its CLI forgot its conversation. Its
+  newest saved record is never the one dropped when the remembered panes
+  are trimmed (PANE-2): parked or exited, it was the oldest that could go,
+  and a day of other agents opening took it. It
   opens in auto mode where its agent has one, restored too, so reading
   Layer through its tools asks nothing first. Its conversation opens
   with Claude Code settings in `session/new`'s `_meta` (and load,
@@ -4134,11 +4255,35 @@ Slack come later.
   running keeps its agent: while it runs on another, Settings says so
   and offers to wake it with the chosen one, which begins a new
   conversation.
+- **HEN-16** Settings → Agents MUST turn the Henchman off and on again.
+  It is on until the user turns it off. Turned off, it is stopped,
+  running or not, and its conversation waits (PANE-7): it is not put back
+  at launch, and nothing wakes it, from its tab or anywhere else, while
+  it is off. Turning it off waits for a wake already under way, then
+  stops what it started: a wake that had found it on started it just
+  after Off had stopped the one running, and it ran while off. Nothing runs for it then: the agents ping the user
+  themselves again (HEN-13), and nothing is kept to tell it (HEN-9,
+  HEN-12). Its tab stays, as the lair (HEN-5): in place of the
+  conversation it says the Henchman is off, with a button to Settings →
+  Agents. Turned on again, its tab wakes it where it left off. While it
+  is off, Settings shows only the switch, not its agent, model and effort.
+- **HEN-17** Settings → Agents MUST keep the user's own instructions for
+  the Henchman: how it should work for them, in their words ("raise only
+  what blocks a release"), where a standing order (HEN-7) answers one
+  kind of question. They are kept in the config, at most 4,000
+  characters; empty, there are none. Each time Layer wakes the Henchman,
+  it adds them under "Custom instructions" to the context file it writes
+  in its room (HEN-2), after its own rules, which they do not override.
+  One whose file cannot be written is not woken, and says why: woken
+  anyway, it worked on the instructions it read last, with nothing to say
+  so. The one running reads them when it is next woken. The field saves when
+  it loses focus or on ⌘Enter. Like its agent, they are shown only while
+  the Henchman is on (HEN-16).
 
-Code: `commands/henchman.rs` (the room, its context, `spawn_henchman`),
-`commands/henchman_tools.rs` (HEN-4, `pane_restart`),
+Code: `commands/henchman.rs` (the room, its context, `spawn_henchman`,
+HEN-16, HEN-17), `commands/henchman_tools.rs` (HEN-4, `pane_restart`),
 `commands/henchman_orders.rs` and `config/henchman.rs` (HEN-7, HEN-8,
-HEN-15),
+HEN-15, HEN-16, HEN-17),
 `commands/henchman_feed.rs` (HEN-9, HEN-10, HEN-12),
 `commands/henchman_work.rs` (HEN-11), `commands/henchman_watch.rs`
 (HEN-12), `commands/henchman_need.rs` and `attention.rs` (HEN-13),
@@ -4165,6 +4310,91 @@ Known gaps:
   holds it to `need_you` and caps how often.
 - A need stays on the dock until the Henchman's conversation is looked
   at, not until it is answered.
+
+---
+
+## 29. Routines
+
+Some prompts are worth asking again and again: a brief each morning, a
+sweep of open pull requests every hour, a check of dependencies once a
+week. A routine is such a prompt with a schedule. Layer asks it on time,
+as a new chat with an agent, and keeps what each run said. If Layer was
+closed (or the Mac asleep) when a routine was due, it runs once when
+Layer is back.
+
+- **ROUT-1** Routines MUST be their own view, the tab after Chat in the
+  top bar, named Routines. The list of routines is down the left, each
+  with when it runs next or how its last run went; the routine chosen
+  fills the rest. The tab's count is the runs that ask for permission,
+  with the live dot while any run works. With none, the view says what a
+  routine is and offers New routine.
+- **ROUT-2** A routine MUST have a name, what it asks (its prompt), when
+  it runs, the agent it runs with, and a switch that turns it on or off.
+  When is every hour at a minute, every day, every weekday (Monday to
+  Friday) or once a week on a day, at a time, on the Mac's own clock.
+  The agent is any that runs as a conversation (§20), on a model and
+  effort chosen as for the Henchman (HEN-15). Each field saves when it
+  changes or loses focus; there is no Save button. Deleting one asks
+  first, says its runs go with it, and stops a run still at work.
+- **ROUT-3** Routines and their runs MUST be kept on this Mac, in
+  `routines.json` beside the config, one set per profile (§25). They are
+  not shared with the workspace.
+- **ROUT-4** A run MUST be a new chat over ACP in a room of its own,
+  `<worktree root>/_chat/routines/<routine>/<run>`, with the routine's
+  prompt as its first message, in auto mode where its agent has one, on
+  the routine's model and effort. It gets a chat's context and Layer's
+  MCP tools, as any chat (§5). It is not listed in Chat, does not count
+  as a chat at work, is not put back at launch (PANE-7) and is not heard
+  by the Henchman (HEN-9).
+- **ROUT-5** A routine that is on MUST run when its time comes while
+  Layer runs, with the window open or closed. A routine made, turned on,
+  or given another time waits for its next time; it does not run at
+  once for a time already past. Run now runs it whatever its schedule.
+- **ROUT-6** When a routine's time passed while Layer was closed or the
+  Mac slept, it MUST run once when Layer is back, however many times it
+  missed, and its run says it caught up. At launch it waits a minute
+  first, so the agents Layer puts back start before it (LOOP-11).
+- **ROUT-7** A routine MUST run one at a time. When its time comes while
+  its previous run still works or asks, the time is skipped and listed
+  as skipped. A run that cannot start (its agent gone, the pane limit
+  reached, PANE-2) is listed as failed, with why.
+- **ROUT-8** The routine's page MUST list its runs, newest first: when
+  it was due (or Run now), the first line of what its agent last said,
+  and how it went: working, asking, done and how long it took, stopped,
+  skipped, failed. Clicking one opens its conversation on the page,
+  where it can be answered or asked more; Back returns to the list. The
+  newest 30 are kept.
+- **ROUT-9** Only a routine's newest run MUST stay open as a pane:
+  starting a run closes the finished runs before it. An older run, or
+  one whose pane has gone (Layer was quit), opens again on its own
+  conversation when it is clicked (ACP-9). A run Layer was quit during
+  is listed as stopped.
+- **ROUT-10** When a run finishes or asks for permission, it MUST be
+  recorded in the message center, and with *Notify when agents need you*
+  on and the window away, it is a banner too. Both name the routine and
+  open its page.
+- **ROUT-11** A chat's agent (§5), the Henchman's and a run's included,
+  MUST be able to do what the view does through Layer's MCP tools (§12):
+  list the routines with their next times and newest runs, make one,
+  change any of its fields, run it now and delete it. The same checks
+  refuse the same mistakes, and the view shows each change at once.
+  Deleting needs `confirm` (the user's yes). An agent at work in a task
+  is not offered them.
+
+Code: `src-tauri/src/routines.rs` (ROUT-2, ROUT-3, ROUT-5 to ROUT-7: the
+schedule and what is kept), `commands/routines.rs` (the commands, and
+starting and watching runs from the attention pass: ROUT-4, ROUT-8 to
+ROUT-10), `commands/routine_tools.rs` (ROUT-11), `commands/acp_panes.rs`
+(presets), `components/routines/`, `lib/routines.ts`.
+
+Known gaps:
+- A run waits for nothing but its schedule: no trigger on a pull request
+  or a ticket.
+- A run's first message is the prompt alone: no files, no task to work in.
+- Routines are not shared with the team, and run only on this Mac while
+  Layer is open; one missed while the Mac was off runs when Layer opens.
+- Whether a time was missed because Layer was closed or because the Mac
+  slept is not told apart: both are "caught up".
 
 ---
 

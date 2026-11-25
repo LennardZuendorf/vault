@@ -12,6 +12,7 @@ import { PhoneBadge } from "./components/PhoneSettings";
 import { PrPanel } from "./components/PrPanel";
 import { ReposView } from "./components/ReposView";
 import { ReviewsView } from "./components/ReviewsView";
+import { RoutinesView } from "./components/routines/RoutinesView";
 import { Settings } from "./components/Settings";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { SidebarGrip } from "./components/sidebar/SidebarGrip";
@@ -27,8 +28,9 @@ import { api } from "./lib/api";
 import { CHAT_TASK_ID, needsYou, repoTrouble, reviewCounts, taskTotals } from "./lib/derive";
 import { goTo } from "./lib/goto";
 import { useLair } from "./lib/henchman-lair";
-import { isHenchman, waitingCount } from "./lib/lair";
+import { chatAtWork, isHenchman, waitingCount } from "./lib/lair";
 import { pressKeys } from "./lib/press";
+import { isRoutineRun, useRoutines } from "./lib/routines";
 import { specProgress, useSpecs } from "./lib/specs";
 import type { TaskView } from "./lib/types";
 import { selectedTask, useStore, type View } from "./store";
@@ -51,8 +53,13 @@ function TopBar() {
   const running = useStore((s) =>
     s.panes.some((p) => p.kind === "agent" && p.running && p.task_id !== CHAT_TASK_ID),
   );
-  const chatting = useStore((s) =>
-    s.panes.some((p) => p.task_id === CHAT_TASK_ID && p.running && !isHenchman(p)),
+  const chatting = useStore((s) => chatAtWork(s.panes));
+  // Runs asking you, and whether one is at work (ROUT-1).
+  const routineAsks = useRoutines(
+    (s) => s.routines?.runs.filter((r) => r.state === "asking").length ?? 0,
+  );
+  const routineWorks = useStore((s) =>
+    s.panes.some((p) => isRoutineRun(p) && p.running && p.activity === "working"),
   );
   // What is in the lair's Needs you (HEN-1, HEN-5), and whether the Henchman works.
   const raised = useLair((s) => s.lair?.needs.length ?? 0);
@@ -110,6 +117,14 @@ function TopBar() {
       news: !!toReview && toReview !== "0",
     },
     { id: "chat", label: "Chat", live: chatting },
+    {
+      id: "routines",
+      label: "Routines",
+      count: routineAsks || undefined,
+      title: `${routineAsks} routine run${routineAsks === 1 ? " is" : "s are"} asking you`,
+      news: true,
+      live: routineWorks,
+    },
     { id: "runs", label: "Usage" },
     {
       id: "repos",
@@ -470,6 +485,7 @@ function Shell() {
         {view === "tickets" && <TicketsView />}
         {view === "reviews" && <ReviewsView />}
         {view === "chat" && <ChatView />}
+        {view === "routines" && <RoutinesView />}
         {view === "runs" && <UsageView />}
         {view === "repos" && <ReposView />}
       </div>

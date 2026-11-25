@@ -155,6 +155,7 @@ pub fn spawn(app: AppHandle) -> std::io::Result<()> {
             let mut badge: Option<usize> = None;
             let mut awake = Awake::default();
             let mut henchman = crate::commands::HenchmanFeed::default();
+            let mut routines = crate::commands::RoutineWatch::default();
             loop {
                 std::thread::sleep(TICK);
                 let state = app.state::<AppState>();
@@ -164,10 +165,17 @@ pub fn spawn(app: AppHandle) -> std::io::Result<()> {
                     .config
                     .with(|c| (c.ui.notify_waiting_agents, c.ui.keep_awake, c.phone.tailscale || c.phone.home));
                 let panes = state.ptys.attention();
+                awake.hold(awake::wanted(keep_awake, phone, &panes));
+                // A routine's runs answer to their routine, not as chats
+                // (ROUT-4, ROUT-10): the Henchman does not hear them either.
+                let (runs, panes): (Vec<_>, Vec<_>) = panes
+                    .into_iter()
+                    .partition(|(p, _)| p.task_id == CHAT_TASK_ID && crate::commands::is_run_room(&state, &p.cwd));
+                let away = app.get_webview_window("main").is_some_and(|w| !w.is_focused().unwrap_or(false));
+                routines.pass(&app, &state, &runs, on && away);
                 // Whatever the switch: the Henchman drives (HEN-9), it is not
                 // interrupting you.
                 henchman.pass(&state, &panes);
-                awake.hold(awake::wanted(keep_awake, phone, &panes));
                 // While a Henchman runs, the agents it hears of reach you
                 // through it, and only when it needs you (HEN-13).
                 let (count, news) = watch.pass(&henchman_quiet(&state, &panes), Instant::now());

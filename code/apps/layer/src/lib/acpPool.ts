@@ -1,4 +1,5 @@
 import { mergeEntries } from "./acpEntries";
+import type { PastedImage } from "./pastedImage";
 import type { AcpEntry, AcpView } from "./types";
 
 /**
@@ -47,8 +48,34 @@ export function holdConversation(paneId: string, view: AcpView): HeldConversatio
   return next;
 }
 
-/** Forget every pane not in `live`: it has been closed. */
+/** Forget every pane not in `live`, and its draft: it has been closed. */
 export function pruneConversations(live: Iterable<string>) {
   const keep = new Set(live);
   for (const id of pool.keys()) if (!keep.has(id)) pool.delete(id);
+  for (const id of drafts.keys()) if (!keep.has(id)) drafts.delete(id);
+}
+
+/** What was typed into a pane's message box and not yet sent (ACP-21). */
+export interface HeldDraft {
+  text: string;
+  images: PastedImage[];
+}
+
+const NO_DRAFT: HeldDraft = { text: "", images: [] };
+
+const drafts = new Map<string, HeldDraft>();
+
+/**
+ * The unsent message `paneId` had. It lived in the pane's component, which
+ * unmounts when the Henchman, the task or the Chat view is left, and what
+ * was typed was gone on coming back.
+ */
+export function heldDraft(paneId: string): HeldDraft {
+  return drafts.get(paneId) ?? NO_DRAFT;
+}
+
+/** Keep `draft` for `paneId`; an empty one is forgotten. */
+export function holdDraft(paneId: string, draft: HeldDraft) {
+  if (draft.text === "" && draft.images.length === 0) drafts.delete(paneId);
+  else drafts.set(paneId, draft);
 }

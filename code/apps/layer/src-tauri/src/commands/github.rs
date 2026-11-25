@@ -86,6 +86,11 @@ pub struct CheckoutPr {
 /// its base until `github_retarget_pr` moves it.
 #[tauri::command]
 pub async fn set_checkout_base(state: State<'_, AppState>, checkout_id: String, base: String) -> Result<()> {
+    set_base(&state, &checkout_id, &base)
+}
+
+/// [`set_checkout_base`], for agents too (`set_base`).
+pub(crate) fn set_base(state: &AppState, checkout_id: &str, base: &str) -> Result<()> {
     let base = base.trim().to_string();
     if base.is_empty() {
         return Err(Error::Other("a pull request needs a base branch".into()));
@@ -161,8 +166,8 @@ pub async fn github_retarget_pr(state: State<'_, AppState>, checkout_id: String)
 
     let dir = PathBuf::from(&checkout.path);
     let (owner, name) = off_runtime(move || git::origin_slug(&dir)).await??;
-    let pr = client
-        .pull_for_branch(&owner, &name, &task.branch)
+    let branches = super::pr_branches::branches(&checkout, &task.branch).await?;
+    let pr = super::pr_branches::open_pull(&client, &owner, &name, &branches)
         .await?
         .ok_or_else(|| Error::NotFound(format!("an open PR for {}", task.branch)))?;
 
@@ -393,6 +398,7 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
     // every other request sharing it.
     let local = {
         let checkouts = checkouts.clone();
+        let task_branch = task.branch.clone();
         off_runtime(move || {
             checkouts
                 .iter()
@@ -402,7 +408,8 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
                     // every task on a timer, and building the list reads each
                     // untracked file.
                     let changed = git::changed_count(&dir, &c.base, c.base_commit.as_deref(), git::Scope::Branch);
-                    (changed, git::origin_slug_cached(&dir))
+                    let branches = super::pr_branches::branches_of(c, &task_branch);
+                    (changed, git::origin_slug_cached(&dir), branches)
                 })
                 .collect::<Vec<_>>()
         })
@@ -410,7 +417,7 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
     };
 
     // Then GitHub, for every repo at once.
-    let rows = checkouts.into_iter().zip(local).map(|(checkout, (changed, slug))| {
+    let rows = checkouts.into_iter().zip(local).map(|(checkout, (changed, slug, branches))| {
         let task = &task;
         async move {
             let repo =
@@ -433,7 +440,7 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
             // One repo without a GitHub remote should not fail the whole view.
             match slug {
                 Ok((owner, name)) => {
-                    match client.pulls_for_branch(&owner, &name, &task.branch).await {
+                    match super::pr_branches::pulls(client, &owner, &name, &branches).await {
                         Ok(mut all) if !all.is_empty() => {
                             // The open one is the one still being decided. With
                             // none open, the newest says what became of the branch.
@@ -558,7 +565,8 @@ pub async fn github_pr_feedback(state: State<'_, AppState>, task_id: String) -> 
                 state.config.project(&checkout.project_id).map(|p| p.name).unwrap_or_else(|_| "(unknown)".into());
             let found: Result<Option<RepoFeedback>> = async {
                 let (owner, name) = slug?;
-                let Some(pr) = client.pull_for_branch(&owner, &name, &task.branch).await? else {
+                let branches = super::pr_branches::branches(&checkout, &task.branch).await?;
+                let Some(pr) = super::pr_branches::open_pull(client, &owner, &name, &branches).await? else {
                     return Ok(None);
                 };
                 // The commit GitHub has, not the local branch: what was checked

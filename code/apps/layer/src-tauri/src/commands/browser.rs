@@ -7,15 +7,18 @@ use tauri::{AppHandle, Manager};
 
 use super::AppState;
 use crate::browser::input::BrowserInput;
-use crate::browser::{sign_in, sites, AgentAction, Dialog, Driver, SiteRequest, TabInfo, Viewport};
+use crate::browser::{sign_in, sites, AgentAction, Dialog, Download, Driver, SiteRequest, TabInfo, Viewport};
 use crate::config::SavedSignIn;
 use crate::error::{Error, Result};
 
 /// A task's tab, as the panel shows it.
 #[derive(Debug, Serialize)]
 pub struct BrowserView {
-    /// Whether a Chrome is installed to run (BRW-1).
-    pub chrome: bool,
+    /// The app's own Chrome being downloaded, which the browser waits on
+    /// (BRW-24).
+    pub download: Option<Download>,
+    /// Why the last download of it failed, until the next one starts.
+    pub download_failed: Option<String>,
     /// The tab's session; a new one means the tab was made again.
     pub tab: Option<String>,
     pub url: String,
@@ -42,13 +45,13 @@ pub struct BrowserView {
 /// never opened and whose agents never used the browser has no tab.
 #[tauri::command]
 pub async fn browser_view(app: AppHandle, task_id: String) -> Result<BrowserView> {
-    // Looking for Chrome reads the disk.
-    let chrome = super::off_runtime(crate::browser::chrome_installed).await?;
     let state = app.state::<AppState>();
     let view = state.browser.view(&task_id);
     let sites = state.config.read().browser.sites;
+    let (download, download_failed) = state.browser.download();
     Ok(BrowserView {
-        chrome,
+        download,
+        download_failed,
         agents_may: view.tab.is_some() && sites::allowed(&view.url, &sites),
         tab: view.tab,
         url: view.url,
@@ -334,6 +337,20 @@ pub async fn add_browser_sign_in(
     password: String,
 ) -> Result<SavedSignIn> {
     super::blocking(app, move |state| sign_in::save(state, &site, &username, &password)).await
+}
+
+/// Change a saved sign-in from Settings → Browser (BRW-18): its site and
+/// username, and its password only when a new one is typed. Off the command
+/// thread: the keychain can stop and ask.
+#[tauri::command]
+pub async fn change_browser_sign_in(
+    app: AppHandle,
+    id: String,
+    site: String,
+    username: String,
+    password: Option<String>,
+) -> Result<SavedSignIn> {
+    super::blocking(app, move |state| sign_in::change(state, &id, &site, &username, password.as_deref())).await
 }
 
 /// Forget a saved sign-in, its password with it.

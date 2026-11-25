@@ -130,6 +130,20 @@ pub fn fetch_store(store: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The branch origin's HEAD names, asked of origin itself, and only when the
+/// copy has fetched it. A clone's `origin/HEAD` is written when it is cloned
+/// and never moves after, so a team that moved its default from `dev` to
+/// `main` kept every Sync fast-forwarding `dev` and every task cut from it.
+pub fn origin_default(store: &Path) -> Option<String> {
+    let out = run(store, &["ls-remote", "--symref", "origin", "HEAD"]).ok()?;
+    let branch = out.lines().find_map(|l| {
+        let (target, name) = l.strip_prefix("ref: refs/heads/")?.split_once('\t')?;
+        (name.trim() == "HEAD").then(|| target.to_string())
+    })?;
+    check_names(&branch, "HEAD").ok()?;
+    tip(store, &format!("refs/remotes/origin/{branch}")).map(|_| branch)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Standing {
     /// Commits on origin's branch that the clone's does not have.

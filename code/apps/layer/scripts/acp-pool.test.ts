@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { heldConversation, holdConversation, pruneConversations } from "../src/lib/acpPool";
+import {
+  heldConversation,
+  heldDraft,
+  holdConversation,
+  holdDraft,
+  pruneConversations,
+} from "../src/lib/acpPool";
 import type { AcpEntry, AcpView } from "../src/lib/types";
 
 const say = (index: number, text: string, rev = index): AcpEntry => ({
@@ -63,5 +69,29 @@ describe("a conversation kept while its pane is off screen (ACP-7)", () => {
 
   test("a pane never seen asks from no revision", () => {
     expect(heldConversation("never").rev).toBeNull();
+  });
+});
+
+describe("a message typed and not sent (ACP-21)", () => {
+  const image = { mimeType: "image/png", data: "AA==", url: "blob:x" };
+
+  test("is there when the pane comes back", () => {
+    holdDraft("typed", { text: "half a thought", images: [image] });
+    expect(heldDraft("typed")).toEqual({ text: "half a thought", images: [image] });
+  });
+
+  test("is gone once sent, and a pane never typed in has none", () => {
+    holdDraft("sent", { text: "go", images: [] });
+    holdDraft("sent", { text: "", images: [] });
+    expect(heldDraft("sent")).toEqual({ text: "", images: [] });
+    expect(heldDraft("untouched")).toEqual({ text: "", images: [] });
+  });
+
+  test("goes with its pane when the pane is closed", () => {
+    holdDraft("kept", { text: "a", images: [] });
+    holdDraft("shut", { text: "b", images: [] });
+    pruneConversations(["kept"]);
+    expect(heldDraft("kept").text).toBe("a");
+    expect(heldDraft("shut").text).toBe("");
   });
 });

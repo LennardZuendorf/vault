@@ -266,7 +266,7 @@ impl Conn {
         self.open_as(st, fx, opening);
     }
 
-    fn open_as(&self, st: &mut State, fx: &mut Effects, opening: Opening) {
+    pub(super) fn open_as(&self, st: &mut State, fx: &mut Effects, opening: Opening) {
         let servers = self.servers(st);
         let cwd = st.cwd.clone();
         let (method, mut params) = match &opening {
@@ -1070,5 +1070,46 @@ mod tests {
             &json!({ "jsonrpc": "2.0", "id": set["id"], "error": { "code": -32603, "message": "no" } }).to_string(),
         );
         assert_eq!(sent(&rx).remove(0)["method"], "session/prompt");
+    }
+
+    #[test]
+    fn clear_opens_a_new_conversation_in_the_same_mode_and_the_window_drops_the_old_one() {
+        let (c, rx) = with_mode("auto", modes("default"));
+        let set = sent(&rx).remove(0);
+        reply(&c, &set["id"], json!({ "configOptions": modes("auto") }));
+        let prompt = sent(&rx).remove(0);
+        reply(&c, &prompt["id"], json!({ "stopReason": "end_turn" }));
+        let seen = c.view(None).changes.rev;
+
+        c.prompt("/clear").unwrap();
+        let new = sent(&rx).remove(0);
+        assert_eq!(new["method"], "session/new", "not sent to the agent as words");
+        assert!(!c.view(None).ready);
+        reply(&c, &new["id"], json!({ "sessionId": "s-2", "configOptions": modes("default") }));
+        let set = sent(&rx).remove(0);
+        assert_eq!((set["params"]["sessionId"].as_str(), set["params"]["value"].as_str()), (Some("s-2"), Some("auto")));
+
+        let after = c.view(Some(seen)).changes;
+        assert!(!after.reset);
+        assert_eq!(after.base, after.len - 1, "only the note that says so is left");
+        assert!(format!("{:?}", after.entries).contains("A new conversation"));
+        c.prompt("hello").unwrap();
+        reply(&c, &set["id"], json!({ "configOptions": modes("auto") }));
+        assert_eq!(sent(&rx).remove(0)["params"]["sessionId"], "s-2");
+    }
+
+    #[test]
+    fn clear_waits_for_a_turn_to_be_stopped_and_an_agents_own_clear_is_its_own() {
+        let (c, rx, _) = opened(Some("go"));
+        let prompt = sent(&rx).remove(0);
+        assert!(c.prompt("/new").is_err(), "refused mid-turn");
+        reply(&c, &prompt["id"], json!({ "stopReason": "end_turn" }));
+        c.handle_line(r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s-1","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"clear","description":"Clear"}]}}}"#);
+        c.prompt("/clear").unwrap();
+        let out = sent(&rx).remove(0);
+        assert_eq!(
+            (out["method"].as_str(), out["params"]["prompt"][0]["text"].as_str()),
+            (Some("session/prompt"), Some("/clear"))
+        );
     }
 }

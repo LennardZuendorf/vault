@@ -11,8 +11,13 @@ export interface AgentAction {
 
 /** A task's browser tab, as the panel shows it (§18). */
 export interface BrowserView {
-  /** A Chrome is installed to run. */
-  chrome: boolean;
+  /**
+   * The app's own Chrome, while the browser waits on its download (BRW-24):
+   * bytes so far, and in all (0 until Google says).
+   */
+  download: { done: number; total: number } | null;
+  /** Why the last download the browser waited on failed, until the next. */
+  download_failed: string | null;
   /**
    * The active tab's session; null while the task has no tab. A new one is
    * another tab, or the tab made again: the panel watches it afresh.

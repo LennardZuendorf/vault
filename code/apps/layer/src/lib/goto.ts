@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import { useStore } from "../store";
 import { api } from "./api";
 import { isHenchman } from "./lair";
+import { isRoutineRun, useRoutines } from "./routines";
 import { route } from "./target";
 
 /**
@@ -32,8 +33,24 @@ export function goTo(target: string, opts: { raise?: boolean } = {}) {
           s.setView("henchman");
           break;
         }
+        // So is a routine's run (ROUT-1): its own conversation, on its routine.
+        if (step.pane) {
+          const run = useRoutines.getState().routines?.runs.find((r) => r.pane_id === step.pane);
+          if (run || s.panes.some((p) => p.id === step.pane && isRoutineRun(p))) {
+            s.setView("routines");
+            if (run) {
+              useRoutines.getState().show(run.routine_id);
+              useRoutines.getState().showRun(run.id);
+            }
+            break;
+          }
+        }
         s.setView("chat");
         if (step.pane) s.showPane(step.pane);
+        break;
+      case "routines":
+        s.setView("routines");
+        if (step.routine) useRoutines.getState().show(step.routine);
         break;
       case "reviews":
         if (step.review) s.showReview(step.review);

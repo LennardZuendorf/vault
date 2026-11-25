@@ -20,6 +20,8 @@ import { emit } from "@tauri-apps/api/event";
  *   &role=member          a member of the workspace, who sees its settings (SET-7)
  *   &tracker=github       the workspace's tickets are GitHub issues (TKT-15)
  *   &theme=night|day|tokyo-night|cursor-dark|cursor-light|ayu-dark|ayu-light|system   the saved theme (SET-5)
+ *   &chrome=download|offline   the app's Chrome is downloaded when the browser is first
+ *                          watched; offline: the first try fails partway (BRW-24)
  *
  * From the console, or a browser tool's JavaScript:
  *
@@ -57,6 +59,7 @@ import { henchmanAnswers } from "./henchman";
 import { limitAnswers } from "./limits";
 import { loopAnswers, seedLoop } from "./loop";
 import { profileAnswers } from "./profiles";
+import { routineAnswers } from "./routines";
 import { runAnswers } from "./runs";
 import { specAnswers, specDisk } from "./spec";
 import { githubTracker } from "./tracker";
@@ -71,6 +74,8 @@ const params = new URLSearchParams(location.search);
 const scenarios = new Map(Object.entries(SCENARIOS));
 const world = (scenarios.get(params.get("scenario") ?? "busy") ?? SCENARIOS.busy)();
 const calls: { cmd: string; args: Args }[] = [];
+/** Tasks whose offered screenshots were added or dismissed (PR-13). */
+const droppedOffers = new Set<string>();
 const theme = params.get("theme");
 if (theme) world.settings.ui.theme = theme as typeof world.settings.ui.theme;
 if (params.get("role") === "member" && world.settings.workspace)
@@ -80,6 +85,9 @@ seedEpic(world);
 if (params.get("tracker") === "github") githubTracker(world);
 for (const p of world.panes) if (p.acp) seedAcp(p.id);
 const HENCHMAN_ROOM = "/Users/you/.villain-worktrees/_chat/henchman";
+const HENCHMAN_OFF = "The Henchman is off. Turn it on in Settings → Agents.";
+// `?henchman=off`: turned off in Settings (HEN-16).
+if (params.get("henchman") === "off") world.settings.henchman_on = false;
 // `?henchman=waiting`: it was left out at launch (PANE-7) and waits.
 if (params.get("henchman") === "waiting")
   world.waiting.push({
@@ -228,7 +236,8 @@ const liveProcesses = () => processes.filter((x) => world.panes.some((p) => p.id
  */
 const browsers = new Map<string, BrowserView>();
 const noTab = (): BrowserView => ({
-  chrome: true,
+  download: null,
+  download_failed: null,
   tab: null,
   url: "",
   title: "",
@@ -244,9 +253,47 @@ const noTab = (): BrowserView => ({
 });
 /** The sign-in window is open (BRW-23): app-wide, as the browser is. */
 let signingIn = false;
+
+/**
+ * The app's own Chrome (BRW-24), app-wide too. `&chrome=download` has none
+ * yet; `&chrome=offline` loses the connection a third of the way, once.
+ */
+const chromeScene = params.get("chrome");
+let chromeHere = chromeScene !== "download" && chromeScene !== "offline";
+let downloading: { done: number; total: number } | null = null;
+let downloadFailed: string | null = null;
+let lostOnce = false;
+let fetching: Promise<void> | null = null;
+function chromeReady(): Promise<void> {
+  if (chromeHere) return Promise.resolve();
+  fetching ??= (async () => {
+    downloadFailed = null;
+    const total = 168 * 2 ** 20;
+    for (let done = 0; done < total; done += 4 * 2 ** 20) {
+      downloading = { done, total };
+      void emit("browser:changed", "");
+      await new Promise((r) => setTimeout(r, 120));
+      if (chromeScene === "offline" && !lostOnce && done > total / 3) {
+        lostOnce = true;
+        downloading = null;
+        downloadFailed =
+          "http: error decoding response body: connection closed before message completed";
+        void emit("browser:changed", "");
+        throw new Error(`The browser could not be downloaded: ${downloadFailed}`);
+      }
+    }
+    downloading = null;
+    chromeHere = true;
+    void emit("browser:changed", "");
+  })().finally(() => {
+    fetching = null;
+  });
+  return fetching;
+}
 if (world.panes.some((p) => p.task_id === "t-login")) {
   browsers.set("t-login", {
-    chrome: true,
+    download: null,
+    download_failed: null,
     tab: "tab-t-login-2",
     url: "http://localhost:5173/login",
     title: "Sign in · Acme",
@@ -566,6 +613,34 @@ const answer: Record<string, Answer> = {
     };
     return null;
   },
+  // Off, it stops and its conversation waits, as the app keeps it (HEN-16).
+  set_henchman_on: (a) => {
+    world.settings.henchman_on = a.on as boolean;
+    if (a.on) return null;
+    for (const p of world.panes.filter((x) => x.cwd === HENCHMAN_ROOM)) {
+      world.waiting.push({
+        id: `saved-${p.id}`,
+        task_id: "chat",
+        kind: "agent",
+        agent_id: p.agent_id,
+        cwd: HENCHMAN_ROOM,
+        title: p.topic,
+      });
+    }
+    world.panes = world.panes.filter((x) => x.cwd !== HENCHMAN_ROOM);
+    void emit("panes:waiting");
+    return null;
+  },
+  // Kept trimmed, and refused whole past the limit, as the app does (HEN-17).
+  set_henchman_instructions: (a) => {
+    const text = (a.instructions as string).trim();
+    if (text.length > 4000)
+      throw new Error(
+        `Custom instructions hold at most 4000 characters; these have ${text.length}.`,
+      );
+    world.settings.henchman_instructions = text;
+    return null;
+  },
   set_slack_bot_on: (a) => {
     if (world.settings.slack_bot) world.settings.slack_bot.enabled = a.on as boolean;
     world.slackBot.status = { state: a.on ? "connected" : "off", error: null };
@@ -694,6 +769,14 @@ const answer: Record<string, Answer> = {
   ...limitAnswers(world.tasks.length > 0),
   // The Henchman's standing orders (§28).
   ...henchmanAnswers(world.tasks.length > 0),
+  // Routines (§29): each run a chat in its own room.
+  ...routineAnswers(world.tasks.length > 0, (r, room, ask) => {
+    const p = newPane({ agentId: r.agent.agent_id, acp: true }, "agent", "chat");
+    p.cwd = room;
+    p.title = r.name;
+    if (ask) acpAnswers.acp_prompt({ paneId: p.id, text: r.prompt });
+    return p;
+  }),
   ...profileAnswers(),
   spawn_agent: (a) => {
     const p = newPane(a, "agent", a.taskId as string);
@@ -710,6 +793,7 @@ const answer: Record<string, Answer> = {
   },
   // The Henchman (§28): one, in its own room, asked for a brief.
   spawn_henchman: (a) => {
+    if (!world.settings.henchman_on) throw new Error(HENCHMAN_OFF);
     const running = world.panes.find((x) => x.cwd === HENCHMAN_ROOM && x.running);
     if (running) return running;
     const p = newPane({ ...a, acp: true }, "agent", "chat");
@@ -730,9 +814,11 @@ const answer: Record<string, Answer> = {
   reopen_waiting_pane: (a) => {
     const w = world.waiting.find((x) => x.id === a.id);
     if (!w) throw new Error("That pane is no longer waiting to be reopened.");
+    const henchman = w.cwd === HENCHMAN_ROOM;
+    // Refused while it is off, and still waiting (HEN-16).
+    if (henchman && !world.settings.henchman_on) throw new Error(HENCHMAN_OFF);
     world.waiting = world.waiting.filter((x) => x !== w);
     void emit("panes:waiting");
-    const henchman = w.cwd === HENCHMAN_ROOM;
     const p = newPane({ agentId: w.agent_id, acp: henchman }, w.kind, w.task_id);
     // Back in its own folder, as the app reopens it: a chat in its room (CHAT-1).
     if (w.cwd !== null) p.cwd = w.cwd;
@@ -868,6 +954,37 @@ const answer: Record<string, Answer> = {
   github_all_prs: () => structuredClone(world.prs),
   github_task_prs: (a) =>
     structuredClone(world.prs.find((p) => p.task_id === a.taskId)?.rows ?? []),
+  github_set_pr_draft: (a) => {
+    for (const r of world.prs.flatMap((p) => p.rows))
+      if (r.pr && r.checkout_id === a.checkoutId && r.pr.number === a.number)
+        r.pr.draft = Boolean(a.draft);
+    return Boolean(a.draft);
+  },
+  // Every task's agent has offered two screenshots until one is added or dismissed (PR-13).
+  pr_image_offer: (a) => {
+    if (droppedOffers.has(String(a.taskId))) return null;
+    const shot = (fill: string, text: string) =>
+      `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200"><rect width="320" height="200" fill="${fill}"/><text x="20" y="40" font-family="sans-serif" font-size="20" fill="#888">${text}</text></svg>`)}`;
+    return {
+      repo: "api",
+      images: [
+        {
+          path: "/tmp/night.png",
+          caption: "Night",
+          repo: "api",
+          preview: shot("#15171c", "Night"),
+        },
+        { path: "/tmp/day.png", caption: "Day", repo: "api", preview: shot("#f4f1ea", "Day") },
+      ],
+    };
+  },
+  show_pr_images: () => [
+    { checkout_id: "c1", repo: "api", ok: true, detail: "2 screenshots added" },
+  ],
+  drop_pr_image_offer: (a) => {
+    droppedOffers.add(String(a.taskId));
+    return null;
+  },
   github_review_queue: () => structuredClone(world.reviews),
   github_pr_feedback: () => world.feedback,
   checkout_branches: () => ["main", "develop"],
@@ -1155,6 +1272,8 @@ const answer: Record<string, Answer> = {
   browser_view: (a) => ({
     ...structuredClone(browsers.get(a.taskId as string) ?? noTab()),
     signing_in: signingIn,
+    download: downloading,
+    download_failed: downloadFailed,
   }),
   browser_sign_in_window: (a) => {
     // The backend's page_for: Google's `continue` address, else the page.
@@ -1184,6 +1303,7 @@ const answer: Record<string, Answer> = {
   },
   browser_go: () => null,
   browser_watch: async (a) => {
+    await chromeReady();
     const b = tabOf(a.taskId as string);
     const frames = a.frames as { id: number };
     const jpeg = await frameOf(b, a.width as number, a.height as number, a.scale as number);
@@ -1199,6 +1319,16 @@ const answer: Record<string, Answer> = {
     };
     world.settings.browser_sign_ins.push(saved);
     return saved;
+  },
+  change_browser_sign_in: (a) => {
+    const all = world.settings.browser_sign_ins;
+    const site = (a.site as string).trim().toLowerCase();
+    const username = (a.username as string).trim();
+    if (all.some((s) => s.id !== a.id && s.site === site && s.username === username))
+      throw `a sign-in for ${username} on ${site} is already saved`;
+    const changed = { id: a.id as string, site, username };
+    world.settings.browser_sign_ins = all.map((s) => (s.id === a.id ? changed : s));
+    return changed;
   },
   forget_browser_sign_in: (a) => {
     world.settings.browser_sign_ins = world.settings.browser_sign_ins.filter((s) => s.id !== a.id);

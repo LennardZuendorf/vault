@@ -226,6 +226,7 @@ for, and the reverse, and that each is in this table.
 | `pty:exit` | `{ pane_id, code }` | a pane's process ended | `Watchers.tsx` → refresh, toast, Slack |
 | `acp:update` | pane id | an ACP pane's conversation changed while it is on screen (batched, ~40ms; ACP-7) | `lib/acpUpdates.ts`, one listener for all → `AcpPane.tsx` asks `acp_view` for what changed |
 | `pr:draft` | `{ task_id, text }` | a chunk of a drafted PR description | `PrPanel.tsx` |
+| `pr:images-offered` | task id | an agent offered screenshots for a PR with `pr_images` (PR-13) | `PrImageOffer.tsx` |
 | `issue:draft` | `{ request_id, text }` | a chunk of an improved ticket description | `tickets/OptimizeDescription.tsx` |
 | `spec:draft` | `{ request_id, path, text }` | one file's draft so far, whole each time, `path` being its file in the spec folder: Kiro's requirements, design or tasks (Draft, SPEC-5), or the requirements as Apply answers rewrites them (SPEC-20); the backend writes the file when the run is done | `Watchers.tsx` → `useSpecs.chunk`, into that file's editor |
 | `spec:changed` | task id | an agent ticked a step of the task's spec (`spec_task`) or wrote a file of it (`spec_write`), SPEC-13; or anything changed in `<task>/spec/` of the task whose Spec tab is on screen, once it has been quiet for 200 ms (`spec_watch.rs`, a `notify` watcher that `watch_spec` points at one task at a time, SPEC-36) | `Watchers.tsx` → `useSpecs.changed`, which reads it again if it has been read; `pty:activity` for an agent that stopped does the same, to show a spec file it wrote |
@@ -236,6 +237,7 @@ for, and the reverse, and that each is in this table.
 | `messages:changed` | none | the message center's log changed: recorded, read or cleared (`messages.rs`) | `Watchers.tsx` → `refreshMessages` |
 | `henchman:orders` | none | the Henchman's standing orders or what it leaves alone changed, by its tools or the lair (HEN-7, HEN-8) | `Watchers.tsx` → `useOrders.refresh` |
 | `henchman:lair` | the lair (`needs`, `did`) | the Henchman raised a need, the user closed one, one was seen, or its tools did something (HEN-13, HEN-14) | `Watchers.tsx` → `useLair.set` |
+| `routines:changed` | every routine (with `next`) and run kept | a routine was made, changed or deleted, a run started, changed state or was skipped (`routines.rs`, ROUT-1, ROUT-8) | `Watchers.tsx` → `useRoutines.set` |
 | `runs:changed` | none | an agent's run was recorded, a task finished or deleted, or the log cleared (`runs.rs`, RUN-1, RUN-9) | `UsageView.tsx`, while open → `listRuns` |
 | `limits:changed` | every provider's latest `PlanLimits` | a Claude status line posted, or OpenAI was asked (`limits.rs`, LIMIT-2, LIMIT-3) | `sidebar/PlanLimits.tsx` → its rows |
 | `notes:changed` | none | an agent remembered, checked or forgot a repo note (`notes.rs`, MEM-5), or the workspace's snapshot changed the notes (`commands/workspace.rs`, PROF-14) | `ReposView.tsx`, while open → `listRepoNotes` |
@@ -293,8 +295,11 @@ in front, and slower once nobody has touched it for 45 seconds
 ## The browser
 
 `browser/` runs one headless Chrome for the app, with a tab per task
-(§18 in `features.md`). Chrome is the user's installed one, on a profile in
-the config folder, started by the first call that needs a tab.
+(§18 in `features.md`). Chrome is the app's own Chrome for Testing, never
+one installed on the Mac (BRW-1): `install.rs` downloads it into the Caches
+folder before the first start and a newer one in the background (BRW-24),
+and `chrome.rs` runs it, on a profile in the config folder, started by the
+first call that needs a tab.
 
 - **The pipe.** Chrome reads DevTools Protocol messages on its fd 3 and
   writes on its fd 4 (`--remote-debugging-pipe`), each ended by a NUL.
@@ -316,6 +321,13 @@ the config folder, started by the first call that needs a tab.
   change of a task's tabs is saved to it (BRW-6), except while the browser
   shuts down: Chrome reports every tab destroyed as it closes, and taken at
   its word, quitting forgot them all.
+- **Sleeping tabs** (`sleep.rs`): a thread looks every minute and closes
+  the tabs of tasks nobody has used for 15 minutes (BRW-6), keeping their
+  addresses as on quitting, and stops Chrome once no task has any. Each
+  `page` call and each panel closing marks its task used. The tabs leave
+  the app's list before their targets close, so the reader's "destroyed"
+  finds no tab and the kept addresses stay. Open, every task's tabs kept
+  Chrome at 1.2–1.5 GB and 5–12% of a core.
 - **Tools** (`tools.rs`) find the task from the calling pane, check the
   page's site against `sites.rs` before reading or acting, and answer with
   the page's outline (`snapshot.rs`), built from the accessibility tree:

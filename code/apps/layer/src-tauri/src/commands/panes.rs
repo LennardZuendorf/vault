@@ -11,7 +11,7 @@ use crate::error::{Error, Result};
 use crate::pty::{PaneInfo, PaneKind, SpawnOptions};
 use crate::shellenv;
 
-use super::panes_restore::remember_pane;
+use super::panes_restore::{remember_pane, saved_session};
 use super::task_context::write_task_context;
 use super::AppState;
 
@@ -157,7 +157,7 @@ pub(crate) fn open_shell(
             title_topic: None,
         },
     )?;
-    remember_pane(app, state, &pane);
+    remember_pane(app, state, &pane, None);
     Ok(pane)
 }
 
@@ -247,6 +247,14 @@ pub(crate) enum Resume {
 }
 
 impl Resume {
+    /// The conversation it is opened to pick up by its id (ACP-9), if any.
+    pub(crate) fn session(&self) -> Option<String> {
+        match self {
+            Resume::Restart { session, .. } => session.clone(),
+            _ => None,
+        }
+    }
+
     /// The newest conversation, when there is one to pick up.
     pub(crate) fn newest_if(found: bool) -> Self {
         if found {
@@ -307,9 +315,10 @@ pub(crate) fn start_agent(
         if let Some(dir) = agent_file_dir(state, &task) {
             let _ = crate::mcp::write_config(&dir);
         }
+        let opened_on = resume.session();
         let start = super::acp_panes::Start { task_id, checkout_id, cwd, title, prompt, resume };
         let pane = super::acp_panes::start(app, state, def, start)?;
-        remember_pane(app, state, &pane);
+        remember_pane(app, state, &pane, opened_on);
         return Ok(pane);
     }
     let program =
@@ -361,7 +370,7 @@ pub(crate) fn start_agent(
             title_topic: agents::topic_reader(def.integration),
         },
     )?;
-    remember_pane(app, state, &pane);
+    remember_pane(app, state, &pane, None);
     Ok(pane)
 }
 
@@ -548,6 +557,19 @@ pub(crate) fn agent_file_dir(state: &AppState, task: &Task) -> Option<PathBuf> {
 
 /// What the app knows, written where a coding agent will read it.
 ///
+/// Whether an agent starts after its context file was written, or not.
+/// A chat starts without one rather than not at all. The Henchman does not:
+/// started anyway, it worked on the instructions it read last, the user's
+/// newest unread, with nothing to say so (HEN-17).
+fn context_written(henchman: bool, written: Result<()>) -> Result<()> {
+    match written {
+        Err(e) if henchman => Err(Error::Other(format!(
+            "The Henchman was not woken: Layer could not write your instructions for it ({e}), and it would have worked on old ones."
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// Agents pick up `CLAUDE.md` (and `AGENTS.md`) from their working directory,
 /// so the chat scratch folder is a safe place to leave this: it is not a
 /// repository, so nothing here can pollute a diff or get committed by mistake.
@@ -596,6 +618,11 @@ pub(crate) fn write_chat_context(state: &AppState, dir: &Path) -> Result<()> {
         "ACME-12 to Done\", \"finish that task\") is their agreement: do it, don't ask again. ",
         "A ticket goes to done by `jira_transition` into a status whose `to_category` is ",
         "`done`.\n\n",
+        "## Routines\n\n",
+        "A routine is a prompt Layer asks on a schedule, each time as a new chat, shown in ",
+        "its Routines tab. When the user wants something asked every morning or every hour, ",
+        "make it with `create_routine`; `list_routines`, `update_routine`, `run_routine` and ",
+        "`delete_routine` (with `confirm`) do the rest.\n\n",
         "## Logs\n\n",
         "To see what a service did, read its logs through the same server: ",
         "`grafana_logs` for Loki, and `s3_logs_sources` for logs kept in S3 (request ",
@@ -669,6 +696,13 @@ pub(crate) fn open_chat(
     resume: Resume,
     acp: bool,
 ) -> Result<PaneInfo> {
+    // Held until the pane is started and saved, so turning the Henchman off
+    // cannot slip between the check and the start (HEN-16).
+    let henchman = room.as_deref().is_some_and(super::henchman::is_room);
+    let _held = super::henchman::hold(henchman);
+    if henchman {
+        super::henchman::refuse_while_off(state)?;
+    }
     let def = agents::find(&agent_id).ok_or_else(|| Error::NotFound(format!("agent {agent_id}")))?;
 
     let dir = match room {
@@ -678,15 +712,15 @@ pub(crate) fn open_chat(
         }
         None => chat_room(state, &uuid::Uuid::new_v4().to_string()[..8])?,
     };
-    // Best effort: a context file that cannot be written is not a reason to
-    // refuse to start the agent. The Henchman's room gets its own (HEN-2).
-    let henchman = super::henchman::is_room(state, &dir);
-    let _ = if henchman { super::henchman::write_context(state, &dir) } else { write_chat_context(state, &dir) };
+    // The Henchman's room gets its own (HEN-2).
+    let written = if henchman { super::henchman::write_context(state, &dir) } else { write_chat_context(state, &dir) };
+    context_written(henchman, written)?;
     let _ = crate::mcp::write_config(&dir);
     let name = if henchman { "Henchman" } else { def.name };
     let title = format!("{name}{}", if resume != Resume::No { " (resumed)" } else { "" });
 
     if acp {
+        let opened_on = resume.session();
         let cwd = dir.to_string_lossy().to_string();
         let start = super::acp_panes::Start {
             task_id: CHAT_TASK_ID.to_string(),
@@ -697,7 +731,7 @@ pub(crate) fn open_chat(
             resume,
         };
         let pane = super::acp_panes::start(app, state, def, start)?;
-        remember_pane(app, state, &pane);
+        remember_pane(app, state, &pane, opened_on);
         return Ok(pane);
     }
     let program =
@@ -739,7 +773,7 @@ pub(crate) fn open_chat(
             title_topic: agents::topic_reader(def.integration),
         },
     )?;
-    remember_pane(app, state, &pane);
+    remember_pane(app, state, &pane, None);
     Ok(pane)
 }
 
@@ -835,7 +869,9 @@ pub(crate) fn restart(app: &AppHandle, state: &AppState, id: &str) -> Result<Pan
         _ => def.program,
     };
     shellenv::which(program).ok_or_else(|| Error::NotFound(format!("{program} is not on your PATH")))?;
-    let session = state.ptys.session(id)?;
+    // Stopped before its agent named its conversation, it goes back to the
+    // one it was opened on (ACP-9), which its saved record keeps.
+    let session = state.ptys.session(id)?.or_else(|| state.config.with(|c| saved_session(&c.saved_panes, id)));
     // Without its id, `--continue` takes the folder's newest conversation,
     // and another agent there may be the one writing it.
     let shared = state
@@ -928,5 +964,15 @@ mod tests {
         assert_eq!(Resume::No.args(claude).unwrap(), None);
         // A CLI that cannot resume is refused, not started on a new conversation.
         assert!(restart(Some(id)).args(agents::find("gemini").unwrap()).is_err());
+    }
+
+    #[test]
+    fn the_henchman_is_not_woken_on_old_instructions_where_a_chat_starts_without_its_context() {
+        let unwritable = || Err(Error::Other("read-only file system".into()));
+        let henchman = context_written(true, unwritable());
+        assert!(henchman.is_err(), "the Henchman is not started");
+        assert!(format!("{}", henchman.unwrap_err()).contains("read-only file system"), "and says why");
+        assert!(context_written(false, unwritable()).is_ok(), "a chat starts anyway");
+        assert!(context_written(true, Ok(())).is_ok());
     }
 }

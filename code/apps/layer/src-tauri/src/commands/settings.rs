@@ -27,6 +27,10 @@ pub struct Settings {
     pub agent_models: std::collections::HashMap<String, Vec<crate::config::ModelChoice>>,
     /// What the Henchman is woken with (HEN-15).
     pub henchman: crate::config::HenchmanAgent,
+    /// Whether it is on at all (HEN-16).
+    pub henchman_on: bool,
+    /// The user's own instructions for it, empty for none (HEN-17).
+    pub henchman_instructions: String,
     pub worktree_root: String,
     pub worktree_root_is_default: bool,
     /// Agents are told to write the spec before any code (SPEC-38).
@@ -107,6 +111,8 @@ pub fn get_settings(state: State<AppState>) -> Settings {
         grafana: c.grafana,
         slack_bot: c.slack_bot,
         agent_models: c.agent_models,
+        henchman_on: !c.henchman.off,
+        henchman_instructions: c.henchman.instructions,
         henchman: c.henchman.agent,
     }
 }

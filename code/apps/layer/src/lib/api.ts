@@ -15,6 +15,7 @@ import type {
   RequiredField,
   DiffScope,
   DraftImage,
+  PrImageOffer,
   FeedbackItem,
   FlowStatus,
   Finished,
@@ -80,6 +81,7 @@ import type {
   SetupSnapshot,
   WorkspacePlace,
 } from "./types-profiles";
+import type { RoutinePatch, RoutineRun, Routines } from "./types-routines";
 import type { RunLog } from "./types-runs";
 
 export const api = {
@@ -175,6 +177,11 @@ export const api = {
     invoke<PaneInfo>("spawn_chat", { agentId, prompt: prompt ?? null, acp }),
   /** Wake the Henchman (HEN-2); the running one when it already runs. */
   spawnHenchman: (agentId: string) => invoke<PaneInfo>("spawn_henchman", { agentId }),
+  /** Turn the Henchman off, which stops it and keeps its conversation, or on again (HEN-16). */
+  setHenchmanOn: (on: boolean) => invoke<void>("set_henchman_on", { on }),
+  /** The user's own instructions for it, read each time it is woken; empty for none (HEN-17). */
+  setHenchmanInstructions: (instructions: string) =>
+    invoke<void>("set_henchman_instructions", { instructions }),
   /** What the Henchman is woken with from now on (HEN-15). */
   setHenchmanAgent: (agentId: string, model: string, effort: string) =>
     invoke<void>("set_henchman_agent", { agentId, model, effort }),
@@ -193,6 +200,16 @@ export const api = {
   henchmanLair: () => invoke<HenchmanLair>("henchman_lair"),
   /** The user closes one of the Henchman's needs. */
   henchmanNeedDone: (id: string) => invoke<HenchmanLair>("henchman_need_done", { id }),
+  /** Every routine and the runs kept (ROUT-1, ROUT-8). */
+  routinesList: () => invoke<Routines>("routines_list"),
+  /** A new routine, every day at 08:00; its id. */
+  routineCreate: () => invoke<string>("routine_create"),
+  routineUpdate: (id: string, patch: RoutinePatch) => invoke<void>("routine_update", { id, patch }),
+  /** It and its runs; a run at work is stopped. */
+  routineDelete: (id: string) => invoke<void>("routine_delete", { id }),
+  routineRunNow: (id: string) => invoke<RoutineRun>("routine_run_now", { id }),
+  /** A run's conversation, opened again where its pane has gone (ROUT-9). */
+  routineOpenRun: (runId: string) => invoke<PaneInfo>("routine_open_run", { runId }),
   ptyWrite: (paneId: string, data: string) => invoke<void>("pty_write", { paneId, data }),
   ptyResize: (paneId: string, rows: number, cols: number) =>
     invoke<void>("pty_resize", { paneId, rows, cols }),
@@ -213,6 +230,19 @@ export const api = {
   loopView: (paneId: string) => invoke<LoopView | null>("loop_view", { paneId }),
 
   // an agent over ACP (§20); `ptyDetach` says it is off screen, as for a terminal
+  saveChatImage: async (paneId: string, name: string, file: File): Promise<string> => {
+    const url = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error ?? new Error("Could not read the file."));
+      reader.readAsDataURL(file);
+    });
+    return invoke<string>("save_chat_image", {
+      paneId,
+      name,
+      data: url.slice(url.indexOf(",") + 1),
+    });
+  },
   /** What changed since `since`, and the pane is on screen from now (ACP-7). */
   acpView: (paneId: string, since: number | null) => invoke<AcpView>("acp_view", { paneId, since }),
   /** A prompt, with any images pasted into it (ACP-16). */
@@ -370,6 +400,9 @@ export const api = {
   taskBranchFacts: (taskId: string) => invoke<RepoBranchFacts[]>("task_branch_facts", { taskId }),
   checkoutBranches: (checkoutId: string) => invoke<string[]>("checkout_branches", { checkoutId }),
   githubRetargetPr: (checkoutId: string) => invoke<string>("github_retarget_pr", { checkoutId }),
+  /** Whether the PR is a draft afterwards (PR-15). */
+  githubSetPrDraft: (checkoutId: string, number: number, draft: boolean) =>
+    invoke<boolean>("github_set_pr_draft", { checkoutId, number, draft }),
   /** `skip`: checkout ids left out of this call, neither pushed nor opened. */
   githubOpenPrs: (taskId: string, title: string, body: string, draft: boolean, skip: string[]) =>
     invoke<RepoResult[]>("github_open_prs", { taskId, title, body, draft, skip }),
@@ -379,6 +412,9 @@ export const api = {
       taskId,
       images: images.map(({ path, caption, repo }) => ({ path, caption, repo })),
     }),
+  /** Screenshots an agent offered with `pr_images`, waiting for the user (PR-13). */
+  prImageOffer: (taskId: string) => invoke<PrImageOffer | null>("pr_image_offer", { taskId }),
+  dropPrImageOffer: (taskId: string) => invoke<void>("drop_pr_image_offer", { taskId }),
   githubPrFeedback: (taskId: string) => invoke<RepoFeedback[]>("github_pr_feedback", { taskId }),
   /** Typed into `paneId` when given; otherwise only returned, to start an agent with. */
   sendPrFeedback: (
@@ -520,6 +556,9 @@ export const api = {
   browserSignInDone: () => invoke<void>("browser_sign_in_done"),
   addBrowserSignIn: (site: string, username: string, password: string) =>
     invoke<SavedSignIn>("add_browser_sign_in", { site, username, password }),
+  /** An empty or absent password keeps the saved one (BRW-18). */
+  changeBrowserSignIn: (id: string, site: string, username: string, password: string | null) =>
+    invoke<SavedSignIn>("change_browser_sign_in", { id, site, username, password }),
   forgetBrowserSignIn: (id: string) => invoke<void>("forget_browser_sign_in", { id }),
   /** The site and username the page's sign-in form holds; never its password. */
   browserSignInForm: (taskId: string) => invoke<SignInForm>("browser_sign_in_form", { taskId }),

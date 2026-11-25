@@ -25,7 +25,16 @@ import type {
 } from "./lib/types";
 
 export const TABS = ["terminals", "spec", "diff", "pr"] as const;
-export const VIEWS = ["henchman", "work", "tickets", "chat", "repos", "reviews", "runs"] as const;
+export const VIEWS = [
+  "henchman",
+  "work",
+  "tickets",
+  "chat",
+  "routines",
+  "repos",
+  "reviews",
+  "runs",
+] as const;
 export type Tab = (typeof TABS)[number];
 export type View = (typeof VIEWS)[number];
 

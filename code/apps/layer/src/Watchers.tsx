@@ -7,10 +7,12 @@ import { CHAT_TASK_ID } from "./lib/derive";
 import { goTo } from "./lib/goto";
 import { useLair } from "./lib/henchman-lair";
 import { useOrders } from "./lib/henchman-orders";
+import { useRoutines } from "./lib/routines";
 import { useSpecs } from "./lib/specs";
 import { useTheme } from "./lib/theme";
 import type { InstallState, Target } from "./lib/types";
 import type { HenchmanLair } from "./lib/types-henchman";
+import type { Routines } from "./lib/types-routines";
 import { startWorkspaceSync, useSession } from "./lib/workspace-sync";
 import { exitIsNews, selectedTask, useStore } from "./store";
 
@@ -570,6 +572,18 @@ export function Watchers() {
       .refresh()
       .catch(() => {});
     const p = listen<HenchmanLair>("henchman:lair", (e) => useLair.getState().set(e.payload));
+    return () => {
+      void p.then((un) => un());
+    };
+  }, []);
+
+  // Routines and their runs (§29): each change carries them whole.
+  useEffect(() => {
+    void useRoutines
+      .getState()
+      .refresh()
+      .catch(() => {});
+    const p = listen<Routines>("routines:changed", (e) => useRoutines.getState().set(e.payload));
     return () => {
       void p.then((un) => un());
     };

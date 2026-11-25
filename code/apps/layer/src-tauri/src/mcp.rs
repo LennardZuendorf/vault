@@ -232,8 +232,10 @@ async fn dispatch(app: &AppHandle, method: &str, params: Value, caller: Option<&
                     .chain(commands::spec_tools())
                     .chain(commands::pr_images_tools())
                     .chain(commands::finish_tools())
+                    .chain(commands::base_tools())
                     .chain(commands::epic_tools())
                     .chain(commands::henchman_tools(app, caller))
+                    .chain(commands::routine_tools(app, caller))
                     .chain(commands::tracker_tools(uses)),
             );
             Ok(json!({ "tools": all }))
@@ -314,12 +316,12 @@ const DANGER: &[&str] = &[
     "slack_cleanup",
     "forget_repo",
     "open_prs",
-    "pr_images",
     "remember",
     "forget_note",
     "finish_task",
     "subtask_start",
     "spec_commit",
+    "delete_routine",
 ];
 
 pub(crate) fn confirm_prop() -> Value {
@@ -763,10 +765,12 @@ async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) ->
         n if commands::grafana_owns(n) => commands::grafana_call(&state, n, args).await,
         n if commands::s3_logs_owns(n) => commands::s3_logs_call(&state, n, args).await,
         n if commands::spec_owns(n) => commands::spec_call(app, args, caller).await,
-        n if commands::pr_images_owns(n) => commands::pr_images_call(&state, args).await,
+        n if commands::pr_images_owns(n) => commands::pr_images_call(app, args).await,
         n if commands::finish_owns(n) => commands::finish_call(app, args, caller).await,
+        "set_base" => commands::base_call(app, args).await,
         n if commands::epic_owns(n) => commands::epic_call(app, n, args, caller).await,
         n if commands::henchman_owns(n) => commands::henchman_call(app, n, args, caller).await,
+        n if commands::routine_owns(n) => commands::routine_call(app, n, args, caller).await,
 
         "slack_delete" => {
             let links: Vec<String> = args
@@ -986,7 +990,9 @@ mod tests {
                 .chain(commands::spec_tools())
                 .chain(commands::pr_images_tools())
                 .chain(commands::finish_tools())
-                .chain(commands::epic_tools()),
+                .chain(commands::base_tools())
+                .chain(commands::epic_tools())
+                .chain(commands::routine_listed()),
         );
         all.extend(
             commands::tracker_tools(Some(TrackerKind::Jira))
