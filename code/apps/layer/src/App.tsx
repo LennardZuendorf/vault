@@ -28,7 +28,7 @@ import { api } from "./lib/api";
 import { CHAT_TASK_ID, needsYou, repoTrouble, reviewCounts, taskTotals } from "./lib/derive";
 import { goTo } from "./lib/goto";
 import { useLair } from "./lib/henchman-lair";
-import { isHenchman, waitingCount } from "./lib/lair";
+import { chatAtWork, isHenchman, waitingCount } from "./lib/lair";
 import { pressKeys } from "./lib/press";
 import { isRoutineRun, useRoutines } from "./lib/routines";
 import { specProgress, useSpecs } from "./lib/specs";
@@ -53,11 +53,7 @@ function TopBar() {
   const running = useStore((s) =>
     s.panes.some((p) => p.kind === "agent" && p.running && p.task_id !== CHAT_TASK_ID),
   );
-  const chatting = useStore((s) =>
-    s.panes.some(
-      (p) => p.task_id === CHAT_TASK_ID && p.running && !isHenchman(p) && !isRoutineRun(p),
-    ),
-  );
+  const chatting = useStore((s) => chatAtWork(s.panes));
   // Runs asking you, and whether one is at work (ROUT-1).
   const routineAsks = useRoutines(
     (s) => s.routines?.runs.filter((r) => r.state === "asking").length ?? 0,

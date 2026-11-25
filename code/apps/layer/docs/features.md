@@ -1624,7 +1624,7 @@ tasks run down the left in the frame's tone, and every view sits in an
 inset panel (Layer's exception to `studio/design/layouts/app-window.md`). A
 view's count shows only when it asks for something: agents that need you
 on Work, the reviews on Reviews (waiting on you, then yours), repositories
-to fix on Repos. A running agent or chat is a live dot.
+to fix on Repos. A running agent, or a chat at work, is a live dot.
 
 - **WIN-1** The window MUST move when you drag any empty part of the top
   bar, and zoom when you double-click it, as a native title bar does. Its

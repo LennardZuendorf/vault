@@ -14,6 +14,23 @@ export function isHenchman(p: Pick<PaneInfo, "task_id" | "cwd">): boolean {
   return p.task_id === CHAT_TASK_ID && /[/\\]_chat[/\\]henchman[/\\]?$/.test(p.cwd);
 }
 
+/**
+ * Whether the top bar's Chat tab shows its live dot (§15): a chat at work,
+ * not one merely running. Chats restored at launch sit running at their
+ * prompt, so "running" alone kept the dot green with every chat idle. The
+ * Henchman and routine runs have tabs of their own.
+ */
+export function chatAtWork(panes: readonly PaneInfo[]): boolean {
+  return panes.some(
+    (p) =>
+      p.task_id === CHAT_TASK_ID &&
+      p.running &&
+      p.activity === "working" &&
+      !isHenchman(p) &&
+      !isRoutineRun(p),
+  );
+}
+
 export interface Facts {
   asking: boolean;
   outOfBudget: boolean;
