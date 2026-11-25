@@ -18,6 +18,7 @@ mod requests;
 mod session;
 pub mod sign_in;
 pub mod sites;
+pub mod sleep;
 mod snapshot;
 mod tabs;
 pub mod tools;
@@ -25,7 +26,7 @@ mod window;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::{json, Value};
@@ -126,6 +127,10 @@ struct Inner {
     /// The sign-in window (BRW-23), while it is open: the browser stays
     /// stopped, the window having its profile.
     window: Option<window::Window>,
+    /// When each task's tabs were last used, by an agent or the panel: a
+    /// task's left unused for long enough are closed until next needed
+    /// (BRW-6, `sleep.rs`).
+    used: HashMap<String, Instant>,
 }
 
 impl Inner {
@@ -185,16 +190,24 @@ impl Browser {
             .active()
             .map(|t| Page::new(cdp.clone(), t.session.clone(), task.to_string()))
             .ok_or_else(|| Error::Other("the browser made no tab".into()))?;
-        self.inner.lock().tabs.insert(task.to_string(), tabs);
+        {
+            let mut inner = self.inner.lock();
+            inner.tabs.insert(task.to_string(), tabs);
+            inner.used.insert(task.to_string(), Instant::now());
+        }
         changed(app, task);
         Ok(page)
     }
 
     fn existing(&self, task: &str) -> Option<Page> {
-        let inner = self.inner.lock();
+        let mut inner = self.inner.lock();
         let running = inner.running.as_ref().filter(|r| !r.cdp.is_closed())?;
         let tab = inner.active(task)?;
-        Some(Page::new(running.cdp.clone(), tab.session.clone(), task.to_string()))
+        let page = Page::new(running.cdp.clone(), tab.session.clone(), task.to_string());
+        // Under the same lock as the sleep's look at it: a tab handed out
+        // here is not closed under its user a moment later.
+        inner.used.insert(task.to_string(), Instant::now());
+        Some(page)
     }
 
     /// The browser, started if it is not running.
@@ -297,6 +310,7 @@ impl Browser {
         // user held it: kept, both grew by one for every task ever browsed.
         inner.drivers.remove(task);
         inner.held.remove(task);
+        inner.used.remove(task);
         // Its agents' requests for sites too: they stayed in every task's
         // waiting list for good, asking about a task that no longer exists.
         // An agent still waiting on one hears no answer, as on a timeout.

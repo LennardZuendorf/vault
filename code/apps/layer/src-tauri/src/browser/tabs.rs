@@ -61,7 +61,7 @@ impl Tabs {
         Some(tab)
     }
 
-    fn saved(&self) -> SavedTabs {
+    pub(super) fn saved(&self) -> SavedTabs {
         SavedTabs {
             urls: self
                 .list
@@ -206,18 +206,32 @@ impl Browser {
     /// writing them, so two finishing out of order cannot leave the older
     /// tabs on disk.
     pub(super) fn save<R: Runtime>(&self, app: &AppHandle<R>, task: &str) {
-        static ONE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
-        let _one = ONE.lock();
+        let _one = SAVING.lock();
         let Some(saved) = self.inner.lock().tabs.get(task).map(Tabs::saved) else { return };
-        let _ = app.state::<AppState>().config.update(|c| {
-            if task == CHAT_TASK_ID {
-                c.browser.chat_tabs = Some(saved);
-            } else if let Some(t) = c.tasks.iter_mut().find(|t| t.id == task) {
-                t.browser = Some(saved);
-                t.browser_url = None;
-            }
-        });
+        write(app, task, saved);
     }
+}
+
+/// One save at a time, `save`'s or `keep`'s.
+static SAVING: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+/// Keep tabs no longer in the browser for next time (BRW-6): those of a
+/// task put to sleep (`sleep.rs`). A save still on its way finds the task
+/// without tabs and writes nothing over these.
+pub(super) fn keep<R: Runtime>(app: &AppHandle<R>, task: &str, saved: SavedTabs) {
+    let _one = SAVING.lock();
+    write(app, task, saved);
+}
+
+fn write<R: Runtime>(app: &AppHandle<R>, task: &str, saved: SavedTabs) {
+    let _ = app.state::<AppState>().config.update(|c| {
+        if task == CHAT_TASK_ID {
+            c.browser.chat_tabs = Some(saved);
+        } else if let Some(t) = c.tasks.iter_mut().find(|t| t.id == task) {
+            t.browser = Some(saved);
+            t.browser_url = None;
+        }
+    });
 }
 
 impl Browser {

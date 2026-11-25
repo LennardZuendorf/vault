@@ -2004,7 +2004,11 @@ ring marks where it clicked.
   the task's browser is next needed. The chats' are kept the same way
   (`browser.chat_tabs`). A config from before tabs had one
   page, which comes back as one tab. Deleting or finishing a task closes
-  its tabs.
+  its tabs. A task's tabs that nobody has used for 15 minutes (no agent's
+  call, not shown in the panel, not held by the user, no dialog waiting)
+  are closed the same way and come back when next needed, each page
+  loaded again: what was typed into it and not sent is gone. Once no task
+  has tabs open, the browser stops too.
 - **BRW-7** The browser MUST stop with the app: asked to close, then its
   process group killed after 3 seconds, alongside the agents' own grace
   period. A browser that dies is started again when next needed.

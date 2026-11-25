@@ -319,6 +319,13 @@ first call that needs a tab.
   change of a task's tabs is saved to it (BRW-6), except while the browser
   shuts down: Chrome reports every tab destroyed as it closes, and taken at
   its word, quitting forgot them all.
+- **Sleeping tabs** (`sleep.rs`): a thread looks every minute and closes
+  the tabs of tasks nobody has used for 15 minutes (BRW-6), keeping their
+  addresses as on quitting, and stops Chrome once no task has any. Each
+  `page` call and each panel closing marks its task used. The tabs leave
+  the app's list before their targets close, so the reader's "destroyed"
+  finds no tab and the kept addresses stay. Open, every task's tabs kept
+  Chrome at 1.2–1.5 GB and 5–12% of a core.
 - **Tools** (`tools.rs`) find the task from the calling pane, check the
   page's site against `sites.rs` before reading or acting, and answer with
   the page's outline (`snapshot.rs`), built from the accessibility tree:

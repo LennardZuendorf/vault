@@ -246,6 +246,9 @@ pub fn run() {
             });
 
             attention::spawn(handle.clone())?;
+            // Close the browser tabs of tasks nobody has used for a while (BRW-6):
+            // open, every task's tabs kept Chrome at over a gigabyte.
+            browser::sleep::spawn(handle.clone())?;
             news::spawn(handle.clone());
             // Pull requests read for the Henchman while the window is away (HEN-12).
             commands::spawn_henchman_watch(handle.clone());
