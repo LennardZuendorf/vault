@@ -4,7 +4,17 @@ import { failureText } from "../lib/api";
 /** How long a failed download waits before the panel tries again (BRW-24). */
 const RETRY_AFTER = 60_000;
 
-const mb = (bytes: number) => Math.round(bytes / 2 ** 20);
+/**
+ * What the panel says while it downloads. Megabytes as Finder counts them
+ * (a million bytes): in mebibytes, the 200 MB zip read "of 191 MB".
+ */
+export function downloadText(done: number, total: number) {
+  const mb = (bytes: number) => Math.round(bytes / 1_000_000);
+  if (done <= 0) return "Downloading the browser";
+  return total > 0
+    ? `Downloading the browser: ${mb(done)} of ${mb(total)} MB`
+    : `Downloading the browser: ${mb(done)} MB`;
+}
 
 /**
  * The app's own Chrome coming down, the first time the browser is needed
@@ -14,10 +24,7 @@ export function BrowserDownloading({ done, total }: { done: number; total: numbe
   const share = total > 0 ? Math.min(100, (done / total) * 100) : null;
   return (
     <div className="browser-starting browser-download">
-      <span>
-        Downloading the browser
-        {done > 0 && (total > 0 ? `: ${mb(done)} of ${mb(total)} MB` : `: ${mb(done)} MB`)}
-      </span>
+      <span>{downloadText(done, total)}</span>
       <div
         className="browser-download-bar"
         role="progressbar"
