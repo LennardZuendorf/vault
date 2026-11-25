@@ -231,6 +231,7 @@ async fn dispatch(app: &AppHandle, method: &str, params: Value, caller: Option<&
                     .chain(commands::spec_tools())
                     .chain(commands::pr_images_tools())
                     .chain(commands::finish_tools())
+                    .chain(commands::base_tools())
                     .chain(commands::epic_tools())
                     .chain(commands::henchman_tools(app, caller))
                     .chain(commands::routine_tools(app, caller))
@@ -729,6 +730,7 @@ async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) ->
         n if commands::spec_owns(n) => commands::spec_call(app, args, caller).await,
         n if commands::pr_images_owns(n) => commands::pr_images_call(&state, args).await,
         n if commands::finish_owns(n) => commands::finish_call(app, args, caller).await,
+        "set_base" => commands::base_call(app, args).await,
         n if commands::epic_owns(n) => commands::epic_call(app, n, args, caller).await,
         n if commands::henchman_owns(n) => commands::henchman_call(app, n, args, caller).await,
         n if commands::routine_owns(n) => commands::routine_call(app, n, args, caller).await,
@@ -957,6 +959,7 @@ mod tests {
                 .chain(commands::spec_tools())
                 .chain(commands::pr_images_tools())
                 .chain(commands::finish_tools())
+                .chain(commands::base_tools())
                 .chain(commands::epic_tools())
                 .chain(commands::routine_listed()),
         );

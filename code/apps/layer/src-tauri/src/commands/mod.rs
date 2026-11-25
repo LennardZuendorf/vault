@@ -120,6 +120,7 @@ pub fn notify(app: &tauri::AppHandle, kind: &str, text: impl Into<String>) {
 
 mod acp_panes;
 mod attachments;
+mod base_tool;
 mod browser;
 mod cleanup;
 mod cleanup_folders;
@@ -181,6 +182,7 @@ mod worktree_status;
 
 pub use acp_panes::*;
 pub use attachments::*;
+pub use base_tool::*;
 pub use browser::*;
 pub use cleanup::*;
 pub use diff::*;

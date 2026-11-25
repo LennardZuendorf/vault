@@ -86,6 +86,11 @@ pub struct CheckoutPr {
 /// its base until `github_retarget_pr` moves it.
 #[tauri::command]
 pub async fn set_checkout_base(state: State<'_, AppState>, checkout_id: String, base: String) -> Result<()> {
+    set_base(&state, &checkout_id, &base)
+}
+
+/// [`set_checkout_base`], for agents too (`set_base`).
+pub(crate) fn set_base(state: &AppState, checkout_id: &str, base: &str) -> Result<()> {
     let base = base.trim().to_string();
     if base.is_empty() {
         return Err(Error::Other("a pull request needs a base branch".into()));

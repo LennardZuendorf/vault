@@ -205,7 +205,12 @@ count, running agents, uncommitted changes and the review verdict.
 - **TASK-6** Adding a repo to a task MUST tell the task's running agents,
   typed into each, and rewrite the folder's context files. The new
   checkout is cut from the base the rest of the task shares, when this
-  repo has that branch, and otherwise from its own default branch. Removing one
+  repo has that branch, and otherwise from its own default branch. A base
+  the rest share only because it is each one's own default is not shared:
+  a task in customer-portal, on `main` as its default, gave core-service
+  `main` too, though core-service's work goes to `development`. An agent
+  puts a wrong base right with `set_base`, as the PR panel's base field
+  does, to a branch the remote has. Removing one
   stops panes in that checkout, and refuses when it has uncommitted changes
   unless forced.
 - **TASK-7** Deleting a task MUST check for uncommitted changes *before*
@@ -1356,6 +1361,7 @@ never hold credentials themselves.
 | `pane_output` | a pane's recent output (needs "Let agents read terminal output") | |
 | `task_prs` | a task's PRs, checks and reviews | |
 | `add_repo` | add a repo to a task, telling its agents | |
+| `set_base` | change the branch a task's repo is measured against and opens its next PR into (TASK-6) | |
 | `forget_repo` | unregister a repo (never deletes files) | yes |
 | `create_task` | a task with no ticket | |
 | `open_prs` | push and open PRs for a task | yes |

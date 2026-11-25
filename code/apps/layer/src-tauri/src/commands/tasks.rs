@@ -627,13 +627,28 @@ pub(crate) fn add_checkout_inner(state: &AppState, task_id: &str, project_id: &s
     // But only when this repo has that branch: a task on `development` refused
     // a repo whose own line is `dev` with "invalid reference: development",
     // and there was no way to add it at all.
-    let shared =
-        existing.first().map(|c| c.base.as_str()).filter(|&b| existing.iter().all(|c| c.base == b)).filter(|&b| {
-            let repo = super::repo_for(state, &project);
-            git::fetch_bases(&[(repo.clone(), b.to_string())]);
-            git::default_tip(&repo, b).is_some()
-        });
+    let bases: Vec<(String, String)> = existing
+        .iter()
+        .map(|c| (c.base.clone(), state.config.project(&c.project_id).map(|p| p.default_branch).unwrap_or_default()))
+        .collect();
+    let shared = chosen_base(&bases).filter(|&b| {
+        let repo = super::repo_for(state, &project);
+        git::fetch_bases(&[(repo.clone(), b.to_string())]);
+        git::default_tip(&repo, b).is_some()
+    });
     create_checkout(state, &task, &project, &mut taken, shared, shared.is_some())
+}
+
+/// The base the task's repos were aimed at together, as (base, the repo's
+/// own default) per checkout: one they share, unless each is only on its own
+/// default. A task in customer-portal, on `main` because that is its
+/// default, gave core-service `main` too, though core-service's work goes to
+/// `development`.
+fn chosen_base(bases: &[(String, String)]) -> Option<&str> {
+    let (first, _) = bases.first()?;
+    let shared = bases.iter().all(|(b, _)| b == first);
+    let defaults = bases.iter().all(|(b, d)| b == d);
+    (shared && !defaults).then_some(first.as_str())
 }
 
 /// Off the command thread for the same reason `delete_task` is: this stops
@@ -1041,5 +1056,26 @@ mod tests {
         assert_eq!(Path::new(&store).parent(), Some(root.join("worktrees/.repos").as_path()), "{store}");
         assert!(!root.join(".claude").exists() && !root.join("worktrees/.claude").exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+    fn based(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs.iter().map(|(b, d)| (b.to_string(), d.to_string())).collect()
+    }
+
+    #[test]
+    fn a_repo_joining_repos_on_their_own_defaults_is_cut_from_its_own() {
+        assert_eq!(chosen_base(&based(&[("main", "main")])), None);
+        assert_eq!(chosen_base(&based(&[("main", "main"), ("development", "development")])), None);
+    }
+
+    #[test]
+    fn a_repo_joining_a_task_aimed_at_one_base_is_cut_from_it() {
+        assert_eq!(chosen_base(&based(&[("develop", "main")])), Some("develop"));
+        assert_eq!(chosen_base(&based(&[("develop", "main"), ("develop", "develop")])), Some("develop"));
+    }
+
+    #[test]
+    fn a_repo_joining_repos_on_different_bases_is_cut_from_its_own() {
+        assert_eq!(chosen_base(&based(&[("develop", "main"), ("release", "main")])), None);
+        assert_eq!(chosen_base(&[]), None);
     }
 }
