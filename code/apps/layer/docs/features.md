@@ -914,8 +914,18 @@ send feedback to an agent, and finish a merged task.
   `browser_screenshot` with `save` writes the tab's image to a file for
   this. A repository with no open pull request is refused: images are
   added to a PR, never the reason one is opened.
+- **PR-14** A repository's pull requests are those from the task's branch
+  and, when its folder is on another branch, from that branch too: the PR
+  tab, the sweep (PR-8), feedback (PR-6), retargeting and `pr_images`
+  (PR-13) all look in both. The folder's own base and the repository's
+  default branch don't count as another branch. Open pull requests (PR-1)
+  still pushes and opens from the task's branch, and agents are told to
+  commit, push and open pull requests there. Before, an agent that
+  put a repository on a branch of its own and opened its PR from there
+  left the task saying "no PR" while the PR waited on GitHub. A PR from a
+  branch the folder has since left is still not found.
 
-Code: `commands/github.rs`, `commands/open_prs.rs`, `commands/pr_images.rs`, `commands/outgoing.rs`, `git/outgoing.rs`, `Outgoing.tsx`, `commands/landed.rs`, `git/landed.rs`, `integrations/github.rs`, `integrations/github/images.rs`, `PrPanel.tsx`, `PrReadErrors.tsx`,
+Code: `commands/github.rs`, `commands/pr_branches.rs`, `commands/open_prs.rs`, `commands/pr_images.rs`, `commands/outgoing.rs`, `git/outgoing.rs`, `Outgoing.tsx`, `commands/landed.rs`, `git/landed.rs`, `integrations/github.rs`, `integrations/github/images.rs`, `PrPanel.tsx`, `PrReadErrors.tsx`,
 `PrFeedback.tsx`, `Markdown.tsx`, `lib/markdown.ts`; its connection in `CodeSettings.tsx`.
 
 Known gaps:

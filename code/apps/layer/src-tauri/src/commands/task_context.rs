@@ -239,6 +239,14 @@ fn task_context(
          branch `{}`.\n\n",
         task.name, task.branch,
     );
+    if task.review.is_none() {
+        // An agent that cut a branch of its own and opened its PR from there
+        // left the task saying "no PR" while the PR waited on GitHub.
+        md.push_str(
+            "Commit, push and open pull requests on that branch, not on one of your \
+             own: the task's pull requests are found by it.\n\n",
+        );
+    }
     if let Some(r) = &task.review {
         // An agent runs git itself. Told nothing, one asked to fix what the
         // review found pushed the app's own branch name to the author's

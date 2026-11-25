@@ -150,6 +150,7 @@ mod outgoing;
 mod panes;
 mod panes_restore;
 mod phone;
+mod pr_branches;
 mod pr_images;
 mod pr_task;
 mod pr_template;

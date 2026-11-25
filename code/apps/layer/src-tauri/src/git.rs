@@ -134,6 +134,18 @@ pub fn current_branch(dir: &Path) -> Result<String> {
     Ok(run(dir, &["rev-parse", "--abbrev-ref", "HEAD"])?.trim().to_string())
 }
 
+/// The branch a task's folder is on when it is not the task's own (PR-14):
+/// an agent may cut one and open its pull request from there. Not its base
+/// or the repo's default branch, whose pull requests are everyone's, and
+/// none when HEAD is detached.
+pub fn other_branch(dir: &Path, task_branch: &str, base: &str) -> Option<String> {
+    let on = run(dir, &["symbolic-ref", "-q", "--short", "HEAD"]).ok()?.trim().to_string();
+    if on.is_empty() || on == task_branch || on == base || on == default_branch(dir) {
+        return None;
+    }
+    Some(on)
+}
+
 /// The repo's default branch, best-effort: origin/HEAD, then main, then master.
 pub fn default_branch(dir: &Path) -> String {
     if let Ok(out) = run(dir, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) {
