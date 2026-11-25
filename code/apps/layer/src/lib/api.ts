@@ -432,6 +432,9 @@ export const api = {
   taskBranchFacts: (taskId: string) => invoke<RepoBranchFacts[]>("task_branch_facts", { taskId }),
   checkoutBranches: (checkoutId: string) => invoke<string[]>("checkout_branches", { checkoutId }),
   githubRetargetPr: (checkoutId: string) => invoke<string>("github_retarget_pr", { checkoutId }),
+  /** Whether the PR is a draft afterwards (PR-15). */
+  githubSetPrDraft: (checkoutId: string, number: number, draft: boolean) =>
+    invoke<boolean>("github_set_pr_draft", { checkoutId, number, draft }),
   /** `skip`: checkout ids left out of this call, neither pushed nor opened. */
   githubOpenPrs: (taskId: string, title: string, body: string, draft: boolean, skip: string[]) =>
     invoke<RepoResult[]>("github_open_prs", { taskId, title, body, draft, skip }),

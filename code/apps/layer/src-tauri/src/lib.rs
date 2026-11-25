@@ -414,6 +414,7 @@ pub fn run() {
             commands::checkout_branches,
             commands::task_branch_facts,
             commands::github_retarget_pr,
+            commands::github_set_pr_draft,
             commands::github_open_prs,
             commands::show_pr_images,
             commands::github_pr_feedback,

@@ -916,6 +916,12 @@ const answer: Record<string, Answer> = {
   github_all_prs: () => structuredClone(world.prs),
   github_task_prs: (a) =>
     structuredClone(world.prs.find((p) => p.task_id === a.taskId)?.rows ?? []),
+  github_set_pr_draft: (a) => {
+    for (const r of world.prs.flatMap((p) => p.rows))
+      if (r.pr && r.checkout_id === a.checkoutId && r.pr.number === a.number)
+        r.pr.draft = Boolean(a.draft);
+    return Boolean(a.draft);
+  },
   github_review_queue: () => structuredClone(world.reviews),
   github_pr_feedback: () => world.feedback,
   checkout_branches: () => ["main", "develop"],

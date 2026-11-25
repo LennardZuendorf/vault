@@ -13,6 +13,7 @@ mod branches;
 mod hunk;
 mod images;
 mod issues;
+mod ready;
 mod requested;
 mod siblings;
 pub use authored::AuthoredPr;

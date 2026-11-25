@@ -260,6 +260,16 @@ export function PrPanel({
     }
   }
 
+  /** Draft to ready for review and back (PR-15); the card shows it once read again. */
+  async function markDraft(row: CheckoutPr, draft: boolean) {
+    try {
+      await api.githubSetPrDraft(row.checkout_id, row.pr!.number, draft);
+      await load();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
   async function push() {
     setBusy(true);
     panel.clear();
@@ -529,6 +539,19 @@ export function PrPanel({
               </h3>
               <div className="spacer" />
               {pr.draft && <span className="ui-chip">draft</span>}
+              {/* The action a draft waits for; going back is the quiet link under the title. */}
+              {pr.draft && (
+                <button
+                  className="ui-button"
+                  title="Mark it ready for review on GitHub"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void markDraft(row, false);
+                  }}
+                >
+                  Ready for review
+                </button>
+              )}
               {/* GitHub's own reading of the branch against its base. */}
               {(pr.mergeable_state === "dirty" || pr.mergeable_state === "behind") && (
                 <button
@@ -595,6 +618,18 @@ export function PrPanel({
                       {" · "}
                       {pr.comments + pr.review_comments} comment
                       {pr.comments + pr.review_comments === 1 ? "" : "s"}
+                    </>
+                  )}
+                  {!pr.draft && (
+                    <>
+                      {" · "}
+                      <button
+                        className="ui-link"
+                        title="Convert it back to a draft on GitHub"
+                        onClick={() => void markDraft(row, true)}
+                      >
+                        Back to draft
+                      </button>
                     </>
                   )}
                 </div>

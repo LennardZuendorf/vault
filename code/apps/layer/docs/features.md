@@ -753,7 +753,8 @@ Known gaps:
 The Pull requests tab shows, per repo, the open PR, or an earlier one if
 none is open. It shows checks, the latest review per reviewer, the verdict,
 and how far behind the base it is. From here: push everything, open PRs,
-retarget a PR onto the checkout's base or take the PR's base for the
+mark a PR ready for review or back to draft, retarget a PR onto the
+checkout's base or take the PR's base for the
 checkout (GitHub moves a PR itself when its base is merged and deleted),
 send feedback to an agent, and finish a merged task.
 
@@ -929,8 +930,16 @@ send feedback to an agent, and finish a merged task.
   put a repository on a branch of its own and opened its PR from there
   left the task saying "no PR" while the PR waited on GitHub. A PR from a
   branch the folder has since left is still not found.
+- **PR-15** An open pull request's card MUST move it between draft and
+  ready for review: a draft has a Ready for review button beside its draft
+  chip, and a ready one a quiet Back to draft link under its title. GitHub
+  does it, through GraphQL (its REST API ignores `draft` on an existing
+  PR), and the card shows the new state once read again; a refusal, such as
+  a token that may read the PR but not change it, is shown on the tab.
+  Before, Open PRs opened drafts (PR-1) and only GitHub could take one out
+  of draft.
 
-Code: `commands/github.rs`, `commands/pr_branches.rs`, `commands/open_prs.rs`, `commands/pr_images.rs`, `commands/outgoing.rs`, `git/outgoing.rs`, `Outgoing.tsx`, `commands/landed.rs`, `git/landed.rs`, `integrations/github.rs`, `integrations/github/images.rs`, `PrPanel.tsx`, `PrReadErrors.tsx`,
+Code: `commands/github.rs`, `commands/pr_branches.rs`, `commands/pr_draft.rs`, `integrations/github/ready.rs`, `commands/open_prs.rs`, `commands/pr_images.rs`, `commands/outgoing.rs`, `git/outgoing.rs`, `Outgoing.tsx`, `commands/landed.rs`, `git/landed.rs`, `integrations/github.rs`, `integrations/github/images.rs`, `PrPanel.tsx`, `PrReadErrors.tsx`,
 `PrFeedback.tsx`, `Markdown.tsx`, `lib/markdown.ts`; its connection in `CodeSettings.tsx`.
 
 Known gaps:
