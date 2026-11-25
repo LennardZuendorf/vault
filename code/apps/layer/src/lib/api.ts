@@ -14,6 +14,7 @@ import type {
   RequiredField,
   DiffScope,
   DraftImage,
+  PrImageOffer,
   FeedbackItem,
   FlowStatus,
   Finished,
@@ -444,6 +445,9 @@ export const api = {
       taskId,
       images: images.map(({ path, caption, repo }) => ({ path, caption, repo })),
     }),
+  /** Screenshots an agent offered with `pr_images`, waiting for the user (PR-13). */
+  prImageOffer: (taskId: string) => invoke<PrImageOffer | null>("pr_image_offer", { taskId }),
+  dropPrImageOffer: (taskId: string) => invoke<void>("drop_pr_image_offer", { taskId }),
   githubPrFeedback: (taskId: string) => invoke<RepoFeedback[]>("github_pr_feedback", { taskId }),
   /** Typed into `paneId` when given; otherwise only returned, to start an agent with. */
   sendPrFeedback: (

@@ -12,6 +12,7 @@ import { ChevronIcon, ExternalIcon, PlusIcon } from "./icons";
 import { Outgoing } from "./Outgoing";
 import { PrDescriptionField, usePrDescription } from "./PrDescription";
 import { PrFeedback } from "./PrFeedback";
+import { PrImageOffer } from "./PrImageOffer";
 import { PrReadErrors } from "./PrReadErrors";
 import { BusyLabel, Combo, ErrorMessage, Field, Modal, useFailure } from "./ui";
 
@@ -504,6 +505,8 @@ export function PrPanel({
           </button>
         </div>
       )}
+
+      <PrImageOffer taskId={task.id} fail={fail} onAdded={() => void load()} />
 
       {live.map((row) => {
         const pr = row.pr!;

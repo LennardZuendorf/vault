@@ -901,9 +901,15 @@ send feedback to an agent, and finish a merged task.
   to check again: the next sweep reads the repos again on its own, as
   behaviour.md asks of a connection. The chip says "needs single sign-on". It used to show GitHub's "SAML enforcement" JSON beside every
   repo, Settings said "connected", and no task ever showed as in review.
-- **PR-13** An agent MAY show images in a task's open pull request with
-  `pr_images` (after the user agrees): screenshots of a visible change,
-  night and day. GitHub has no API for the attachments its own editor
+- **PR-13** An agent MAY offer images for a task's open pull request with
+  `pr_images`: screenshots of a visible change, night and day. The call
+  publishes nothing. The task's Pull requests tab shows them, each with a
+  preview the user can leave out, and only the user's Add to pull request
+  stores them; Dismiss forgets them. A later offer replaces the one before.
+  The app holds offers in memory, so a restart forgets them. Before, the
+  agent published on its own `confirm: true`, and Claude Code's auto mode
+  refused that as a possible leak when the user's yes was only a "go on"
+  in the chat. GitHub has no API for the attachments its own editor
   uploads, so the app stores the images in the repository, in a commit
   that only `refs/pr-images/<number>` points at: not a branch, so no
   branch list, clone or pull fetches or shows it. Each PR has its own,
@@ -939,7 +945,7 @@ send feedback to an agent, and finish a merged task.
   Before, Open PRs opened drafts (PR-1) and only GitHub could take one out
   of draft.
 
-Code: `commands/github.rs`, `commands/pr_branches.rs`, `commands/pr_draft.rs`, `integrations/github/ready.rs`, `commands/open_prs.rs`, `commands/pr_images.rs`, `commands/outgoing.rs`, `git/outgoing.rs`, `Outgoing.tsx`, `commands/landed.rs`, `git/landed.rs`, `integrations/github.rs`, `integrations/github/images.rs`, `PrPanel.tsx`, `PrReadErrors.tsx`,
+Code: `commands/github.rs`, `commands/pr_branches.rs`, `commands/pr_draft.rs`, `integrations/github/ready.rs`, `commands/open_prs.rs`, `commands/pr_images.rs`, `commands/pr_image_offers.rs`, `PrImageOffer.tsx`, `commands/outgoing.rs`, `git/outgoing.rs`, `Outgoing.tsx`, `commands/landed.rs`, `git/landed.rs`, `integrations/github.rs`, `integrations/github/images.rs`, `PrPanel.tsx`, `PrReadErrors.tsx`,
 `PrFeedback.tsx`, `Markdown.tsx`, `lib/markdown.ts`; its connection in `CodeSettings.tsx`.
 
 Known gaps:
@@ -1375,7 +1381,7 @@ never hold credentials themselves.
 | `create_task` | a task with no ticket | |
 | `open_prs` | push and open PRs for a task | yes |
 | `finish_task` | finish a landed task: agents, worktrees, covered branches, ticket to done (TASK-18) | yes |
-| `pr_images` | show image files in a repo's open PR, in a section the app owns (PR-13) | yes |
+| `pr_images` | offer image files for a repo's open PR, shown there in a section the app owns once the user adds them (PR-13) | |
 | `repo_notes` | a repository's notes, with what changed since each was checked (MEM-5) | |
 | `remember` | keep a lasting fact about a repository, after asking the user (MEM-1) | yes |
 | `check_note` | say a note still holds, as of now | |

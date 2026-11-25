@@ -250,6 +250,12 @@ export interface DraftImage {
   preview?: string;
 }
 
+/** Screenshots an agent offered for `repo`'s open pull request, held until the user adds them (PR-13). */
+export interface PrImageOffer {
+  repo: string;
+  images: DraftImage[];
+}
+
 /** A drafted description, the screenshots it came with, and what could not be shown. */
 export interface PrDraft {
   text: string;

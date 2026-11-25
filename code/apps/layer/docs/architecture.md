@@ -226,6 +226,7 @@ for, and the reverse, and that each is in this table.
 | `pty:exit` | `{ pane_id, code }` | a pane's process ended | `Watchers.tsx` → refresh, toast, Slack |
 | `acp:update` | pane id | an ACP pane's conversation changed while it is on screen (batched, ~40ms; ACP-7) | `lib/acpUpdates.ts`, one listener for all → `AcpPane.tsx` asks `acp_view` for what changed |
 | `pr:draft` | `{ task_id, text }` | a chunk of a drafted PR description | `PrPanel.tsx` |
+| `pr:images-offered` | task id | an agent offered screenshots for a PR with `pr_images` (PR-13) | `PrImageOffer.tsx` |
 | `issue:draft` | `{ request_id, text }` | a chunk of an improved ticket description | `tickets/OptimizeDescription.tsx` |
 | `spec:draft` | `{ request_id, part, checkout_id, text }` | one file's draft so far, whole each time: the task's requirements or design (`checkout_id` null), or one repository's tasks (SPEC-5); the requirements as Apply answers rewrites them (SPEC-20); or the merge of specs from before (SPEC-25) | `Watchers.tsx` → `useSpecs.chunk`, into that editor |
 | `spec:changed` | task id | an agent ticked a step of the task's spec (`spec_task`, SPEC-13) or proposed a change (`spec_propose`, SPEC-24) | `Watchers.tsx` → `useSpecs.changed`, which reads it again if it has been read; `pty:activity` for an agent that stopped does the same, to show a spec file it changed outside the app (SPEC-22) |

@@ -72,6 +72,8 @@ const params = new URLSearchParams(location.search);
 const scenarios = new Map(Object.entries(SCENARIOS));
 const world = (scenarios.get(params.get("scenario") ?? "busy") ?? SCENARIOS.busy)();
 const calls: { cmd: string; args: Args }[] = [];
+/** Tasks whose offered screenshots were added or dismissed (PR-13). */
+const droppedOffers = new Set<string>();
 const theme = params.get("theme");
 if (theme) world.settings.ui.theme = theme as typeof world.settings.ui.theme;
 if (params.get("role") === "member" && world.settings.workspace)
@@ -921,6 +923,31 @@ const answer: Record<string, Answer> = {
       if (r.pr && r.checkout_id === a.checkoutId && r.pr.number === a.number)
         r.pr.draft = Boolean(a.draft);
     return Boolean(a.draft);
+  },
+  // Every task's agent has offered two screenshots until one is added or dismissed (PR-13).
+  pr_image_offer: (a) => {
+    if (droppedOffers.has(String(a.taskId))) return null;
+    const shot = (fill: string, text: string) =>
+      `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200"><rect width="320" height="200" fill="${fill}"/><text x="20" y="40" font-family="sans-serif" font-size="20" fill="#888">${text}</text></svg>`)}`;
+    return {
+      repo: "api",
+      images: [
+        {
+          path: "/tmp/night.png",
+          caption: "Night",
+          repo: "api",
+          preview: shot("#15171c", "Night"),
+        },
+        { path: "/tmp/day.png", caption: "Day", repo: "api", preview: shot("#f4f1ea", "Day") },
+      ],
+    };
+  },
+  show_pr_images: () => [
+    { checkout_id: "c1", repo: "api", ok: true, detail: "2 screenshots added" },
+  ],
+  drop_pr_image_offer: (a) => {
+    droppedOffers.add(String(a.taskId));
+    return null;
   },
   github_review_queue: () => structuredClone(world.reviews),
   github_pr_feedback: () => world.feedback,
