@@ -19,6 +19,8 @@ import { emit } from "@tauri-apps/api/event";
  *   &role=member          a member of the workspace, who sees its settings (SET-7)
  *   &tracker=github       the workspace's tickets are GitHub issues (TKT-15)
  *   &theme=night|day|tokyo-night|cursor-dark|cursor-light|ayu-dark|ayu-light|system   the saved theme (SET-5)
+ *   &chrome=download|offline   the app's Chrome is downloaded when the browser is first
+ *                          watched; offline: the first try fails partway (BRW-24)
  *
  * From the console, or a browser tool's JavaScript:
  *
@@ -230,7 +232,8 @@ const liveProcesses = () => processes.filter((x) => world.panes.some((p) => p.id
  */
 const browsers = new Map<string, BrowserView>();
 const noTab = (): BrowserView => ({
-  chrome: true,
+  download: null,
+  download_failed: null,
   tab: null,
   url: "",
   title: "",
@@ -246,9 +249,47 @@ const noTab = (): BrowserView => ({
 });
 /** The sign-in window is open (BRW-23): app-wide, as the browser is. */
 let signingIn = false;
+
+/**
+ * The app's own Chrome (BRW-24), app-wide too. `&chrome=download` has none
+ * yet; `&chrome=offline` loses the connection a third of the way, once.
+ */
+const chromeScene = params.get("chrome");
+let chromeHere = chromeScene !== "download" && chromeScene !== "offline";
+let downloading: { done: number; total: number } | null = null;
+let downloadFailed: string | null = null;
+let lostOnce = false;
+let fetching: Promise<void> | null = null;
+function chromeReady(): Promise<void> {
+  if (chromeHere) return Promise.resolve();
+  fetching ??= (async () => {
+    downloadFailed = null;
+    const total = 168 * 2 ** 20;
+    for (let done = 0; done < total; done += 4 * 2 ** 20) {
+      downloading = { done, total };
+      void emit("browser:changed", "");
+      await new Promise((r) => setTimeout(r, 120));
+      if (chromeScene === "offline" && !lostOnce && done > total / 3) {
+        lostOnce = true;
+        downloading = null;
+        downloadFailed =
+          "http: error decoding response body: connection closed before message completed";
+        void emit("browser:changed", "");
+        throw new Error(`The browser could not be downloaded: ${downloadFailed}`);
+      }
+    }
+    downloading = null;
+    chromeHere = true;
+    void emit("browser:changed", "");
+  })().finally(() => {
+    fetching = null;
+  });
+  return fetching;
+}
 if (world.panes.some((p) => p.task_id === "t-login")) {
   browsers.set("t-login", {
-    chrome: true,
+    download: null,
+    download_failed: null,
     tab: "tab-t-login-2",
     url: "http://localhost:5173/login",
     title: "Sign in · Acme",
@@ -1161,6 +1202,8 @@ const answer: Record<string, Answer> = {
   browser_view: (a) => ({
     ...structuredClone(browsers.get(a.taskId as string) ?? noTab()),
     signing_in: signingIn,
+    download: downloading,
+    download_failed: downloadFailed,
   }),
   browser_sign_in_window: (a) => {
     // The backend's page_for: Google's `continue` address, else the page.
@@ -1190,6 +1233,7 @@ const answer: Record<string, Answer> = {
   },
   browser_go: () => null,
   browser_watch: async (a) => {
+    await chromeReady();
     const b = tabOf(a.taskId as string);
     const frames = a.frames as { id: number };
     const jpeg = await frameOf(b, a.width as number, a.height as number, a.scale as number);

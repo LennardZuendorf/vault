@@ -73,7 +73,7 @@ impl Browser {
     /// Step the browser aside and open the sign-in window on the page the
     /// task's tab was signing in to; the tab opens it when the window quits.
     pub async fn sign_in_window<R: Runtime>(&self, app: &AppHandle<R>, task: &str) -> Result<()> {
-        let binary = chrome::find().ok_or_else(|| Error::Other(chrome::MISSING.into()))?;
+        let binary = super::install::chrome(app).await?;
         let url = self.state_of(task).map(|(url, _, _)| url).unwrap_or_default();
         let page = page_for(&url).ok_or_else(|| Error::Other("this tab has no page to sign in to".into()))?;
         let _making = self.making.lock().await;

@@ -10,6 +10,7 @@ mod chrome;
 mod control;
 mod events;
 pub mod input;
+mod install;
 mod keys;
 mod page;
 mod panel;
@@ -34,6 +35,7 @@ use crate::commands::AppState;
 use crate::error::{Error, Result};
 use cdp::Cdp;
 pub use control::{Dialog, Driver};
+pub use install::Download;
 pub use page::Page;
 pub use panel::AgentAction;
 use panel::Watch;
@@ -41,11 +43,6 @@ use requests::Asked;
 pub use requests::SiteRequest;
 pub use tabs::TabInfo;
 use tabs::Tabs;
-
-/// Whether there is a Chrome to run. Reads the disk.
-pub fn chrome_installed() -> bool {
-    chrome::find().is_some()
-}
 
 /// Lines of a tab's console kept for `browser_console`.
 const CONSOLE_LINES: usize = 200;
@@ -155,6 +152,8 @@ pub struct Browser {
     making: tokio::sync::Mutex<()>,
     /// Rung when any tab opens a dialog (`until_dialog`).
     dialog_opened: tokio::sync::Notify,
+    /// The app's own Chrome, and its download (BRW-24).
+    install: install::Install,
 }
 
 impl Browser {
@@ -235,7 +234,7 @@ impl Browser {
     /// Launch Chrome and see that it answers. One that does not is stopped
     /// here: nothing else knows of it to reap it.
     async fn start<R: Runtime>(&self, app: &AppHandle<R>) -> Result<Running> {
-        let binary = chrome::find().ok_or_else(|| Error::Other(chrome::MISSING.into()))?;
+        let binary = install::chrome(app).await?;
         let profile = app.state::<AppState>().config.folder().join("browser");
         let (process, to_chrome, from_chrome) =
             crate::commands::off_runtime(move || chrome::launch(&binary, &profile)).await??;
@@ -474,11 +473,31 @@ mod tests {
             eprintln!("skipped: VL_SKIP_CHROME_TESTS is set");
             return None;
         }
-        if chrome::find().is_none() {
+        let Some(chrome) = chrome_for_tests() else {
             eprintln!("skipped: no Chrome installed");
             return None;
-        }
-        Some(app_in_task())
+        };
+        let made = app_in_task();
+        made.0.state::<AppState>().browser.install.pin(chrome);
+        Some(made)
+    }
+
+    /// A Chrome for the tests, never downloaded for them: the app's own
+    /// (BRW-24), else one installed in /Applications or ~/Applications.
+    fn chrome_for_tests() -> Option<std::path::PathBuf> {
+        let home = std::path::PathBuf::from(std::env::var_os("HOME")?);
+        let own = ["eu.codevillain.villain-layer", "eu.codevillain.villain-layer.dev"]
+            .iter()
+            .filter_map(|id| install::newest(&home.join("Library/Caches").join(id).join("chrome")))
+            .max_by(|a, b| a.0.cmp(&b.0))
+            .map(|(_, exe)| exe);
+        let apps = [
+            "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+            "Chromium.app/Contents/MacOS/Chromium",
+            "Google Chrome.app/Contents/MacOS/Google Chrome",
+        ];
+        let roots = [std::path::PathBuf::from("/Applications"), home.join("Applications")];
+        own.or_else(|| apps.iter().flat_map(|a| roots.iter().map(move |r| r.join(a))).find(|p| p.is_file()))
     }
 
     /// `app_with_task`, for a test that needs no browser.

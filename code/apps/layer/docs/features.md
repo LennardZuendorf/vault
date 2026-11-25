@@ -1575,6 +1575,7 @@ Known gaps:
 | a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `.spec-drafts/`: spec drafts, what was approved, and checks (SPEC-2, SPEC-6, SPEC-15), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md` and `PR_IMAGES.json` (PR-4), `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, `CHECKS.md` (LOOP-6), PANE-11) as they come up |
 | `~/.claude.json` | trust entries for the app's own folders only (PANE-10) |
 | `<config folder>/browser/` | the browser's own Chrome profile (BRW-1): cookies, sign-ins and storage of the pages opened there |
+| `~/Library/Caches/eu.codevillain.villain-layer/chrome/` | the browser's own Chrome, a folder per version (BRW-24), shared by every profile |
 | `~/Library/Logs/villain-layer/panic.log` | a crash's location and backtrace |
 
 The dev build uses `eu.codevillain.villain-layer.dev` for its config folder
@@ -1818,16 +1819,30 @@ to help an agent that is stuck. Under it is what an agent last did, and a
 ring marks where it clicked.
 
 - **BRW-1** There MUST be one browser for the app, started when it is first
-  needed, with one tab per task. It is a Chrome installed on the Mac, run
+  needed, with one tab per task. It is the app's own Chrome (BRW-24), run
   headless with a profile of its own in the app's config folder: never the
-  user's own Chrome profile, its sign-ins or its extensions. Chrome for
-  Testing or Chromium MUST be run over Google Chrome when one is installed:
-  macOS takes a headless Google Chrome for the user's own, and while it
-  ran, opening Chrome from the Dock or Finder showed nothing. Without any
-  Chrome, the tools say what to install. The profile's cookies are not
+  user's own Chrome profile, its sign-ins or its extensions, and never a
+  Chrome installed on the Mac. macOS takes any Chrome run from Google
+  Chrome.app for the user's own, and while the app's ran, opening Chrome
+  from the Dock or Finder showed nothing. The profile's cookies are not
   locked with a key in the keychain (`--use-mock-keychain`): Chrome for
   Testing is signed for no one, so macOS took each new version for a new
   app and asked for "Chromium Safe Storage" again.
+- **BRW-24** The app MUST get its own Chrome, with nothing for the user to
+  install: Chrome for Testing, Google's build of Chrome for programs to
+  drive, downloaded from Google the first time the browser is needed, into
+  `~/Library/Caches/<identifier>/chrome/`, one copy for every profile. The
+  panel says how much has come ("Downloading the browser: 84 of 200 MB"),
+  and agents wait meanwhile, as while the browser starts. A connection that
+  breaks off is asked for the rest, from where it stopped; a download that
+  still fails, after five tries in a row that bring nothing, says why in the
+  panel, which tries again a minute later. Each time the browser starts, and
+  at most once a day, the app asks Google for the current stable version and
+  downloads a newer one in the background; the browser runs it from its next
+  start. A version no browser runs from any more is deleted. Only an address
+  on Google's own storage
+  (`https://storage.googleapis.com/chrome-for-testing-public/`) is
+  downloaded.
 - **BRW-2** An agent's tools MUST act on its own task's tab, found from the
   pane that calls (`X-Villain-Pane`). The chats have one browser between
   them, as a task's agents share the task's, shown beside them by the
@@ -1975,7 +1990,7 @@ ring marks where it clicked.
 - **BRW-23** On a Google sign-in page (`accounts.google.com`), the bar's ↗
   MUST open a sign-in window instead of the user's own browser: Google
   refuses to sign anyone in to a browser that a program drives. The
-  app closes its browser, opens the Mac's Chrome on the same profile as an
+  app closes its browser, opens its Chrome (BRW-24) on the same profile as an
   ordinary window, with nothing driving it, on the page the sign-in was
   for (Google's `continue` address, else the page itself), and the
   panel says to sign in there and quit that Chrome (⌘Q), or press Done,
@@ -1999,7 +2014,8 @@ ring marks where it clicked.
   a port: with a debugging port open, any process on the Mac could drive
   the browser and every site signed in to there.
 
-Code: `browser/` (`chrome.rs` finding and running it, `cdp.rs` the
+Code: `browser/` (`install.rs` getting the app's Chrome, `chrome.rs`
+running it, `cdp.rs` the
 protocol, `page.rs` a tab's actions, `snapshot.rs` the outline, `sites.rs`
 BRW-3, `tools.rs` the tools, `panel.rs` and `input.rs` the panel's side,
 `requests.rs` BRW-11, `control.rs` BRW-12, BRW-13 and BRW-15, `tabs.rs`

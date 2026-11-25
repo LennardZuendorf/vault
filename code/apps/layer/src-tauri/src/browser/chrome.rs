@@ -1,4 +1,4 @@
-//! Finding Chrome and running it: one headless process for the whole app,
+//! Running Chrome (`install.rs` gets it): one headless process for the whole app,
 //! driven over a pipe rather than a port (BRW-8).
 //!
 //! `--remote-debugging-port` would let any process on the machine drive the
@@ -7,51 +7,11 @@
 //! to its fd 4, and only the app holds the other ends.
 
 use std::io::{PipeReader, PipeWriter};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::error::{Error, Result};
-
-/// Where a Chrome or Chromium is found, in order. The app's own profile
-/// (BRW-1) makes any of them fit; the first one installed is used.
-///
-/// The user's everyday Google Chrome comes after the ones nobody browses
-/// with. macOS knows a running app by its bundle: while the headless one
-/// ran from Google Chrome.app, the Dock and Finder took it for the user's
-/// Chrome and brought it forward instead of starting one, and Chrome seemed
-/// not to open at all. Chrome for Testing and Chromium are other bundles.
-/// Changing which one runs costs the profile's cookies once: Google Chrome
-/// keeps their key in the keychain as "Chrome Safe Storage", the others as
-/// "Chromium Safe Storage", so sites ask for a sign-in again.
-const APPS: &[(&str, &str)] = &[
-    ("Google Chrome for Testing.app", "Google Chrome for Testing"),
-    ("Chromium.app", "Chromium"),
-    ("Google Chrome.app", "Google Chrome"),
-    ("Google Chrome Beta.app", "Google Chrome Beta"),
-    ("Google Chrome Canary.app", "Google Chrome Canary"),
-];
-
-/// The browser to run, if one is installed.
-pub fn find() -> Option<PathBuf> {
-    #[allow(deprecated)]
-    let home = std::env::home_dir();
-    let roots: Vec<PathBuf> =
-        std::iter::once(PathBuf::from("/Applications")).chain(home.map(|h| h.join("Applications"))).collect();
-    find_in(&roots)
-}
-
-/// The first of `APPS` installed in any of `roots`: an app earlier in the
-/// list wins wherever it is.
-fn find_in(roots: &[PathBuf]) -> Option<PathBuf> {
-    APPS.iter()
-        .flat_map(|(app, exe)| roots.iter().map(move |r| r.join(app).join("Contents/MacOS").join(exe)))
-        .find(|p| p.is_file())
-}
-
-/// What to tell someone who has no Chrome.
-pub const MISSING: &str = "No Chrome or Chromium is installed in /Applications or ~/Applications. \
-     The browser runs on Google Chrome (or Chromium): install it, and the browser starts the next time it is needed.";
 
 /// What both ways of running the browser share, on the app's own profile.
 ///
@@ -139,8 +99,8 @@ pub fn launch(binary: &Path, profile: &Path) -> Result<(Process, PipeWriter, Pip
 /// driving it (BRW-23): no pipe, not headless. Google signs no one in to a
 /// browser a program drives; the cookies this one keeps are the profile's,
 /// and the headless browser reads them once it starts again. Both are the
-/// same browser (`find`) with the same `PROFILE_ARGS`, so one can read
-/// what the other wrote.
+/// same browser (`install::chrome`) with the same `PROFILE_ARGS`, so one
+/// can read what the other wrote.
 ///
 /// Blocking: spawning waits on the disk. Call it through `off_runtime`.
 pub fn launch_window(binary: &Path, profile: &Path, url: &str) -> Result<Process> {
@@ -206,54 +166,6 @@ pub fn quit(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Folders standing in for /Applications and ~/Applications, with these
-    /// apps' executables in them.
-    fn installed(apps: &[(usize, &str, &str)]) -> Vec<PathBuf> {
-        let base = std::env::temp_dir().join(format!("vl-chrome-{}", uuid::Uuid::new_v4()));
-        let roots = vec![base.join("Applications"), base.join("home/Applications")];
-        for root in &roots {
-            std::fs::create_dir_all(root).unwrap();
-        }
-        for (root, app, exe) in apps {
-            let dir = roots[*root].join(app).join("Contents/MacOS");
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join(exe), "").unwrap();
-        }
-        roots
-    }
-
-    /// Run from Google Chrome.app, the headless browser kept the Dock from
-    /// opening the user's Chrome. Chrome for Testing in ~/Applications is
-    /// run over Google Chrome in /Applications.
-    #[test]
-    fn chrome_for_testing_is_run_over_the_users_google_chrome() {
-        let roots = installed(&[
-            (0, "Google Chrome.app", "Google Chrome"),
-            (1, "Google Chrome for Testing.app", "Google Chrome for Testing"),
-        ]);
-        assert_eq!(
-            find_in(&roots),
-            Some(roots[1].join("Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"))
-        );
-    }
-
-    #[test]
-    fn chromium_is_run_over_the_users_google_chrome() {
-        let roots = installed(&[(0, "Google Chrome.app", "Google Chrome"), (0, "Chromium.app", "Chromium")]);
-        assert_eq!(find_in(&roots), Some(roots[0].join("Chromium.app/Contents/MacOS/Chromium")));
-    }
-
-    #[test]
-    fn google_chrome_is_run_when_it_is_the_only_one() {
-        let roots = installed(&[(0, "Google Chrome.app", "Google Chrome")]);
-        assert_eq!(find_in(&roots), Some(roots[0].join("Google Chrome.app/Contents/MacOS/Google Chrome")));
-    }
-
-    #[test]
-    fn nothing_is_run_without_a_chrome() {
-        assert_eq!(find_in(&installed(&[])), None);
-    }
 
     /// The headless browser and the sign-in window both lock cookies
     /// without the keychain: with it, macOS asked for "Chromium Safe
