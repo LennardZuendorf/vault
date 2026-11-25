@@ -808,7 +808,8 @@ send feedback to an agent, and finish a merged task.
   what the template has for no visible change and says why. The dialog
   shows the screenshots under the description, each with its caption and
   a way to leave it out, and says that Open stores them in the
-  repository. A file that is not an image, or a list that does not read,
+  repository. A click on one opens it full size over the window; ← and →
+  step through them, Esc or a click closes it. A file that is not an image, or a list that does not read,
   is said in the dialog rather than dropped. Once Open PRs has opened the
   pull requests, it adds the screenshots still there to each one's
   repository's PR as PR-13 does (a row per repository, not to a PR that
@@ -904,7 +905,8 @@ send feedback to an agent, and finish a merged task.
 - **PR-13** An agent MAY offer images for a task's open pull request with
   `pr_images`: screenshots of a visible change, night and day. The call
   publishes nothing. The task's Pull requests tab shows them, each with a
-  preview the user can leave out, and only the user's Add to pull request
+  preview the user can leave out or open full size, as PR-4's dialog
+  does, and only the user's Add to pull request
   stores them; Dismiss forgets them. A later offer replaces the one before.
   The app holds offers in memory, so a restart forgets them. Before, the
   agent published on its own `confirm: true`, and Claude Code's auto mode

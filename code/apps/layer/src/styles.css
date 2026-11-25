@@ -892,6 +892,35 @@ body.dragging * {
   border-radius: var(--radius-md);
   border: 1px solid var(--line);
 }
+.pr-shot-open {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+.pr-shot-open:hover img {
+  border-color: var(--muted);
+}
+/* One screenshot full size (PR-13), over the window and its dialogs. */
+.shot-viewer {
+  z-index: 100;
+  flex-direction: column;
+  gap: 10px;
+  cursor: zoom-out;
+}
+.shot-viewer img {
+  max-width: 100%;
+  max-height: calc(100% - 32px);
+  object-fit: contain;
+  border-radius: var(--radius-md);
+}
+.shot-viewer-caption {
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: var(--type-ui-small-size);
+}
 .pr-shot figcaption {
   color: var(--muted);
 }
