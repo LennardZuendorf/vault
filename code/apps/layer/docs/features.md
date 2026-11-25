@@ -768,6 +768,9 @@ send feedback to an agent, and finish a merged task.
   In the dialog, every repo that would get a new PR has a tick, all on to
   start with; one ticked off is neither pushed nor opened. A repo whose PR
   is already open has no tick: it is pushed and listed with the rest.
+  Before anything is pushed, the task's spec is committed (SPEC-35) into each
+  ticked repo whose committed copy differs from `spec/`, and the result says
+  so; a repo it could not be committed in is named and not opened.
 - **PR-2** PRs this call opened MUST be linked on the Jira ticket as a
   comment, and posted to Slack if that is on. When the call opens a PR and
   the task has more than one open, every one of them MUST list the others
@@ -985,7 +988,7 @@ offers Start work.
   which it was ("preselected from the last task under ACME-100"), so a
   stale guess is visible. It picks
   a base, optionally starts an agent with the ticket as the prompt (or,
-  with "Write a spec first", leaves that to the Spec tab, SPEC-18), and
+  with "Write a spec first", told to write the spec first, SPEC-18), and
   moves the ticket where its project's "work starts →" says, beside the
   other stages of Tickets follow the work (TKT-8): to the first
   in-progress (`indeterminate`) status its workflow allows, unless it is
@@ -1388,8 +1391,10 @@ never hold credentials themselves.
 | `remember` | keep a lasting fact about a repository, after asking the user (MEM-1) | yes |
 | `check_note` | say a note still holds, as of now | |
 | `forget_note` | remove a note that no longer holds, with a reason for the message center | yes |
-| `spec_task` | tick (or untick) a numbered step of a repository's spec `tasks.md` (SPEC-13) | |
-| `spec_propose` | propose a change to the task's spec, with why, as a draft for the user to approve (SPEC-24) | |
+| `spec_read` | list the task's spec files with steps ticked and total, or read one file (SPEC-13) | |
+| `spec_write` | write one file of the task's spec, whole text, in the task's `spec/` folder, if its toolset lists the file (SPEC-13) | |
+| `spec_task` | tick (or untick) a step of the spec by file and position (SPEC-13) | |
+| `spec_commit` | Commit spec: put the spec into the task's repositories and commit it there (SPEC-35, SPEC-13) | yes |
 | `epic_subtasks` | an epic's sub-tasks: ticket, task, steps ticked, what each waits for, its agents (EPIC-12); the tickets under it that are none yet (EPIC-14) | |
 | `subtask_start` | start a sub-task's agent on its spec, and move its ticket (EPIC-8) | yes |
 | `subtask_tell` | send one message to a sub-task's running agents (EPIC-12) | |
@@ -1478,6 +1483,10 @@ Known gaps:
 | Agents: Henchman's custom instructions | none | HEN-17 |
 | Agents: Task folder location | `~/.villain-worktrees` | where task folders go |
 | Keep awake (the cup in the top bar) | off | STATE-7, PHONE-8 |
+| Code: Always write a spec first | off | every agent is told to write the spec before any code (SPEC-38), and Start work's "Write a spec first" is on and locked; `set_spec_first` |
+| Code: Default toolset | Kiro | the spec toolset a new task gets unless Start work's pick, or a sub-task's epic, says otherwise (SPEC-28, SPEC-29); `set_default_toolset`, which refuses an id no toolset has |
+| Code: Custom toolsets | none | the user's own toolsets as the JSON of their manifests, on this Mac only, never shared; one whose `run` steps execute as written (SPEC-27; `set_custom_toolsets`, refused whole when one is not a manifest) |
+| Repos: a repository's spec toolset, Commit spec mode and spec folder | no toolset (the app's), `whole`, `specs` | which toolset Start work starts from for it; what Commit spec puts in it (`whole`, `own`, `none`); and, for Kiro, the folder (SPEC-28, SPEC-35); `set_project_specs`, shared with the team |
 | Browser: sites agents may use | none: this machine's pages only | BRW-3, BRW-11 |
 | Browser: saved sign-ins | none | BRW-18 |
 | Remote access: Tailscale | off | PHONE-1, PHONE-2 |
@@ -1605,8 +1614,9 @@ Known gaps:
 | `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes, the Slack threads handed to chats (BOT-4). `messages.json`: the message center (MSG-4). `notes.json`: this Mac's copy of the repo notes (MEM-7). `runs.json`: the run log (RUN-5). `limits.json`: each agent plan's limits as last read (LIMIT-4). `postgres/`: the workspace's Postgres, its data, password and binaries (PROF-11). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
 | Keychain, service `eu.codevillain.villain-layer` | one item holding every token, paired phones' included (PHONE-3), the workspace's session on its server (`layer-session`, PROF-16), and the passwords of the browser's saved sign-ins (BRW-18) |
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
-| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `.spec-drafts/`: spec drafts, what was approved, and checks (SPEC-2, SPEC-6, SPEC-15), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md` and `PR_IMAGES.json` (PR-4), `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, `CHECKS.md` (LOOP-6), PANE-11) as they come up |
+| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `spec/` (the task's spec, SPEC-2: copied to `<config folder>/specs/<task>/` before the task goes, SPEC-3), `.spec-install.json`, the record of what a spec toolset's install wrote (SPEC-30): `.claude/skills/`, `.agents/skills/`, files in `spec/` and whatever its `run` steps made, of which deleting the task removes just those, `.spec-checks/`: the last check of each repository (SPEC-15), `.spec-drafts/`, read only to move an earlier spec (SPEC-17), left in place and taken with the folder, and holding an epic's `sub-tasks.json` (§26), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md` and `PR_IMAGES.json` (PR-4), `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, `CHECKS.md` (LOOP-6), PANE-11) as they come up |
 | `~/.claude.json` | trust entries for the app's own folders only (PANE-10) |
+| `<config folder>/specs/`, `<config folder>/toolsets/` | `specs/<task>/`: the spec of a deleted task or of a task folder Clean up removed, and `specs/<repository>/<task>/`: the spec of a task with no folder of its own (SPEC-3). `toolsets/<id>/<version>/`: the copy a toolset's install fetched, kept for the next task (SPEC-30) |
 | `<config folder>/browser/` | the browser's own Chrome profile (BRW-1): cookies, sign-ins and storage of the pages opened there |
 | `~/Library/Caches/eu.codevillain.villain-layer/chrome/` | the browser's own Chrome, a folder per version (BRW-24), shared by every profile |
 | `~/Library/Logs/villain-layer/panic.log` | a crash's location and backtrace |
@@ -1624,8 +1634,8 @@ quit, and, while a sign-in is passed from one copy to another,
 by the copy that has it open.
 
 - **DISK-1** Nothing generated MUST ever be written inside a worktree,
-  where it would end up in a commit. The one exception is a spec the user
-  approved (SPEC-1), which is meant to be committed.
+  where it would end up in a commit. The one exception is a spec that
+  Commit spec (SPEC-35) puts there, which is meant to be committed.
 - **DISK-2** Deleting a task MUST remove what the app generated in its
   folder, and what others leave there that goes with it (Claude Code's
   `.claude/settings.local.json`, Finder's `.DS_Store`), and then the
@@ -2080,318 +2090,631 @@ Known gaps:
 ## 19. Specs
 
 A task can have a spec: what the work must do, how it will be done, and
-the steps to get there, agreed before an agent starts and checked when it
-is done. It is one spec for the whole task, however many repositories the
-task touches: one set of requirements, one design, and a list of steps for
-each repository. Every repository gets a copy, committed on the task's
-branch, so it goes through review with the code and stays in the
-repository after the task, the branch and the app are gone. The Spec tab,
-first of a task's tabs, drafts each file, holds it while you edit it, and
-commits it when you approve it.
+the steps to get there, agreed before an agent starts and checked as it
+goes. It is one spec for the whole task, however many repositories the task
+touches. The spec is plain files in the task's own `spec/` folder, laid out
+the way the task's **toolset** lays them out: Kiro's requirements, design
+and tasks, an OpenSpec project, the superpowers' designs and plans, or a
+toolset a team adds. Agents and you both read and write those files. Layer
+shows them, follows them as they change, counts their steps, and puts them
+into each repository on the task's branch (**Commit spec**), so they go
+through review with the code and stay in the repository after the task, the
+branch and the app are gone.
 
-A spec kept beside the task (`SPEC.md` in the task folder) was deleted
-with the task, and nothing ever checked the work against it: an agent was
-told what done meant, and nobody asked afterwards whether it got there.
+A toolset is data, not code: a manifest saying where its files live, which
+of them hold `- [ ]` steps, what installing it runs, and the paragraph the
+agents are told about it. Installing it puts its command-line files and
+skills in the task folder, for the agent CLIs Layer launches, and nowhere
+else on the machine.
 
-A spec of its own in each repository drifted. A requirement two
-repositories met together was written in both and edited in one. Each
-repository's design described the endpoint between them in its own words,
-in its own run, and nothing compared the two. Changing one repository's
-requirements left the other's design and steps as they were. And an agent
-that edited a spec file was believed: the tab showed its text as approved,
-nothing after it was marked out of date, and it was committed with the
-code.
+**Removed.** The app used to own an approval pipeline: drafts and an
+approved record in `.spec-drafts/`, approving as a commit, files marked out
+of date, copies "changed outside the app" with Put back, an agent's
+proposals (`spec_propose`), telling agents of an approval, and a merge of
+per-repository specs. None of it exists: the files are the record, and
+nothing is waiting to be approved. A spec kept that way is moved into
+`spec/` (SPEC-17). The ids of what it replaced are struck through under Dropped.
 
-The shape follows Kiro's specs: requirements, then design, then tasks,
-each reviewed before the next is drafted.
+The shape of Kiro's spec, which is the default, follows Kiro's own:
+requirements, then design, then tasks.
 
-### What a spec is
+### Where a spec lives
 
-- **SPEC-1** A task's spec MUST be kept in each of its repositories as the
-  folder `specs/<task>/` in its worktree, `<task>` being the task's branch
-  with `/` as `-` (`specs/ACME-123-fix-login-race/`). The `specs/` folder
-  is set per repository in the Repos view. It holds:
-  - `requirements.md`: Goal, Requirements, Out of scope, Open questions.
-    Each requirement is a list item with its id first (`R-1`, `R-2`, …),
-    then the repositories that meet it by folder name (`R-3 [api, web]`),
-    written as WHEN a condition THE SYSTEM SHALL a behaviour, so that
-    someone can check it. One without an id is numbered by its place; one
-    naming no repository is met in all of them. Each open question is a
-    list item with its id first (`Q-1`, …), the answers it might take as a
-    list under it, and, once answered, an `Answer:` line under it.
-  - `bugfix.md`, in place of `requirements.md` for a bug: Current
-    behaviour, Expected behaviour, Unchanged behaviour (WHEN … THE SYSTEM
-    SHALL CONTINUE TO …), each item with its id and repositories, and Open
-    questions as in `requirements.md`. Feature or bug is chosen when the
-    spec is started.
-  - `design.md`: how the task's repositories will meet them together.
-    Approach; Contracts, each with its id first (`C-1`): what passes
-    between repositories (an endpoint's shape, an event's fields, a
-    schema), which repository provides it and which use it; then a section
-    per repository (`## api`): what changes where, error handling, how it
-    will be tested.
-  - `tasks.md`: this repository's numbered steps, and only its own
-    (`- [ ] 3. Call the refund endpoint (R-3, C-1; after api 2)`), each
-    naming the requirements and contracts it serves and, when it needs one
-    done first, another repository's step; ticked when done.
-- **SPEC-2** A task in several repositories MUST have one requirements
-  file and one design, the same text in every repository's folder, and a
-  `tasks.md` per repository. What was approved is kept by the app (in the
-  task folder's `.spec-drafts/`) and written from there into every
-  repository; no repository's copy is changed on its own. A task in one
-  repository has one copy, and nothing else differs.
-- **SPEC-3** A repository whose spec setting is off MUST NOT get spec
-  files in its worktree. Its copy is kept in the app's folder instead
-  (`<config folder>/specs/<repository>/<task>/`, same files), so it
-  outlives the task on this machine, though not in git. The tab says
-  which.
+- **SPEC-2** A task's spec MUST be one working copy, the folder
+  `<task folder>/spec/`, laid out the way its toolset says, whatever the
+  number of repositories (`commands/spec_copy.rs`, `spec_dir`). It MUST be
+  the only place the user and agents edit: they reach it by its absolute
+  path, which the context file gives (SPEC-10), or through the spec tools
+  (SPEC-13). It starts empty but for what the toolset's install writes
+  (SPEC-30), and is not filled from a repository's existing `openspec/` or
+  `docs/superpowers/`. `spec/` mirrors a repository's root: a file at
+  `spec/openspec/changes/x/tasks.md` is committed to
+  `openspec/changes/x/tasks.md` (SPEC-35). Every read and write of it, by the
+  tab, a draft or an agent's tool, goes through one module (`spec_copy.rs`),
+  which refuses a path with `..`, an absolute path, a file the toolset does
+  not list in `files`, and any link between `spec/` and the file (`lstat`,
+  never followed). A write goes to a new file beside the target and is renamed
+  over it, and every edit of the Spec tab's, a draft's and an agent's takes
+  one lock (`commands/spec_work.rs`, `EDITING`), so a reader sees the old text
+  or the new and two writers do not lose a tick. A listing stops at 5000
+  files and 16 folders deep, and skips `node_modules` and `.git`. A file is
+  text: one that is not UTF-8 fails its own read (`spec_read` of its path) and
+  nothing else. A listing, the Spec tab, Commit spec and a sub-task's seeding
+  leave it out and name it (`read_all`), so one such file cannot make the tab
+  empty or stop Open pull requests.
+- **SPEC-3** A task with no folder of its own (its root is itself a
+  checkout, from before tasks had folders) MUST keep its spec in
+  `<config folder>/specs/<repository>/<task>/` instead (`spec_dir`,
+  `kept_dir`), `<task>` being the branch with every character that is not a
+  letter, digit, `.`, `_` or `-` made a `-`. A spec MUST outlive its task on
+  this Mac: deleting a task (`commands/tasks.rs`), and Clean up of a task
+  folder no task uses (`commands/cleanup.rs`), copy `spec/` to
+  `<config folder>/specs/<task>/` first (`archive_spec`, `archive_leftover`;
+  a name already taken gets `-2`, `-3`, up to 99), without `node_modules` and
+  links, and go on only when the copy is whole. A spec that could not be kept
+  stays where it is and so does the task: a second Delete finishes it. A
+  spec with no file is kept as nothing. A repository whose `spec_commit` is
+  `none` gets no spec file in its worktree (SPEC-35), and the spec still
+  outlives the task here.
 
-### Drafting and approving
+### Toolsets
 
-- **SPEC-4** The files MUST be drafted in order and each approved before
-  the next is drafted: requirements (or bugfix), then design, then tasks.
-  Quick spec drafts all three at once, and they are approved together.
-- **SPEC-5** Each draft MUST be a fresh one-shot run (Claude Code,
-  Sonnet, no MCP, nothing that writes or runs), streamed into the editor:
-  - Requirements: one run over the ticket (`TICKET.md`, fenced off as data
-    and not instructions) and the task's repositories, which writes the
-    task's requirements and names the repositories that meet each. It
-    invents no requirement the ticket does not imply; what the ticket
-    leaves unclear goes under Open questions, each with the answers it
-    might take. A task with no saved ticket is drafted from its name. A
-    redraft is also given the questions already answered in the editor,
-    as decisions made, so it builds them in instead of asking again.
-  - Design: one run, allowed to read every repository's worktree, over the
-    approved requirements. It writes the contracts first and then each
-    repository's section, so both sides of an endpoint are described once.
-  - Tasks: one run over the approved requirements and design, which writes
-    every repository's steps, so what has to come first across
-    repositories is decided in one place.
+- **SPEC-26** A toolset MUST be a manifest (`spec/toolset.rs`, `Toolset`): an
+  `id`, a `name`, an optional pinned `version` (shown in the UI), `files` and
+  `steps` (globs relative to `spec/`; `steps` inside `files`), `install` (a
+  list of steps, SPEC-30), `commit_to`, `agents_md` (the paragraph agents are
+  told, SPEC-10) and `extras` (Kiro's features: Draft SPEC-5, Apply answers
+  SPEC-20, Check SPEC-15). A glob is `*` within one path segment and `**`
+  across any number (`spec/glob.rs`, written by hand: nothing else needs
+  more). Layer MUST ship three, each a JSON file and a
+  Markdown paragraph in `src-tauri/toolsets/`, listed in this order
+  (`toolset::builtin`):
+  - **Kiro** (`kiro`, "Kiro (Layer)"): `requirements.md`, `bugfix.md`,
+    `design.md` and `tasks.md`, flat in `spec/`; steps in `tasks.md`; nothing
+    to install; all three extras. The files and their shape are SPEC-1.
+  - **OpenSpec** (`openspec`, pinned `1.14.3`): `openspec/**/*.md`; steps in
+    `openspec/changes/*/tasks.md`; installed by
+    `npx -y @fission-ai/openspec@1.14.3 init --tools <ids> .` in `spec/`. Its
+    `init` writes the chosen tools' skills and commands (`.claude/`, `.agents/`,
+    `.opencode/`, `.gemini/`) under `spec/` too, where no agent CLI looks for
+    skills (SPEC-32 shows the task folder's) and Commit spec does not copy them
+    (they are not in `files`): they are inert, and agents use OpenSpec through
+    the commands its paragraph gives.
+  - **superpowers** (`superpowers`, pinned `7.0.2`): `docs/superpowers/**/*.md`;
+    steps in `docs/superpowers/plans/*.md`; installed by fetching
+    `https://github.com/obra/superpowers` at `v7.0.2` and copying its skills.
 
-  A redraft over text in an editor asks first; a failed draft puts back
-  what the editors held.
-- **SPEC-6** Approving MUST write the file into every repository's
-  worktree (each `tasks.md` into its own) and commit it on each task
-  branch, as the user, with only the spec's own files in the commit:
-  whatever an agent has staged or changed there stays as it was. The
-  message says which file of which task ("Approve the design for
-  ACME-123."); in a repository with a commitlint config, or whose recent
-  commits are mostly conventional, it is one ("docs: approve the design
-  for ACME-123"), so its commit hook takes it. The same holds for the
-  commits of SPEC-13 and SPEC-22. A repository it could not be written or committed in is
-  named with why, and the others keep theirs. Approving records what was
-  approved, which SPEC-22 compares against. A draft or an edit not
-  approved reaches nobody, and the tab says so. Drafts are kept in the
-  task folder (`.spec-drafts/`) until approved, so neither switching
-  tasks nor quitting the app loses one.
-- **SPEC-7** Changing an approved file MUST mark the files after it out of
-  date, in every repository. Sync redrafts every file that is out of date,
-  in order, each from the one before it, and they are reviewed and
-  approved together: steps already ticked are kept, steps for new
-  requirements are added in the repositories those name, and a step whose
-  requirements are all gone, or no longer name its repository, is marked
-  for the user to remove, never removed by itself.
-- **SPEC-8** The tab MUST show each file's state (not started, draft,
-  approved, out of date, changed outside the app), the requirements with
-  the repositories each names, and per repository its steps ticked of the
-  total. A requirements file with no requirements is warned about: they
-  are what done means. The panel beside the editor that shows them is
-  dragged wider or narrower by its left edge (always leaving the editor
-  room), double-clicked back to its usual width, and keeps its width.
-- **SPEC-9** A task whose worktree already has `specs/<task>/` MUST open
-  it: a task cut from a branch that has one, or a second task for the
-  same ticket on the same branch. Copies that differ between repositories
-  are shown as changed outside the app (SPEC-22), or as specs from before
-  (SPEC-25).
+  The paragraphs of OpenSpec and of superpowers tell the agent where to save:
+  OpenSpec's commands are run from `spec/` as
+  `npx -y @fission-ai/openspec@<version> <command>` (`openspec` is not on the
+  PATH; the paragraph's `{version}` is filled in, like `{spec_dir}`), and
+  they say not to archive a change, which happens in each repository after it
+  merges (known gaps); superpowers' design and plan are saved under
+  `spec/docs/superpowers/` by absolute path, so neither writes into a
+  repository's worktree.
+- **SPEC-27** The user MUST be able to add toolsets of their own, in
+  Settings → Code, as the JSON list of their manifests
+  (`commands/spec_settings.rs`, `set_custom_toolsets`, `SpecSettings.tsx`).
+  They are kept on this Mac only, never shared with the workspace, and one
+  with a built-in's id replaces it. A custom manifest writes its paragraph
+  inline (`agents_md`). The list is refused whole, with the reason, when it is
+  not valid JSON or one manifest breaks a rule (`toolset::validate`): the id is
+  1 to 60 lowercase letters, digits, `-` or `_` and not used twice; a name; a version
+  that is one plain path segment (letters, digits, `.`, `_`, `+`, `-`), because
+  it names a folder; at least one file glob; every glob (`files`, `steps`, a
+  `skills` glob, `commit_to`) a relative path inside its folder, with no `..`,
+  `.`, empty segment, backslash or leading `/`; every step glob inside `files`;
+  a `run` step with a command, a `fetch` step with a URL and a ref, and each
+  install step of exactly one kind (`run`, `fetch` or `skills`, never two). The
+  field says that `run` steps execute as written, on this Mac, as the user. The
+  config file is read more leniently than Settings: an entry in it that is not
+  a manifest at all (a hand edit gone wrong, a step of two kinds) is left out
+  and said on stderr, and every other entry and every task is kept, where it
+  once made the whole config unreadable (`toolset::lenient_list`). The next
+  write of the config no longer has the left-out entry.
 
-### Changed outside the app
+### Configuration
 
-The spec folder is in the worktree, where agents, editors and merges all
-write. An approved file that changed there is not approved: nobody agreed
-to it, and what was drafted after it was drafted from something else.
+- **SPEC-28** A repository MUST say how it takes specs, in the Repos view
+  (`ReposView.tsx`, `RepoSettings.tsx`, `set_project_specs`): the toolset it
+  prefers (`spec_toolset`, or none: the app's default), what Commit spec
+  puts in it (`spec_commit`: `whole`, `own` or `none`, SPEC-35), and the folder
+  the spec is committed under (`spec_folder`, default `specs`), which is offered
+  only where the toolset in force there is Kiro and the mode is not `none`: the
+  other toolsets mirror their own layout. These are shared with the team like
+  the repository's other settings (`config/project.rs`, `config/shared.rs`,
+  `crates/domain`, migration `0007_spec_toolsets.sql`). `specs_in_app = true`,
+  which earlier builds had, reads as `spec_commit = none` wherever it is found:
+  the config, the changes still queued for the workspace, and the database. A
+  toolset id is checked as a manifest's is. The app's own settings, on this Mac
+  only, are the default toolset (Kiro unless changed; `set_default_toolset`,
+  which refuses an id no toolset has) and the custom toolsets (SPEC-27); Spec
+  first is SPEC-38.
+- **SPEC-29** A task MUST have one toolset, fixed when it is made
+  (`Task.toolset`, `commands/tasks.rs`). Start work offers a pick (SPEC-18);
+  a sub-task is made with its epic's (SPEC-39); a task made any other way has
+  none until its install, which stores the one the app's default then names,
+  else Kiro. Everything of the task (layout, steps, install, the agents'
+  paragraph) follows that one, whatever its repositories prefer. A repository's
+  `spec_toolset` is only what Start work starts from: the one every picked
+  repository prefers, else the app's default, else Kiro (`lib/spec-toolset.ts`).
+  A toolset id nothing on this Mac has is passed over at every step: a
+  repository naming one (a teammate's custom toolset) gets a note in the Repos
+  view and is ignored for that default; a task whose toolset was since removed,
+  and an app default that was, fall back to the next, ending at Kiro
+  (`spec_copy.rs`, `toolset_of`) rather than failing every read of the spec. A
+  new task whose toolset nothing has is refused before its folder is made.
 
-- **SPEC-22** The app MUST notice a spec file, in any repository, whose
-  text is not what was approved: when the tab is shown, when an agent in
-  the task stops working, and before Open pull requests. A tick is not a
-  change (SPEC-13): `tasks.md` is compared without its boxes. The tab
-  marks the file changed outside the app, shows what changed and in which
-  repository, and offers:
-  - Approve: the text is approved as in SPEC-6, written into every
-    repository's copy, and the files after it are out of date (SPEC-7).
-  - Put back: the approved text is written back over it, in that
-    repository.
+### Installing a toolset
 
-  Until one is chosen, agents and checks go on reading what was approved
-  (SPEC-10, SPEC-15).
-- **SPEC-23** Open pull requests (PR-1) for a task with a spec file
-  changed outside the app MUST say which, and ask first: a reviewer would
-  read a spec nobody approved.
-- **SPEC-24** An agent MUST propose a change to the spec with the
-  `spec_propose` tool, not by editing the files: which file (requirements,
-  design, or one repository's tasks), its whole new text, and why. It
-  lands in that file's editor as a draft, with the reason and the pane
-  that proposed it, and the tab is marked until the user approves it or
-  turns it down; either way the agent is sent one line saying which
-  (SPEC-14). An editor holding a draft of the user's refuses it, and the
-  agent is told to ask instead.
+- **SPEC-30** When a task is made, once its worktrees exist, and when a
+  repository is added to a task that has a folder and no install on record,
+  the task's toolset MUST be installed in the background, off the app's runtime
+  threads (`commands/spec_install_run.rs`, `commands/spec_install.rs`). It runs
+  the manifest's steps in order and stops at the first that fails:
+  - `run`: an argv (never a shell string) in `spec/` or in the task folder,
+    with the login shell's environment, no input, and a timeout (120 s unless
+    the step says), which kills the step's whole process group;
+  - `fetch`: a git URL at a pinned ref, cloned once into
+    `<config folder>/toolsets/<id>/<version>/` and reused by every task after,
+    beside a marker of the URL and ref it came from, so a copy fetched for
+    another is not taken for this one (a manifest that fetches must name a
+    version);
+  - `skills`: copy the skill folders a glob names in the fetched copy into
+    `.claude/skills/` (which Claude Code reads) and `.agents/skills/` (Codex and
+    OpenCode) of the task folder. A file the user already has there is kept;
+    a link in the copy is left out and said.
 
-### Answering open questions
+  `{version}`, `{task}` (the branch as one path segment), `{skill_dirs}` and
+  `{openspec_tools}` (the OpenSpec ids of the agent CLIs in Layer's catalogue
+  that OpenSpec has an id for, today `claude,gemini,opencode`) are filled in a
+  step's arguments. An install writes only in the task folder, never in a
+  worktree, and records every path it wrote, those a `run` step made too (found
+  by comparing the folder before and after), in `.spec-install.json`, with the
+  toolset, its version, whether it succeeded, its error and the end of what it
+  printed. Deleting the task and Clean up remove exactly those files, and the
+  folders they emptied, and leave what the user or an agent added beside them
+  (each path in the record is checked first: inside the folder, through no link,
+  not in a worktree). Nothing is installed globally or in the user's own
+  `~/.claude` or `~/.agents`.
+- **SPEC-31** An install that fails MUST NOT stop the task or its agents: how it
+  went is its record, and the Spec tab says "Installing…" while it runs and
+  shows the error with **Retry** when it failed (`install_spec_toolset`,
+  `SpecView.tsx`). Retry runs every step again; a fetched copy already kept is
+  reused. Each start and end is announced as `spec:install`. An install of a
+  task that is already installing is not started a second time.
+- **SPEC-32** An agent started in a worktree MUST be shown the skills in the
+  task folder above it. Claude Code reads `.claude/skills/` only up to the
+  repository root, which is the worktree, so it is started with
+  `--add-dir <task folder>` (`agents.rs`, `task_folder_args`; `commands/panes.rs`,
+  `start_agent`, which every start, restart and restore of a task's agent goes
+  through), unless it starts in the task folder itself. The option goes last in
+  the arguments, since it takes any number of directories and a prompt after it
+  would be read as one. No other CLI gets an argument: none is known that adds a
+  skills folder.
 
-The questions a draft leaves are the user's to decide, and an answer is
-only worth something once a requirement says it: an agent works to the
-requirements, and Check against spec reads nothing else. Answering used to
-mean typing beside a question at the bottom of the editor, rewriting the
-requirements it decided by hand, and finding that Redraft threw both away.
+### Steps and who owns them
 
-- **SPEC-19** Beside the requirements, the tab MUST list the open
-  questions the editor holds, how many have no answer, and for each the
-  answers drafted for it to pick, each shown whole however long, and a
-  field for one of the user's own.
-  An answer is written into the editor's text as the question's `Answer:`
-  line, so the editor and the list are one record, kept as a draft is
-  (SPEC-6). An `Answer:` line typed into the editor counts the same, and
-  so does a line under the question starting `--`.
-- **SPEC-20** Apply answers MUST be a one-shot run, as a draft is
-  (SPEC-5), over the requirements as the editor holds them, which builds
-  each answer into them: it rewrites the requirements an answer decides,
-  and the repositories they name, puts in Out of scope what an answer
-  leaves out, and removes each answered question. A requirement no answer
-  touches keeps its text, id and repositories, a new one takes the next
-  free id, and a question with no answer stays. The tab then names the
-  requirements changed, added and removed, and Undo puts back what the
-  editor held. A failed run puts it back by itself.
-- **SPEC-21** Approving requirements whose editor still holds open
-  questions MUST first say how many have no answer (an agent will stop to
-  ask them, SPEC-10) and how many answers are not built in yet (Check
-  against spec reads only the requirements), and approve only if the user
-  goes on.
+- **SPEC-33** A step MUST be a `- [ ]` or `- [x]` list item in a file the
+  toolset's `steps` globs name (`spec/owned.rs`): every checkbox outside a code
+  block, nested ones included. A step is addressed by its file and its position
+  in it, from 1, counting every checkbox; the number its text shows (`1.1`,
+  `Step 2`, `3.`) is displayed and never used, since toolsets number
+  differently and restart per section. An agent ticks one with `spec_task` by
+  file and position (the file may be left out when there is one step file), and
+  a box edited by hand or by an agent's own file write counts the same: the file
+  is the record. The tab counts steps per repository from the files (SPEC-8).
+- **SPEC-34** Which repository a step belongs to MUST be read from the file
+  (`spec/owned.rs`, `owned_steps`): a `[folder]` tag on the step's own line (a
+  link's text is not a tag), else the nearest heading above it, of any level,
+  whose whole text is a repository's folder name (`# api`, `## api`) or that
+  carries a `[folder]` tag (`## 2. API [api]`), case aside. A heading of the same
+  or a higher level that names no repository ends the owner's section, so what
+  follows is everyone's; a lower one (`### Task 3` under `## api`) keeps it. A
+  step with no owner belongs to every repository: OpenSpec's `## 1. Setup` and
+  superpowers' `### Task 3` are everyone's until a tag or a repository's heading
+  says otherwise. A step that waits on another repository's says
+  `(after <repo> <n>)`; only Kiro's files and an epic's plan read it (SPEC-1,
+  SPEC-39), for the others it is for the agent.
 
+### Commit spec
+
+- **SPEC-35** Commit spec (the Spec tab's button, `commit_spec_cmd`,
+  `spec_commit` over MCP; `commands/spec_commit.rs`) MUST copy the working copy
+  into each repository's worktree per that repository's `spec_commit` and
+  commit those paths on the task's branch (`git::commit_only`, in
+  `git/only.rs`, which commits only the paths it is given and leaves an
+  agent's staged work staged), with the sentence "Update the spec for
+  ACME-1." (`docs: update the spec for ACME-1` for a repository that writes
+  conventional commits, or lints them). `spec/` mirrors a repository root: a
+  file goes to the same path, except Kiro's, whose files are flat, which go
+  under `<spec_folder, else specs>/<task>/` (`<task>` as in SPEC-3). It writes
+  only files that exist in `spec/` and that the toolset lists, never deletes
+  anything in a repository (an older `openspec/specs/` stays as it is), writes
+  nothing under `.git` or through a link, and does not rewrite a file that is
+  already what it would write. `whole` copies every file; `own` copies the step
+  files with only the steps that belong to that repository and to everyone
+  (SPEC-34), and what is above the first repository's section, and every other
+  file whole; `none` writes nothing and says so in its row. A file that is not UTF-8
+  text is left out and named in the row's detail (`; left out, not UTF-8 text:
+  <path>`), and the repository's commit goes on without it. The result is a row
+  per repository, a failed one named with why, and the others keep their
+  commit. A review task, which has no spec, is refused. Open pull requests
+  (PR-1, `commands/open_prs.rs`) MUST run Commit spec first, for the
+  repositories ticked whose last commit does not hold what Commit spec would
+  write now (`spec_commit.rs`, `commit_changed`, `changed_since_commit`, which
+  reads the committed text), say so in that repository's row, and not open the
+  code of one it could not commit.
+- **SPEC-16** A drafted pull request description (PR-4, `spec_work.rs`,
+  `pr_section`) MUST, for each repository whose requirements it can read, say
+  where its spec is in it
+  (`<spec_folder>/<task>/` for Kiro, the toolset's `commit_to` for the others,
+  "kept outside the repository, so not linked" for `none` or for a toolset with
+  no `commit_to`) and list the requirements that name it, with the latest
+  check's answer (SPEC-15), or say none was run. The requirements are read from
+  the toolset's entry file (SPEC-10) in Kiro's `R-n` form.
+
+### The Spec tab
+
+- **SPEC-8** The Spec tab (`SpecView.tsx`, `spec/SpecTree.tsx`,
+  `spec/SpecEditor.tsx`, `spec/SpecSide.tsx`, `lib/specs.ts`; `read_spec`,
+  `commands/spec_view.rs`) MUST show: the toolset's name and version and its
+  install line (SPEC-31); the files its manifest lists, as a tree grouped by
+  folder, each opened in an editor; per repository, its steps ticked of the
+  total (its own and everyone's, SPEC-34) and where Commit spec stands (what it
+  did just now, or "Not in its last commit", or "Committed", or "Kept by the
+  app, not committed"); and, on the tab, a badge of steps done of all, else how
+  many files there are. A file the toolset keeps that is not UTF-8 text is
+  named in a note and not shown (SPEC-2). The editor saves a file as a file write
+  (`write_spec_file`), through the same lock and refusals as an agent's
+  `spec_write`. Commit spec is off while any editor holds text not saved, since
+  it puts the saved files into the repositories. An empty spec says where its
+  files go. An epic's spec is the same tab on the epic's page (§26).
+  The task's tabs MUST be Agents, Spec, Diff and Pull requests, in that order
+  (`store.ts`, `TABS`; `App.tsx`), and selecting a task opens on Agents; Start
+  work with "Write a spec first", and Start work on an epic, open on Spec
+  (SPEC-18).
+- **SPEC-36** A change to the spec MUST be shown as it is made. While a task's
+  Spec tab is on screen, a change in `<task>/spec/`, by an agent, an editor or
+  the user, MUST reach the tab as `spec:changed` once the folder has been quiet
+  for 200 ms (and at least once a second while it is not), so a burst of writes
+  is one re-read (`commands/spec_watch.rs`, the `watch_spec` command called from
+  `Watchers.tsx`). Only the task on screen is followed (one watcher, driven by
+  the system's file events through the `notify` crate: never polled), none when
+  its Spec tab is not, and a folder that does not exist yet is followed from its
+  nearest existing folder and from the moment it appears. The tools `spec_write`
+  and `spec_task` also say `spec:changed`, and an agent that stops makes the tab
+  read again (`Watchers.tsx`, `pty:activity`), so a task not on screen is
+  current when shown.
+- **SPEC-37** An editor with unsaved text MUST keep it when its file changes on
+  disk, and say so, with **Load theirs** (take the file's text) or **Save mine**
+  (write over it): there is no merge (`lib/spec-edit.ts`, `mergeDisk`;
+  `SpecEditor.tsx`). A file whose text is the disk's again has nothing left to
+  keep. Cmd+S and Cmd+Enter save the file, except while it has changed on disk
+  under the editor: over an agent's text is only the button. A file with an
+  unsaved or a conflicting edit is marked in the tree. The backend holds the
+  line too, since a write can land between the tab's last read and its save: a
+  save sends the text the editor began from (`base`), and
+  `write_spec_file` checks it against the file under the lock every write takes
+  (`spec_work.rs`, `write_checked`) and writes nothing, answering false, when the
+  file holds something else. The tab then marks the edit a conflict and reads the
+  file again, and only Save mine (`force`) writes over it. Apply answers, which
+  saves first, stops with that message instead of running over the agent's text.
 ### Working to it
 
-- **SPEC-10** The context file (PANE-13) MUST name each repository's spec
-  folder and carry the approved requirements once, above the ticket, as
-  the user's own: they are what done means, they win where they and the
-  ticket disagree, what they put out of scope is left alone, and open
-  questions are asked rather than guessed. It says to change the spec
-  only with `spec_propose` (SPEC-24). Past 8 KB they are cut, and point at
-  the files.
-- **SPEC-11** An opening prompt for a task with a spec (`task_prompt`: the
-  launch dialog, Start agent, handoffs) MUST end by pointing at the spec
-  folders by full path, so an agent started inside one repository finds
-  the others too.
-- **SPEC-12** Start agent on the tab MUST start an agent on the approved
-  tasks: at the task folder for every repository, or in one repository
-  for its own. Its prompt tells it to work through the steps in order,
-  leave a step whose `after` is not ticked until it is (or, alone in its
-  repository, stop and say which it is waiting for), and mark each step
-  done as soon as it is finished, before starting the next. Told only to
-  mark each as it finished it, an agent did three steps and ticked them
-  together five minutes after the first, and the tab sat at 0 meanwhile.
-  The steps are listed in the order SPEC-1's `after` gives, not in the
-  order of the task's repositories.
-
-  Start agent is on the tab once, above the files, not in a repository's
-  panel, and its button says what it starts and how much is left: every
-  repository's steps by default (`Start Claude Code on both repositories
-  · 13 steps left`), or one repository's when that is picked. While an
-  agent is running in the task, the tab names it, with a way to open its
-  pane, and starting another asks first. In a
-  repository's panel, beside its tasks, the button read as starting that
-  repository only, though it started both; not sure, the user clicked it
-  again in the other panel, and two agents set off on the same steps.
-- **SPEC-13** An agent MUST mark a step done with the `spec_task` tool,
-  which ticks it in `tasks.md` and updates the tab. Ticks are committed
-  with the next approval or before Open pull requests (PR-1), with only
-  the spec's files in the commit. A tick an agent makes by editing the
-  file itself counts the same: the file is the record.
-- **SPEC-14** Approving a change while agents in the task are running
-  MUST offer to tell them: each is sent one line naming the files that
-  changed, typed into a terminal or sent as a prompt over ACP. Never on
-  its own, since a line typed into a busy agent interrupts it.
-
-### Checking against it
-
-- **SPEC-15** Check against spec MUST run, per repository, a one-shot run
-  allowed to read the worktree, over the approved requirements that name
-  it, the contracts it provides or uses, and the branch's changes from its
-  branch point (`git::baseline`). It answers per requirement: met, not met
-  or unclear, with the files and lines that show it. A requirement two
-  repositories meet shows each one's answer, and is met only when both
-  say so. The answer is shown beside each requirement, with the commit it
-  was checked at, and marked stale once that branch moves on. It is kept
-  in the task folder, never committed.
-- **SPEC-16** A drafted pull request description (PR-4) MUST, for a
-  repository with a spec, link its spec folder and list the requirements
-  that name it with the latest check's answer, or say none was run.
+- **SPEC-10** The context file (PANE-13, `commands/task_context.rs`) MUST have a
+  Spec section after the epic's and before the ticket (not in a review's). It
+  gives the absolute path of the working copy as the record to read before work
+  and to edit directly when the plan changes (`spec_write` does the same), saying
+  nothing needs approving first; the toolset's paragraph, with `{spec_dir}` and
+  `{version}` filled in; how to tick a step (SPEC-33); the four spec tools in a line each
+  (SPEC-13); with two or more repositories, the conventions for them (one spec
+  for the task; requirements naming their repositories in square brackets;
+  contracts written once in the design, naming provider and users; steps under a
+  first-level `# <repo>` heading named for the repository, or tagged `[repo]`,
+  with `(after <repo> <n>)`;
+  Commit spec copies each repository its part and no spec file is written in a
+  worktree); and the first 8 KB of the toolset's entry file, its headings
+  lowered two levels, cut with a pointer to the file: Kiro's `requirements.md`
+  (or `bugfix.md`), OpenSpec's newest change's `proposal.md`, superpowers'
+  newest design, by modification time (a custom toolset has none,
+  `task_context.rs`, `entry_file`). The file is rewritten when the task is made,
+  its ticket or repositories change and an agent is started, not when the spec
+  does, so the entry file may be older than the file: the section says so.
+- **SPEC-11** An opening prompt for a task (the launch dialog's, a handoff's, a
+  sub-task's, Start work's and the Henchman's start; `commands/spec_work.rs`,
+  `with_spec_line`, called from `jira.rs`, `tickets.rs`, `epics.rs`,
+  `henchman_work.rs`) MUST end by pointing at the spec folder by full path when
+  it holds files, so an agent started inside one repository finds the whole
+  spec, and, with Spec first on (SPEC-38), with that line after the pointer.
+  What a route adds (a handoff's history, a sub-task's steps) goes before, so
+  these are the last words of the prompt. A review's prompt is given neither.
+- **SPEC-38** With **Spec first** on (an app setting, off by default,
+  `set_spec_first`; the switch is Settings → Code, "Always write a spec first",
+  `SpecSettings.tsx`) every agent Layer starts MUST be told, in words only, to
+  write or update the spec in `<task>/spec/` before it changes any code:
+  `Write or update the spec in <path> before you change any code.` followed by
+  "Then implement it step by step, ticking each step." is the first line of the
+  context file's body, and the first sentence is the last line of every opening
+  prompt (SPEC-11), also while the spec folder is still empty. A review is never
+  told it. Nothing blocks an agent that ignores it. Start work's "Write a spec
+  first" (SPEC-18) is on and cannot be turned off while the setting is on.
+- **SPEC-12** The work prompt (a sub-task's agent starts with it, EPIC-8;
+  `spec_work.rs`, `work_prompt`) MUST send an agent through the spec's steps:
+  every step file, or one repository's steps in it (its own and everyone's),
+  with the count. It tells the agent to work through them in order, leave a step
+  whose `after` is not ticked until it is (or, alone in its repository, stop and
+  say which it is waiting for), tick each one as soon as it is finished, before
+  starting the next, with `spec_task` by file and position or by editing its box,
+  and change the spec rather than go on when it does not hold. Told only to mark
+  each as it finished it, an agent did three steps and ticked them together five
+  minutes after the first, and the tab sat at 0 meanwhile.
 
 ### From Start work
 
-- **SPEC-18** Start work, with an agent picked, MUST offer "Write a spec
-  first", on until turned off, and remembered. With it the task is made
-  and the ticket moved as without it, but no agent starts: the task opens
-  on its Spec tab with the requirements being drafted (unless the task
-  already has a spec, SPEC-9), and Start agent there starts the agent
-  Start work had picked (SPEC-12).
+- **SPEC-18** Start work (`StartWorkDialog.tsx`, `start_work_on_ticket`) MUST
+  offer the spec toolset the task is made with (`toolset`), starting on the
+  suggestion of SPEC-29 and keeping a pick made by hand when repositories are
+  added, and refuse a toolset nothing has before a folder is made. With an agent
+  picked it MUST offer "Write a spec first" (`write_spec`), on until turned off
+  and remembered. With it the task is made and the ticket moved as without it,
+  the picked agent starts at once with the Spec first sentence (SPEC-38) at the
+  end of its prompt, and the task opens on its Spec tab. With Spec first on as a
+  setting the option is on and locked. An epic-level ticket makes an epic
+  (EPIC-2), starts no agent and opens on Spec.
 
-### Moving from earlier specs
+### Agents' tools
 
-- **SPEC-17** A task with a `SPEC.md` from before MUST offer it as the
-  requirements draft, and remove it once those are approved.
-- **SPEC-25** A task whose repositories each have a spec of their own
-  from before (their requirements or designs differ) MUST offer to merge
-  them: a one-shot run, as a draft is, over every repository's files,
-  which writes one requirements file and one design, each requirement
-  naming its repositories, and each repository's steps with their
-  references renumbered and their ticks kept. An id that changed is noted
-  beside its new one (`R-4 (was web R-2)`). It is shown as drafts and
-  approved as usual; no worktree changes until then.
+- **SPEC-13** An agent MUST be able to change the spec with the `villain-layer`
+  MCP server's tools, as an alternative to its files (`mcp.rs`, `spec_tools`;
+  `spec_work.rs`, `spec_tool`), each acting on `task_id`, else the task of the
+  pane it is called from:
+  - `spec_read`: with no `path`, the spec's files, each with its steps done and
+    total (a step file that is not UTF-8 text has an `error` and no steps); with
+    one, that file's text.
+  - `spec_write`: a file's whole new text, making its folders; only a file the
+    toolset lists, and nothing outside `spec/` (the refusals of SPEC-2).
+  - `spec_task`: tick or untick a step by `file` and `step` position (SPEC-33);
+    returns the step.
+  - `spec_commit`: Commit spec (SPEC-35), for the repositories named by folder or
+    name, or all when `repos` is left out. A `repos` that is not a list of names
+    (`"api"`) is refused, not read as all. It is in `DANGER`: it needs
+    `confirm: true`.
 
-Code: `spec.rs` (the files, and what is read from them),
-`commands/spec.rs` (where the spec and its copies live, what was
-approved, approving), `commands/spec_view.rs` (what the tab is shown),
-`commands/spec_outside.rs` (Put back, `spec_propose` and turning a
-proposal down), `commands/spec_work.rs` (ticking, prompts, the pull
-request's part, telling agents), `commands/spec_draft.rs` and
-`commands/spec_prompts.rs` (drafting, applying answers, checking,
-merging), `commands/task_context.rs`, `git/only.rs` (committing only the
-spec), `mcp.rs` (`spec_task`), `commands/open_prs.rs`, `SpecView.tsx`,
-`spec/SpecStartAgent.tsx`, `spec/SpecBanners.tsx`, `spec/SpecSide.tsx`,
-`spec/SpecQuestions.tsx`, `Outgoing.tsx` (SPEC-23), `lib/specs.ts`,
-`lib/questions.ts`, `Watchers.tsx` (reading the spec again when an agent
-stops), `tickets/StartWorkDialog.tsx`, `ReposView.tsx` (the
-per-repository setting).
+  A write or a tick says `spec:changed`. `spec_propose` is gone: it answers with
+  where to write instead, for running agents that still have it in context. A
+  tool of a task whose spec was kept the old way moves it first (SPEC-17).
+
+### Kiro's extras
+
+The extras in a toolset's manifest (`draft`, `questions`, `check`) are Kiro's:
+Draft, Apply answers and Check against spec refuse a task whose toolset does not
+list them, before anything runs (`commands/spec_draft.rs`, `require`). They read
+and write the working copy's files like anything else that touches the spec, so
+the tab follows them, and each is a fresh one-shot run of Claude Code (Sonnet, no
+MCP; Design and Check may read files, and nothing that writes or runs is ever
+allowed), never the agent doing the work. The prompts are in `commands/spec_prompts.rs`.
+
+- **SPEC-1** Kiro's spec MUST be these files in `spec/`, which its paragraph
+  (`toolsets/kiro.md`) tells agents too, and which Commit spec (SPEC-35) puts
+  into each repository as `<spec_folder, else specs>/<task>/` in its worktree,
+  the folder being set per repository in the Repos view (SPEC-28):
+  - `requirements.md`: Goal, Requirements, Out of scope, Open questions. Each
+    requirement is a list item with its id first (`R-1`, `R-2`, …), then the
+    repositories that meet it by folder name (`R-3 [api, web]`), written as WHEN
+    a condition THE SYSTEM SHALL a behaviour. One without an id is numbered by
+    its place; one naming no repository is met in all of them. Each open
+    question is a list item with its id (`Q-1`, …), the answers it might take as
+    a list under it and, once answered, an `Answer:` line under it
+    (`spec.rs`, `requirements`, `answered`).
+  - `bugfix.md`, in place of `requirements.md` for a bug: Current, Expected and
+    Unchanged behaviour (WHEN … THE SYSTEM SHALL CONTINUE TO …), each item with
+    its id and repositories, and Open questions as above. A spec with a
+    requirements file keeps its kind.
+  - `design.md`: Approach; Contracts, each with its id first (`C-1`): what
+    passes between repositories, which provides it and which use it; then a
+    section per repository (`## api`).
+  - `tasks.md`: `- [ ] 3. Call the refund endpoint (R-3, C-1; after api 2)`, each
+    naming the requirements and contracts it serves and, when it needs one done
+    first, another repository's step. With several repositories each one's steps
+    are under a heading that is its folder's name, first level (`# api`, which
+    Draft writes): a second-level one (`## api`) is read too (SPEC-34) but ends
+    at the file's own `## Tasks`, so agents are told `# api`. That is how a step
+    file says whose steps are whose.
+- **SPEC-5** Draft (`draft_spec`, the tab's three Draft buttons) MUST be one run
+  per file, streamed into the editor as `spec:draft` and then written into the
+  file as any edit is, returning the text it replaced for **Undo** (a draft that
+  made its file is undone by deleting it, `remove_spec_file`, not by leaving an
+  empty one):
+  - Requirements: over the ticket (`TICKET.md`, fenced off as data) and the
+    task's repositories; names the repositories that meet each requirement,
+    invents none the ticket does not imply, and puts what is unclear under Open
+    questions with the answers it might take. A task with no saved ticket is
+    drafted from its name. A bug's analysis is `bugfix.md`, chosen on the first
+    draft; a redraft is given the questions already answered, as decisions made.
+  - Design: allowed to read every repository's worktree, over the requirements:
+    contracts first, then each repository's section.
+  - Tasks: over the requirements and design, every repository's steps in one run
+    under its heading, so what comes first across repositories is decided once.
+    The file is read again under the write's lock when the run is done, so a
+    step an agent ticked meanwhile stays ticked; a ticked step the draft left
+    out is put back, and a step whose requirements are all gone is marked for the
+    user to remove, never removed by itself. An epic's tasks are grouped into
+    sub-tasks (EPIC-4).
+
+  A failed draft writes nothing. Draft is off while an editor holds unsaved text,
+  which a draft would write over.
+- **SPEC-19** The questions a draft leaves are the user's to decide, and an
+  answer is only worth something once a requirement says it. Beside the
+  requirements the tab MUST list the open questions the editor holds, how many
+  have no answer, and for each the answers drafted for it to pick and a field for
+  the user's own (`spec/SpecQuestions.tsx`, `lib/questions.ts`). An answer is
+  written into the editor's text as the question's `Answer:` line, so the editor
+  and the list are one record; an `Answer:` line typed into the editor counts the
+  same, and so does a line under the question starting `--`.
+- **SPEC-20** **Apply answers**
+  (`apply_spec_answers`) MUST save the editor, then be a run over the
+  requirements file that rewrites the requirements an answer decides and the
+  repositories they name, puts in Out of scope what an answer leaves out, and
+  removes each answered question; a requirement no answer touches keeps its
+  text, id and repositories, a new one takes the next free id and a question with
+  no answer stays. The tab then names the requirements changed, added and
+  removed, and Undo writes back the text the call returned.
+- **SPEC-15** Check against spec (`check_spec`, a Check button per repository, not
+  offered on an epic, EPIC-6) MUST run, for one repository, a run allowed to read
+  its worktree, over the requirements that name it, the contracts it provides or
+  uses, and the branch's changes from its branch point (`git::baseline`). It
+  answers per requirement: met, not met or unclear, with the files and lines that
+  show it. A requirement two repositories meet shows each one's answer. The
+  answer is shown beside the repository with the commit it was checked at,
+  marked stale once the branch moves on, and kept in the task folder
+  (`.spec-checks/<folder>.json`, `commands/spec.rs`), never committed; a task with
+  no folder of its own keeps none.
+
+### Epics
+
+- **SPEC-39** An epic's spec (§26) is the working copy of the epic's task, read
+  and written as any task's. Its sub-tasks MUST be planned from its step files
+  (`commands/epics.rs`, `plan`; `spec_view.rs`, `step_texts`): each repository's
+  share is its own sections and steps and everyone's (SPEC-34), and a heading
+  shared across repositories is one sub-task. Filing a sub-task makes a task with
+  the epic's toolset (SPEC-29), gives its working copy the epic's files that are
+  not steps, whole, and its own steps, a `# <folder>` section for each of its
+  repositories, in the epic's first step file (`seed_sub_task`), and commits
+  nothing.
+
+### Moving earlier specs
+
+- **SPEC-17** A task whose spec was kept the old way MUST have it moved into
+  `spec/` the first time its spec is read or written (the Spec tab, an agent's
+  spec tool, a draft; `spec_copy.rs`, `move_old_spec`, from `with_spec_moved`;
+  where it was is read by `commands/spec_old.rs`), and before anything else makes
+  `spec/`, since a move is done only while the folder is absent: at the start of
+  every toolset install (SPEC-30), which a repository added to the task
+  starts, and when an agent is started (`spec_work.rs`, `for_agent_start`, from
+  `start_agent`), whose first file would make the folder. It is not done by the
+  context file's writer, which runs holding the config's read lock. What is moved
+  is what was approved in `.spec-drafts/approved/`, with an unapproved draft over a file when the draft
+  is newer; else the first repository's `specs/<task>/` requirements and design
+  and each repository's tasks, as a first-level `# <folder>` section of one
+  `tasks.md`; else a `SPEC.md`, as `requirements.md`. What is moved is Kiro's
+  layout, so the task is Kiro's from then on, whatever the app's default is. The
+  folder is built beside `spec/` and renamed into place, so a move that stopped
+  halfway is done again and one that is there is never touched. The old folders
+  (`.spec-drafts/`, each repository's `specs/<task>/`, `SPEC.md`) stay where
+  they are; Commit spec overwrites a repository's copy file by file, which is the
+  same path as Kiro's, and deletes nothing. `.spec-drafts/` goes with the task
+  folder.
+
+### Dropped
+
+Requirements of the earlier text that no longer hold. Their ids are not reused.
+
+- ~~**SPEC-4**~~ The files drafted in order, each approved before the next.
+  Dropped: nothing is approved and no order is forced; the files are the
+  record (SPEC-2).
+- ~~**SPEC-6**~~ Approving a file as a commit in every repository. Replaced by
+  Commit spec (SPEC-35).
+- ~~**SPEC-7**~~ A changed approved file marking the files after it out of date,
+  and Sync. Dropped; a redrafted `tasks.md` keeping what was ticked is in Draft
+  (SPEC-5).
+- ~~**SPEC-9**~~ Opening a `specs/<task>/` a worktree already has. Dropped: the
+  spec is not filled from a repository (SPEC-2), and an earlier one is moved
+  (SPEC-17).
+- ~~**SPEC-14**~~ Offering to tell running agents of an approval. Dropped with
+  approval.
+- ~~**SPEC-21**~~ A warning on approving requirements with open questions.
+  Dropped with approval; the questions are SPEC-19.
+- ~~**SPEC-22**~~ A spec file "changed outside the app", and Put back. Dropped:
+  an agent's edit is the record, the tab follows the folder (SPEC-36) and an
+  editor in conflict keeps its text (SPEC-37).
+- ~~**SPEC-23**~~ Open pull requests warning of a spec changed outside the app.
+  Replaced: Open pull requests runs Commit spec (SPEC-35).
+- ~~**SPEC-24**~~ An agent proposing a change with `spec_propose`. Replaced by
+  the spec tools (SPEC-13).
+- ~~**SPEC-25**~~ Merging the specs of several repositories into one. Dropped:
+  one working copy (SPEC-2); earlier copies are moved (SPEC-17).
+
+Code: `spec.rs` (a Kiro spec's files and what is read from them), `spec/toolset.rs`
+(manifests, validation), `spec/glob.rs`, `spec/owned.rs` (steps and who owns
+them), `spec/sub_tasks.rs` (an epic's sub-tasks), `src-tauri/toolsets/` (the
+three manifests and their paragraphs), `commands/spec_copy.rs` (the working copy,
+moving an old spec, keeping a spec), `commands/spec_old.rs`, `commands/spec_view.rs`
+(what the tab is shown), `commands/spec_work.rs` (writing, ticking, the tools,
+prompts, the pull request's part), `commands/spec_commit.rs`,
+`commands/spec_install.rs`, `spec_install_run.rs` and `spec_runner.rs`,
+`commands/spec_watch.rs`, `commands/spec_settings.rs`, `commands/spec_draft.rs`
+and `commands/spec_prompts.rs` (Kiro's extras), `commands/spec.rs` (the checks),
+`commands/task_context.rs`, `git/only.rs`, `mcp.rs` (the spec tools),
+`commands/open_prs.rs`, `agents.rs` (`task_folder_args`), `SpecView.tsx`,
+`spec/SpecTree.tsx`, `spec/SpecEditor.tsx`, `spec/SpecSide.tsx`,
+`spec/SpecQuestions.tsx`, `SpecSettings.tsx` (Settings → Code), `RepoSettings.tsx`
+(the Repos view), `tickets/StartWorkDialog.tsx`, `lib/specs.ts`, `lib/spec-edit.ts`,
+`lib/spec-toolset.ts`, `lib/questions.ts`, `Watchers.tsx` (`spec:changed`,
+`spec:install`, `spec:draft`, the watcher).
 
 Known gaps:
-- Drafting runs Claude Code, whichever agent will do the work.
-- A spec is approved by whoever runs the app. There is no second
-  approver, and the commit is the only record of who approved it.
-- Kiro runs independent tasks side by side; here one agent works through
-  them in order, or one per repository waiting on each other's `after`.
-- A draft cannot be stopped once started.
-- A step an agent ticks is an uncommitted change in the worktree until the
-  next approval or Open pull requests, and shows in the Diff tab until then.
-- Drafting and checking need Claude Code on the PATH.
-- An answer is recorded in the spec's commit only. The ticket, and
-  whoever asked for the work, are not told what was decided.
-- Each repository's pull request carries the whole requirements and
-  design, the other repositories' parts too.
-- A spec changed outside the app is noticed when an agent stops or the
-  tab is shown, not as it is written.
-- A tick is the agent's word. One that saves its ticks up shows the
-  work behind where it is, and one that ticks a step it did not finish
-  is caught only by Check against spec.
-- Which repositories a requirement names is the drafter's judgement;
-  it is corrected in the editor like anything else.
-- A task with no folder of its own (an older one, whose one repository
-  is its root) keeps no record of what was approved, so nothing there is
-  seen as changed outside the app.
-- A spec approved before the app kept a record of it is read from the
-  repositories' copies, and nothing in it is seen as changed outside the
-  app until it is approved again (or merged, SPEC-25).
-- Drafts left unapproved from when each repository had a spec of its own
-  are not carried over; what was approved is, by the merge (SPEC-25).
-- Start agent counts every agent running in the task as working through
-  the spec, whatever it was started for.
+- A toolset's `commit_to` says where its spec is in a repository only in a pull
+  request description. Where Commit spec puts a file is decided by the toolset's
+  id: Kiro's go under the repository's spec folder, every other toolset's to the
+  same path as in `spec/`. A custom toolset cannot be relocated.
+- A task's toolset cannot be changed after it is made. To use another, make the
+  task again.
+- The `start_work` tool agents have (§12) cannot pick a toolset or "write a spec
+  first": it uses the defaults.
+- The install runs in the background and may still be writing into `spec/` when
+  an agent starts, and an agent's write in that time is recorded as the
+  install's.
+- The install's state shows only on the Spec tab, as a line: there is no dot on
+  the task, and a finished install says nothing.
+- Claude Code started in a worktree gets `--add-dir <task folder>`, which also
+  gives it the task folder's sibling worktrees and `spec/` to read and write
+  (SPEC-32). It was taken from Claude Code's documentation and not tried in a live
+  session. Claude over ACP gets no such argument: nothing documented adds a
+  directory there, so it may not see the task folder's skills.
+- Codex is not launched by Layer, and run by hand in a worktree it scans
+  `.agents/skills` only up to the repository root; it has no flag that adds
+  another folder. Whether OpenCode, Gemini CLI and Copilot CLI find a task
+  folder's skills from a worktree was not checked; only Claude Code is given the
+  task folder.
+- Commit spec overwrites an uncommitted edit of a spec file inside a worktree:
+  the context file tells agents never to write one there, and Commit spec is what
+  writes the file. One that fails partway in a repository does not undo the files
+  it wrote before.
+- OpenSpec's `archive` step (merging a change's deltas into `openspec/specs/`)
+  happens in each repository, after the change merges, outside Layer. Layer
+  neither runs nor shows it, and its paragraph tells agents not to run it.
+- OpenSpec's `init`, run in `spec/`, writes its skills and commands for the
+  agent CLIs under `spec/.claude/`, `.agents/`, `.opencode/` and `.gemini/`, not
+  in the task folder where SPEC-32 shows skills. They are never read by an agent
+  and never committed; a spec kept when its task is deleted (SPEC-3) keeps them
+  too. Agents use OpenSpec through the `npx` commands of its paragraph.
+- Checks kept in `.spec-drafts/` by earlier builds are not moved: the first
+  check after the move is the first one.
+- Clean up of a task folder no task uses counts every file its install recorded
+  as the app's, even one that was edited since.
+- Drafting, Apply answers and Check need Claude Code on the PATH, whichever agent
+  does the work, and a draft cannot be stopped once started.
+- A drafted pull request description's spec section lists only requirements in
+  Kiro's `R-n` form, so for OpenSpec and superpowers it is usually left out.
+- An epic's Spec tab is not followed by the watcher (SPEC-36): it reads when it
+  opens, when an agent in it stops and when a spec tool writes. An epic's plan
+  (SPEC-39) reads steps the way Kiro's `tasks.md` has them (numbered top-level
+  items), whatever the epic's toolset.
+- The extras are Kiro-shaped: they write `requirements.md`, `design.md` and
+  `tasks.md`, so a custom toolset that lists `extras` must list those files.
+- Kiro runs independent tasks side by side; here one agent works through them in
+  order, or one per repository waiting on each other's `after`.
+- A step an agent ticks is a change in the working copy only; the repositories
+  have it after Commit spec. A tick is the agent's word: one that saves its ticks
+  up shows the work behind where it is, and one that ticks a step it did not
+  finish is caught only by Check against spec.
+- An answer to an open question is recorded in the spec's commit only. The
+  ticket, and whoever asked for the work, are not told what was decided.
+- Each repository's pull request carries the whole requirements and design, the
+  other repositories' parts too (`own` shortens only the step files).
+- Which repositories a requirement names is the drafter's judgement; it is
+  corrected in the editor like anything else.
 
 ## 20. Agents over ACP
 
@@ -2567,7 +2890,7 @@ Known gaps:
   not in the catalogue: each needs checking against a real install first,
   as PANE-1 asks.
 - Only a task's "+", its launch dialog and the Chat view offer ACP.
-  Resume, Start work, Start agent on a spec, the Diff tab's "send to an
+  Resume, Start work, a sub-task's Start, the Diff tab's "send to an
   agent" and a handoff start a terminal.
 - Drafting PR and ticket descriptions still runs `claude -p` (§3).
 - The slash commands an agent offers are only suggested as `/` is typed.
@@ -3371,7 +3694,7 @@ Known gaps:
 ## 26. Epics
 
 An epic is a piece of work too big for one agent and one pull request: a
-spec, approved once, whose steps become sub-tasks, each filed in Jira under
+spec, written once, whose steps become sub-tasks, each filed in Jira under
 the epic and each a task of its own. The epic is where they are planned
 and followed. It lists its sub-tasks above the task list, with each one's
 state on one line under it. Its page has two tabs, Sub-tasks and Spec,
@@ -3387,7 +3710,7 @@ paper.
 
 - **EPIC-1** An epic MUST be a task marked as one (`Task.epic`). Its
   worktrees are there for its spec: they are read while it is drafted
-  (SPEC-5) and the approved files are committed there (SPEC-6). No agent
+  (SPEC-5) and its spec is committed there by Commit spec (SPEC-35). No agent
   writes code in them, the epic's branch is never pushed, and it opens no
   pull request. Its page has the tabs Sub-tasks and Spec only, and its
   header neither Update from base nor the worktree counts.
@@ -3403,9 +3726,11 @@ paper.
 
 ### Its spec
 
-- **EPIC-4** An epic's spec MUST be drafted and approved as any task's
-  (§19), except that its tasks are grouped into sub-tasks. Under each
-  repository the tasks draft heads each group with a second-level heading,
+- **EPIC-4** An epic's spec MUST be drafted and written as any task's
+  (§19), except that its tasks are grouped into sub-tasks. Its steps, in the
+  working copy's step files, are split per repository (its `# <folder>`
+  section, and what belongs to everyone), and the tasks draft heads each
+  group with a second-level heading,
   its title (`## Session refresh endpoint`), and numbers the steps across
   the groups from 1, as before. The same title in several repositories is
   one sub-task across them. A heading that starts with a ticket key
@@ -3417,13 +3742,12 @@ paper.
 - **EPIC-5** A sub-task MUST wait for another when one of its steps is
   after one of the other's (`after api 4`, SPEC-1). The order sub-tasks
   are listed in follows that: what starts first leads.
-- **EPIC-6** The epic's Spec tab MUST NOT offer Start agent (SPEC-12) or
-  Check against spec (SPEC-15): the work, and what is checked, is in its
+- **EPIC-6** The epic's Spec tab MUST NOT offer Check against spec (SPEC-15): the work, and what is checked, is in its
   sub-tasks.
 
 ### Filing sub-tasks
 
-- **EPIC-7** Once its tasks are approved, the Sub-tasks tab MUST list the
+- **EPIC-7** Once its tasks are written, the Sub-tasks tab MUST list the
   sub-tasks they make, each with its repositories, its steps, the
   requirements those serve, whether its ticket is new or existing, and
   what it waits for ("starts first", "after Session refresh endpoint"), and
@@ -3436,8 +3760,11 @@ paper.
      none, and its sub-tasks have no ticket either.
   2. a task for it (TASK-1 to TASK-4): its repositories, a branch named
      after its ticket (TASK-2), cut from each repository's default branch.
-  3. its spec, approved (SPEC-6): the epic's requirements and design, and
-     in each repository that sub-task's steps alone, with their numbers. An
+  3. its spec: the sub-task is given the epic's toolset, and its working
+     copy gets the epic's files that are not steps (requirements, design) and
+     that sub-task's steps alone, with their numbers, in the epic's first
+     step file, each repository's under its `# <folder>` heading; nothing is
+     committed, Commit spec does that. An
      `after` on another sub-task's step is left out: waiting for it is the
      epic's job (EPIC-5).
 
@@ -3448,7 +3775,7 @@ paper.
 - **EPIC-8** Each filed sub-task's row on the Sub-tasks tab MUST show its
   ticket key, its steps ticked of the total, and its state (EPIC-10), and
   offer its one action: Start for a ready one, which starts the default
-  agent on its spec as Start agent does (SPEC-12) and moves its ticket
+  agent on its spec with the work prompt (SPEC-12) and moves its ticket
   (and, the first time, the epic's) as Start work does (TKT-1); Open for
   the rest. Starting one that waits asks first, naming what it waits for.
 
@@ -3567,7 +3894,7 @@ Known gaps:
 - The epic's chat is not told when a sub-task's agent asks something,
   finishes or has its pull requests merged. It finds out with
   `epic_subtasks` when it looks.
-- Changing an epic's approved spec after filing changes no sub-task: each
+- Changing an epic's spec after filing changes no sub-task: each
   keeps the spec it was filed with, and is changed in its own Spec tab.
 - A sub-task the tasks draft adds after filing is filed with the next
   File; one it drops stays filed.

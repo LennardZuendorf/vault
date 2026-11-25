@@ -3,7 +3,24 @@
 
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+pub use layer_domain::SpecCommit;
+
+/// `spec_commit` as written now (`"own"`), or as `specs_in_app` was.
+pub(super) fn commit_or_flag<'de, D: Deserializer<'de>>(d: D) -> Result<SpecCommit, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Either {
+        Flag(bool),
+        Mode(SpecCommit),
+    }
+    Ok(match Either::deserialize(d)? {
+        Either::Flag(true) => SpecCommit::None,
+        Either::Flag(false) => SpecCommit::Whole,
+        Either::Mode(mode) => mode,
+    })
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
@@ -34,12 +51,19 @@ pub struct Project {
     /// loop runs only a command that is this, word for word (LOOP-1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_approved: Option<String>,
-    /// Where specs are committed here (SPEC-1), from its root. None: `specs`.
+    /// Where specs are committed here (SPEC-28), from its root. None: `specs`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_folder: Option<String>,
-    /// Specs are kept by the app instead of committed here (SPEC-3).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub specs_in_app: bool,
+    /// The spec toolset this repository prefers, by id: only the default
+    /// Start work offers (a task's own toolset decides its layout). None:
+    /// no preference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_toolset: Option<String>,
+    /// How a task's spec reaches this repository. It was `specs_in_app`, a
+    /// switch: a config from then holds that key, which reads as this
+    /// (`true` is `none`, the app keeps the spec).
+    #[serde(default, alias = "specs_in_app", deserialize_with = "commit_or_flag")]
+    pub spec_commit: SpecCommit,
     /// Where it fetches from, as `git::remote_key` spells it
     /// (`github.com/acme/api`): read from `origin` when it was added, or
     /// when its profile became a workspace. None: it has no `origin`, and

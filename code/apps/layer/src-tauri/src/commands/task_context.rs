@@ -9,8 +9,8 @@
 //! the app had already fetched.
 //!
 //! It also carries what earlier tasks learned about each repository here
-//! (MEM-4), with how likely each note is to be out of date, and the
-//! requirements of the spec the user agreed for the work (SPEC-10).
+//! (MEM-4), with how likely each note is to be out of date, and where the
+//! task's spec is and how its toolset works (SPEC-10).
 
 use std::path::Path;
 
@@ -18,11 +18,15 @@ use tauri::AppHandle;
 
 use crate::config::Task;
 use crate::error::Result;
+use crate::spec::glob;
+use crate::spec::toolset::Toolset;
 use crate::tickets::Ticket;
 
 use super::jira::task_repos;
 use super::notes::{age, notes_of, RepoNote};
 use super::panes::agent_file_dir;
+use super::spec_copy::{list_files, read_file, spec_dir, toolset_of};
+use super::spec_work::spec_first_for;
 use super::AppState;
 
 /// The ticket as the app last fetched it, which the context file is built
@@ -35,16 +39,9 @@ pub(crate) const TICKET_FILE: &str = "TICKET.md";
 /// read into every turn of every agent in the task.
 const MAX_DESCRIPTION: usize = 8_000;
 
-/// The same for the spec's requirements (SPEC-10). Past it, the files have
-/// the rest.
-const MAX_SPEC: usize = 8_000;
-
-/// The task's approved requirements, and each repository's folder in the
-/// task with where its copy of the spec is.
-pub(crate) struct SpecRequirements {
-    pub dirs: Vec<(String, String)>,
-    pub text: String,
-}
+/// The same for the start of the toolset's entry file (SPEC-10). Past it,
+/// the file has the rest.
+const MAX_ENTRY: usize = 8_000;
 
 /// Bytes of notes per repository in the context file (MEM-4). The rest are
 /// counted, and `repo_notes` has them.
@@ -70,8 +67,15 @@ pub(crate) fn write_task_context(state: &AppState, task: &Task) -> Result<()> {
         return Ok(());
     };
     let ticket = std::fs::read_to_string(dir.join(TICKET_FILE)).ok();
-    let spec = super::spec_work::approved_requirements(state, task).map(|(text, dirs)| SpecRequirements { dirs, text });
-    let mut md = task_context(task, &task_repos(state, task), ticket.as_deref(), spec.as_ref());
+    let repos = task_repos(state, task);
+    // A review changes nothing and has no spec of its own.
+    let spec = task.review.is_none().then(|| {
+        let (t, at) = (toolset_of(state, task), spec_dir(state, task));
+        let folders: Vec<String> = repos.iter().map(|(folder, _)| folder.clone()).collect();
+        spec_section(&t, &at, &folders, entry_file(&t, &at))
+    });
+    let first = spec_first_for(state, task);
+    let mut md = task_context(task, &repos, ticket.as_deref(), spec.as_deref(), first.as_deref());
     md.push_str(&checks_section(&task_checks(state, task)));
     md.push_str(&notes_section(&task_notes(state, task), chrono::Utc::now().timestamp_millis()));
 
@@ -210,9 +214,6 @@ fn note_line(n: &RepoNote, now: i64) -> String {
     format!("- `{}` {text} ({when})\n", n.note.id)
 }
 
-/// The context file's text. `repos` are (folder, clone it came from) pairs,
-/// `ticket` is the saved `TICKET.md`, if there is one, and `spec` the
-/// approved requirements.
 /// What the epic's chat is for (EPIC-11): its sub-tasks do the work, each
 /// in a task of its own, and it only keeps them going.
 const EPIC: &str = "## This is an epic
@@ -227,18 +228,27 @@ question to the person rather than answering it yourself.
 
 ";
 
+/// The context file's text. `repos` are (folder, clone it came from) pairs,
+/// `ticket` is the saved `TICKET.md`, if there is one, `spec` the Spec
+/// section (`spec_section`), and `spec_first` the sentence Spec first puts
+/// at the top.
 fn task_context(
     task: &Task,
     repos: &[(String, String)],
     ticket: Option<&str>,
-    spec: Option<&SpecRequirements>,
+    spec: Option<&str>,
+    spec_first: Option<&str>,
 ) -> String {
-    let mut md = format!(
-        "# {}\n\nWritten by Layer. You are in the task folder, not inside a \
+    let mut md = format!("# {}\n\n", task.name);
+    if let Some(line) = spec_first {
+        md.push_str(&format!("{line} Then implement it step by step, ticking each step.\n\n"));
+    }
+    md.push_str(&format!(
+        "Written by Layer. You are in the task folder, not inside a \
          repository: each repository below is checked out as a folder here, all on \
          branch `{}`.\n\n",
-        task.name, task.branch,
-    );
+        task.branch,
+    ));
     if task.review.is_none() {
         // An agent that cut a branch of its own and opened its PR from there
         // left the task saying "no PR" while the PR waited on GitHub.
@@ -269,7 +279,7 @@ This task reviews pull request {}#{}{}, at commit `{}`: {}.              `{}` is
         md.push_str(EPIC);
     }
     if let Some(spec) = spec {
-        md.push_str(&spec_section(&task.id, spec));
+        md.push_str(spec);
     }
     match ticket.filter(|t| !t.trim().is_empty()) {
         Some(ticket) => {
@@ -319,48 +329,126 @@ This task reviews pull request {}#{}{}, at commit `{}`: {}.              `{}` is
     md
 }
 
-/// The spec's requirements, as the context file shows them (SPEC-10).
-/// Unlike the ticket they are not quoted: the user wrote or agreed every
-/// line, so they are theirs to instruct with. Their headings go down two
-/// levels, under this one and the repository's.
-fn spec_section(task_id: &str, spec: &SpecRequirements) -> String {
+/// The Spec section of the context file (SPEC-10): where the working copy
+/// is, the toolset's own paragraph, how to tick a step, the MCP tools, the
+/// conventions for several repositories, and the start of the toolset's
+/// entry file. Unlike the ticket it is not quoted: it is the user's and the
+/// agents' own record, so it may instruct. The entry file's headings go down
+/// two levels, under this section's.
+fn spec_section(t: &Toolset, dir: &Path, folders: &[String], entry: Option<(String, String)>) -> String {
+    let at = dir.display().to_string();
     let mut md = format!(
         concat!(
             "## The spec\n\n",
-            "The user's spec for this work, which they wrote or agreed: one set of ",
-            "requirements and one design for the whole task, the same in every repository's ",
-            "spec folder, and each repository's own tasks. The requirements are what done ",
-            "means: meet each one, and say which you could not. Each names in square brackets ",
-            "the repositories that meet it; one naming none is every repository's. Where they ",
-            "and the ticket disagree, the spec wins. Leave alone what they put out of scope, ",
-            "and ask the user their open questions rather than guessing. Work through the ",
-            "tasks in order, and as soon as a step is done mark it with `spec_task` on the ",
-            "`villain-layer` MCP server. Never edit the spec's files: if something in it is ",
-            "wrong, propose the change with `spec_propose` and wait. This task's id is `{}`.\n\n",
+            "The spec for this work is in `{at}`: one folder for the whole task, outside every ",
+            "repository, and it is the record. Read it before you work, and when the plan ",
+            "changes, edit its files directly (`spec_write` does the same); nothing needs ",
+            "approving first. Layer copies it into each repository on Commit spec. It is the user's spec as much as yours: ",
+            "meet its requirements, say which you could not, and ask the user its open ",
+            "questions rather than guessing.\n\n",
         ),
-        task_id
+        at = at
     );
-    for (folder, dir) in &spec.dirs {
-        md.push_str(&format!("- `{folder}/`: its copy is in `{dir}`\n"));
+    let paragraph = t.agents_md.trim();
+    if !paragraph.is_empty() {
+        md.push_str(&paragraph.replace("{spec_dir}", &at).replace("{version}", t.version.as_deref().unwrap_or("")));
+        md.push_str("\n\n");
     }
-    md.push_str("\n### Requirements\n\n");
-    let (shown, cut) = cut_at(spec.text.trim(), MAX_SPEC);
-    let mut fence = false;
-    for line in shown.lines() {
-        if line.trim_start().starts_with("```") {
-            fence = !fence;
+    if !t.steps.is_empty() {
+        let globs: Vec<String> = t.steps.iter().map(|g| format!("`{g}`")).collect();
+        md.push_str(&format!(
+            concat!(
+                "### Ticking steps\n\n",
+                "The steps are the `- [ ]` boxes in {globs}. Work through them in order. Tick each ",
+                "step as soon as it is done, before you start the next, so the user can follow the ",
+                "work: edit its box to `- [x]`, or call `spec_task` with the `file` (when the spec ",
+                "has more than one) and the step's position in it, counted from 1 over every box, ",
+                "nested ones included. Do not save ticks up.\n\n",
+            ),
+            globs = globs.join(", ")
+        ));
+    }
+    md.push_str(concat!(
+        "### Spec tools\n\n",
+        "On the `villain-layer` MCP server. They work on the task of the pane you run in; ",
+        "give `task_id` only from elsewhere.\n\n",
+        "- `spec_read`: with no `path`, the spec's files, each with its steps done and total; ",
+        "with a `path` inside the spec folder, that file's text.\n",
+        "- `spec_write`: write a file (`path`, `text`) in the spec folder, whole, making its ",
+        "folders. Only files the toolset keeps.\n",
+        "- `spec_task`: tick or untick a step (`file`, `step`, `done`).\n",
+        "- `spec_commit`: commit the spec into each repository's branch (`repos` names some). ",
+        "Needs `confirm: true`, which you give only when the user asked for it.\n\n",
+    ));
+    if folders.len() > 1 {
+        let (a, b) = (&folders[0], &folders[1]);
+        md.push_str(&format!(
+            concat!(
+                "### Several repositories\n\n",
+                "One spec for the task, never one per repository.\n\n",
+                "- Requirements name the repositories that meet them in square brackets, `[{a}, {b}]`.\n",
+                "- Contracts between repositories (endpoints, events, schemas) are written once, in ",
+                "the design, each naming the repository that provides it and those that use it.\n",
+                "- Step files group steps under a first-level `# <repo>` heading, by the repositories' ",
+                "folder names (a second-level one ends at the file's own `## Tasks`), or tag a step ",
+                "`[repo]`. A step that waits on another repository's says ",
+                "`(after <repo> <n>)`, as `(after {a} 2)`.\n",
+                "- Commit spec copies each repository its part; do not write spec files inside a ",
+                "repository's worktree.\n\n",
+            ),
+            a = a,
+            b = b
+        ));
+    }
+    if let Some((rel, text)) = entry {
+        md.push_str(&format!(
+            "### `{rel}`\n\nThe start of it as this file was written; the file has the current text.\n\n"
+        ));
+        let (shown, cut) = cut_at(text.trim(), MAX_ENTRY);
+        let mut fence = false;
+        for line in shown.lines() {
+            if line.trim_start().starts_with("```") {
+                fence = !fence;
+            }
+            if !fence && line.starts_with('#') {
+                md.push_str("##");
+            }
+            md.push_str(line);
+            md.push('\n');
         }
-        if !fence && line.starts_with('#') {
-            md.push_str("##");
+        if cut {
+            md.push_str(&format!("\n(Cut short here. `{rel}` in the spec folder has the rest.)\n"));
         }
-        md.push_str(line);
         md.push('\n');
     }
-    if cut {
-        md.push_str("\n(Cut short here. The requirements file in the spec folder has the rest.)\n");
-    }
-    md.push('\n');
     md
+}
+
+/// The file of `t`'s spec that says what the work is (SPEC-10), as its path
+/// in the spec folder and its text: Kiro's `requirements.md` (or a bug's
+/// `bugfix.md`), OpenSpec's newest change's `proposal.md`, superpowers'
+/// newest design, by modification time. None when it is not written yet, or
+/// for a toolset Layer has no entry file for.
+pub(crate) fn entry_file(t: &Toolset, dir: &Path) -> Option<(String, String)> {
+    let files = list_files(dir, t).ok()?;
+    let newest = |pattern: &str| {
+        files
+            .iter()
+            .filter(|f| glob::matches(pattern, f))
+            .max_by_key(|f| {
+                let modified = std::fs::symlink_metadata(dir.join(f)).and_then(|m| m.modified()).ok();
+                (modified, f.to_string())
+            })
+            .cloned()
+    };
+    let rel = match t.id.as_str() {
+        "kiro" => ["requirements.md", "bugfix.md"].into_iter().find(|f| files.iter().any(|x| x == f)).map(String::from),
+        "openspec" => newest("openspec/changes/*/proposal.md"),
+        "superpowers" => newest("docs/superpowers/specs/*.md"),
+        _ => None,
+    }?;
+    let text = read_file(dir, t, &rel).ok()?;
+    Some((rel, text))
 }
 
 /// The ticket, as `TICKET.md` holds it and the context file shows it.
@@ -457,6 +545,7 @@ mod tests {
 
     fn task() -> Task {
         Task {
+            toolset: None,
             id: "t1".into(),
             name: "ACME-12 Refunds fail for split payments".into(),
             root: "/work/acme-12".into(),
@@ -478,7 +567,7 @@ mod tests {
     fn the_context_file_carries_the_saved_ticket_rather_than_only_its_link() {
         let repos = vec![("api".to_string(), "/repos/api".to_string())];
         let ticket = ticket_markdown(&issue());
-        let md = task_context(&task(), &repos, Some(&ticket), None);
+        let md = task_context(&task(), &repos, Some(&ticket), None, None);
 
         assert!(md.contains("## The ticket: ACME-12 Refunds fail for split payments"));
         assert!(md.contains("Bug · priority High · labels payments"));
@@ -501,59 +590,218 @@ mod tests {
             }),
             ..task()
         };
-        let md = task_context(&review, &[], None, None);
+        let md = task_context(&review, &[], None, None, None);
         assert!(md.contains("reviews pull request acme/api#61 by ana, at commit `abc123`"));
         assert!(md.contains("Do not push"));
-        assert!(!task_context(&task(), &[], None, None).contains("This is a review"));
+        assert!(!task_context(&task(), &[], None, None, None).contains("This is a review"));
     }
 
     #[test]
     fn an_epics_chat_is_told_it_only_orchestrates() {
         let epic = Task { epic: true, ..task() };
-        let md = task_context(&epic, &[], None, None);
+        let md = task_context(&epic, &[], None, None, None);
         assert!(md.contains("## This is an epic\n\nYou orchestrate its sub-tasks; you write no code."));
-        assert!(!task_context(&task(), &[], None, None).contains("This is an epic"));
+        assert!(!task_context(&task(), &[], None, None, None).contains("This is an epic"));
     }
 
     #[test]
     fn a_task_whose_ticket_was_never_saved_still_gets_the_link() {
-        let md = task_context(&task(), &[], None, None);
+        let md = task_context(&task(), &[], None, None, None);
         assert!(md.contains("Ticket: https://acme.atlassian.net/browse/ACME-12"));
         assert!(md.contains("None yet."));
     }
 
-    fn reqs(text: &str) -> SpecRequirements {
-        let dirs = ["api", "web"].iter().map(|f| (f.to_string(), format!("/work/acme-12/{f}/specs/ACME-12"))).collect();
-        SpecRequirements { dirs, text: text.into() }
+    fn toolset(id: &str) -> Toolset {
+        crate::spec::toolset::find(id, &[]).unwrap()
+    }
+
+    const DIR: &str = "/work/acme-12/spec";
+
+    fn folders(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    fn section(id: &str, names: &[&str]) -> String {
+        spec_section(&toolset(id), Path::new(DIR), &folders(names), None)
     }
 
     #[test]
-    fn the_spec_comes_before_the_ticket_as_the_users_own_words() {
+    fn the_context_names_the_spec_folder_by_absolute_path_and_the_toolset() {
         let ticket = ticket_markdown(&issue());
-        let spec = "## Goal\nRefunds work.\n\n## Requirements\n- R-1 [api, web]: WHEN two cards paid THE SYSTEM SHALL refund both.\n";
-        let md = task_context(&task(), &[], Some(&ticket), Some(&reqs(spec)));
+        let md = task_context(&task(), &[], Some(&ticket), Some(&section("kiro", &["api"])), None);
 
         let at_spec = md.find("## The spec").unwrap();
         let at_ticket = md.find("## The ticket: ACME-12").unwrap();
-        assert!(at_spec < at_ticket);
-        assert!(md.contains("the spec wins"));
-        assert!(md.contains("This task's id is `t1`"), "{md}");
-        assert!(md.contains("- `api/`: its copy is in `/work/acme-12/api/specs/ACME-12`\n- `web/`"));
+        assert!(at_spec < at_ticket, "the spec comes before the ticket");
+        assert!(md.contains("/work/acme-12/spec"), "{md}");
+        assert!(md.contains("The spec is Kiro-style"), "the toolset's own paragraph");
+        assert!(md.contains("The spec for this work is in `/work/acme-12/spec`:"), "{md}");
         assert!(
-            md.contains("\n#### Requirements\n- R-1 [api, web]: WHEN two cards paid THE SYSTEM SHALL refund both.\n")
+            md.contains("requirements, then design, then tasks, in `/work/acme-12/spec`."),
+            "the paragraph's own path"
         );
-        assert_eq!(md.matches("R-1 [api, web]").count(), 1, "the requirements once, not once per repository");
-        assert!(md.contains("Never edit the spec's files") && md.contains("`spec_propose`"));
-        assert!(!md.contains("> - R-1"));
+        assert!(md.contains("Write each file in `/work/acme-12/spec`;"), "{md}");
+        assert!(md.contains("nothing needs approving first"));
+        assert!(!md.contains("{spec_dir}"), "the placeholder is filled everywhere");
+        assert!(md.contains("edit its files directly"), "the working copy is the record");
+        assert!(!md.contains("spec_propose"));
     }
 
     #[test]
-    fn long_requirements_are_cut_and_point_at_their_file() {
-        let long = format!("## Goal\n{}", "word ".repeat(MAX_SPEC));
-        let md = spec_section("t1", &reqs(&long));
-        assert!(md.contains("(Cut short here. The requirements file in the spec folder has the rest.)"));
-        assert!(md.len() < MAX_SPEC + 2_000);
-        assert!(!spec_section("t1", &reqs("## Goal\nShort.")).contains("Cut short"));
+    fn multi_repository_conventions_appear_only_with_two_or_more_repositories() {
+        let two = section("kiro", &["api", "web"]);
+        assert!(two.contains("One spec for the task"), "{two}");
+        assert!(two.contains("[api, web]"));
+        // First level: a second-level heading ends at the step file's own `## Tasks`.
+        assert!(two.contains("under a first-level `# <repo>` heading") && two.contains("`[repo]`"), "{two}");
+        assert!(two.contains("(after <repo> <n>)"));
+        assert!(two.contains("do not write spec files inside a repository's worktree"));
+
+        for one in [section("kiro", &["api"]), section("kiro", &[])] {
+            assert!(!one.contains("One spec for the task"), "{one}");
+            assert!(!one.contains("(after <repo> <n>)"));
+        }
+    }
+
+    #[test]
+    fn openspec_is_told_to_run_from_the_spec_folder() {
+        let md = section("openspec", &["api"]);
+        assert!(md.contains("cd /work/acme-12/spec"), "{md}");
+        assert!(md.contains("validate <id>"));
+    }
+
+    #[test]
+    fn openspec_commands_are_the_pinned_npx_ones_since_it_is_not_on_the_path() {
+        let md = section("openspec", &["api"]);
+        let npx = "npx -y @fission-ai/openspec@1.14.3";
+        assert!(md.contains(&format!("{npx} validate <id>")), "{md}");
+        assert!(!md.contains("{version}"), "the version is filled in: {md}");
+        assert!(!md.contains("`openspec validate") && !md.contains("openspec archive <id>"), "{md}");
+        // Archiving is each repository's, after its change merges.
+        assert!(md.contains("Do not archive"), "{md}");
+        assert!(!md.contains("archive the change with"), "{md}");
+    }
+
+    #[test]
+    fn superpowers_save_paths_point_into_the_spec_folder() {
+        let md = section("superpowers", &["api"]);
+        assert!(md.contains("/work/acme-12/spec/docs/superpowers/specs/"), "{md}");
+        assert!(md.contains("/work/acme-12/spec/docs/superpowers/plans/"), "{md}");
+    }
+
+    #[test]
+    fn the_context_lists_spec_read_spec_write_spec_task_spec_commit() {
+        let md = section("kiro", &["api"]);
+        for tool in ["`spec_read`", "`spec_write`", "`spec_task`", "`spec_commit`"] {
+            assert!(md.contains(tool), "{tool}: {md}");
+        }
+        assert!(md.contains("`confirm: true`"), "spec_commit asks for it");
+        assert!(md.contains("`villain-layer` MCP server"));
+        assert!(md.contains("as soon as it is done"), "{md}");
+        assert!(md.contains("counted from 1"), "a step is addressed by its position");
+        assert!(!md.contains("spec_propose"));
+    }
+
+    #[test]
+    fn the_entry_file_comes_with_the_section_and_its_headings_go_down() {
+        let entry = (
+            "requirements.md".to_string(),
+            "## Goal\nRefunds work.\n\n- R-1 [api, web]: WHEN x THE SYSTEM SHALL y.\n".to_string(),
+        );
+        let md = spec_section(&toolset("kiro"), Path::new(DIR), &folders(&["api", "web"]), Some(entry));
+        assert!(md.contains("requirements.md"));
+        assert!(md.contains("\n#### Goal\nRefunds work.\n"), "{md}");
+        assert_eq!(md.matches("R-1 [api, web]: WHEN x").count(), 1);
+        assert!(!md.contains("(Cut short"));
+    }
+
+    #[test]
+    fn the_entry_file_is_cut_at_8_kb_with_a_pointer() {
+        let long = format!("## Goal\n{}", "é".repeat(MAX_ENTRY));
+        let entry = ("requirements.md".to_string(), long);
+        let md = spec_section(&toolset("kiro"), Path::new(DIR), &folders(&["api"]), Some(entry));
+        assert!(md.contains("(Cut short here. `requirements.md` in the spec folder has the rest.)"), "{}", md.len());
+        assert!(md.len() < MAX_ENTRY + 6_000);
+        let short = ("requirements.md".to_string(), "## Goal\nShort.".to_string());
+        assert!(!spec_section(&toolset("kiro"), Path::new(DIR), &[], Some(short)).contains("Cut short"));
+    }
+
+    #[test]
+    fn spec_first_puts_its_line_at_the_top_of_the_context() {
+        let line = "Write or update the spec in /work/acme-12/spec before you change any code.";
+        let md = task_context(&task(), &[], None, Some(&section("kiro", &["api"])), Some(line));
+        let body = md.split_once("\n\n").unwrap().1;
+        assert!(body.starts_with(line), "{md}");
+        assert!(md.contains("Then implement it step by step, ticking each step."));
+        assert!(md.find(line).unwrap() < md.find("## The spec").unwrap());
+    }
+
+    #[test]
+    fn spec_first_off_adds_nothing() {
+        let md = task_context(&task(), &[], None, Some(&section("kiro", &["api"])), None);
+        assert!(!md.contains("before you change any code"));
+        assert!(!md.contains("Then implement it step by step"));
+    }
+
+    #[test]
+    fn the_entry_file_is_the_toolsets_own_and_the_newest_by_modification_time() {
+        let root = std::env::temp_dir().join(format!("vl-entry-{}", uuid::Uuid::new_v4()));
+        let put = |rel: &str, text: &str| {
+            let at = root.join(rel);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, text).unwrap();
+        };
+        let later = |rel: &str| {
+            let f = std::fs::OpenOptions::new().write(true).open(root.join(rel)).unwrap();
+            f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60)).unwrap();
+        };
+
+        assert_eq!(entry_file(&toolset("kiro"), &root), None, "no spec yet");
+        put("design.md", "# D\n");
+        put("bugfix.md", "# Bug\n");
+        assert_eq!(entry_file(&toolset("kiro"), &root), Some(("bugfix.md".into(), "# Bug\n".into())));
+        put("requirements.md", "# R\n");
+        assert_eq!(entry_file(&toolset("kiro"), &root).unwrap().0, "requirements.md", "requirements win");
+
+        put("openspec/changes/old/proposal.md", "old");
+        put("openspec/changes/new/proposal.md", "new");
+        put("openspec/changes/new/design.md", "not the entry");
+        later("openspec/changes/new/proposal.md");
+        assert_eq!(
+            entry_file(&toolset("openspec"), &root),
+            Some(("openspec/changes/new/proposal.md".into(), "new".into()))
+        );
+
+        put("docs/superpowers/specs/2026-01-01-a-design.md", "a");
+        put("docs/superpowers/specs/2026-02-01-b-design.md", "b");
+        put("docs/superpowers/plans/2026-03-01-plan.md", "plan");
+        later("docs/superpowers/specs/2026-01-01-a-design.md");
+        assert_eq!(entry_file(&toolset("superpowers"), &root).unwrap().1, "a");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn write_task_context_carries_the_spec_section_and_spec_first_into_the_task_folder() {
+        use crate::commands::spec_world::{get, put, world};
+        let (root, state, task) = world(&["api", "web"]);
+        let spec = root.join("tasks/T-1/spec");
+        put(&spec.join("requirements.md"), "## Goal\nRefunds.\n");
+
+        write_task_context(&state, &task).unwrap();
+        let md = get(&root.join("tasks/T-1/CLAUDE.md"));
+        assert!(md.contains(&format!("The spec for this work is in `{}`:", spec.display())), "{md}");
+        assert!(md.contains(&format!("Write each file in `{}`;", spec.display())), "{md}");
+        assert!(md.contains("#### Goal\nRefunds."));
+        assert!(md.contains("One spec for the task"), "two repositories");
+        assert!(!md.contains("before you change any code"));
+        assert_eq!(md, get(&root.join("tasks/T-1/AGENTS.md")));
+
+        state.config.update(|c| c.spec_first = true).unwrap();
+        write_task_context(&state, &task).unwrap();
+        let md = get(&root.join("tasks/T-1/CLAUDE.md"));
+        let line = format!("Write or update the spec in {} before you change any code.", spec.display());
+        assert!(md.split_once("\n\n").unwrap().1.starts_with(&line), "{md}");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

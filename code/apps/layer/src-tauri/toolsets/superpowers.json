@@ -1,0 +1,12 @@
+{
+  "id": "superpowers",
+  "name": "superpowers",
+  "version": "7.0.2",
+  "files": ["docs/superpowers/**/*.md"],
+  "steps": ["docs/superpowers/plans/*.md"],
+  "install": [
+    { "fetch": "https://github.com/obra/superpowers", "ref": "v{version}" },
+    { "skills": "skills/*" }
+  ],
+  "commit_to": "docs/superpowers"
+}

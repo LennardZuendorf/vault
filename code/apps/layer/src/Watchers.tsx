@@ -10,11 +10,11 @@ import { useOrders } from "./lib/henchman-orders";
 import { useRoutines } from "./lib/routines";
 import { useSpecs } from "./lib/specs";
 import { useTheme } from "./lib/theme";
-import type { SpecPart, Target } from "./lib/types";
+import type { InstallState, Target } from "./lib/types";
 import type { HenchmanLair } from "./lib/types-henchman";
 import type { Routines } from "./lib/types-routines";
 import { startWorkspaceSync, useSession } from "./lib/workspace-sync";
-import { exitIsNews, useStore } from "./store";
+import { exitIsNews, selectedTask, useStore } from "./store";
 
 /**
  * Tauri emits an unfocused event while the window is still coming up.
@@ -332,8 +332,7 @@ export function Watchers() {
   // An agent's own hooks said what it is doing now. Its row, its dot and the
   // count on the Work tab follow straight away rather than at the next poll.
   // An agent that stops may have edited the spec's files: its task's spec,
-  // if the tab has read it, is read again to show what changed outside the
-  // app (SPEC-22).
+  // if the tab has read it, is read again to show what it wrote.
   useEffect(() => {
     const p = listen<string>("pty:activity", async (e) => {
       await refreshPanes().catch(() => {});
@@ -349,22 +348,31 @@ export function Watchers() {
   // A spec being drafted (SPEC-5), into whichever task's editors asked for
   // it, shown or not; and a step an agent ticked (SPEC-13).
   useEffect(() => {
-    const p = listen<{
-      request_id: string;
-      part: SpecPart;
-      checkout_id: string | null;
-      text: string;
-    }>("spec:draft", (e) => {
-      useSpecs
-        .getState()
-        .chunk(e.payload.request_id, e.payload.part, e.payload.checkout_id, e.payload.text);
+    const p = listen<{ request_id: string; path: string; text: string }>("spec:draft", (e) => {
+      useSpecs.getState().chunk(e.payload.request_id, e.payload.path, e.payload.text);
     });
     const q = listen<string>("spec:changed", (e) => useSpecs.getState().changed(e.payload));
+    // A task's toolset being installed in the background, and how it went.
+    const r = listen<{ taskId: string; state: InstallState }>("spec:install", (e) =>
+      useSpecs.getState().installed(e.payload.taskId, e.payload.state),
+    );
     return () => {
       void p.then((un) => un());
       void q.then((un) => un());
+      void r.then((un) => un());
     };
   }, []);
+
+  // The spec folder of the task whose Spec tab is on screen, followed so an
+  // agent's writes show as they happen (SPEC-36); none when it is not. A
+  // failure only means no live updates: the tab still reads on opening.
+  const specOf = useStore((s) => {
+    const task = selectedTask(s);
+    return s.view === "work" && s.tab === "spec" && task && !task.epic ? task.id : null;
+  });
+  useEffect(() => {
+    void api.watchSpec(specOf).catch(() => {});
+  }, [specOf]);
 
   // Hitting a usage limit is the one thing worth interrupting for: the agent
   // has stopped working and will not say so again.

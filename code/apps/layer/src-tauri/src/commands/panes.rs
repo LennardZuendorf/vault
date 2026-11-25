@@ -294,7 +294,8 @@ pub(crate) fn start_agent(
     cols: Option<u16>,
     acp: bool,
 ) -> Result<PaneInfo> {
-    let task = state.config.task(&task_id)?;
+    // Before anything the agent could write: see `for_agent_start`.
+    let task = super::spec_work::for_agent_start(state, state.config.task(&task_id)?);
     let def = agents::find(&agent_id).ok_or_else(|| Error::NotFound(format!("agent {agent_id}")))?;
 
     let (mut cwd, scope, checkout_id) = resolve_scope(state, &task, checkout_id.as_deref())?;
@@ -346,6 +347,8 @@ pub(crate) fn start_agent(
     if state.config.with(|c| c.ui.agents_auto_mode) {
         args.extend(agents::auto_mode_args(def).iter().map(|a| a.to_string()));
     }
+    // Last: see `agents::task_folder_args`.
+    args.extend(task_folder_args(def, agent_file_dir(state, &task).as_deref(), &cwd));
 
     let pane = state.ptys.spawn(
         app,
@@ -369,6 +372,17 @@ pub(crate) fn start_agent(
     )?;
     remember_pane(app, state, &pane, None);
     Ok(pane)
+}
+
+/// What shows an agent started in `cwd` the skills a toolset installed in the
+/// task folder `folder`: nothing when it starts in the folder itself, which it
+/// sees, or when the task has none. Every start of a task's agent, a restart
+/// and a restore included, is `start_agent`, so this is the one place.
+fn task_folder_args(def: &agents::AgentDef, folder: Option<&Path>, cwd: &str) -> Vec<String> {
+    match folder {
+        Some(folder) if Path::new(cwd) != folder => agents::task_folder_args(def, folder),
+        _ => Vec::new(),
+    }
 }
 
 /// Plug an agent into the app for this launch: how it says what it is doing,
@@ -438,11 +452,18 @@ pub(crate) fn chat_room(state: &AppState, id: &str) -> Result<PathBuf> {
 }
 
 /// Everything the app itself writes into a task folder.
+///
+/// A spec toolset's install is in it by its record (`INSTALL_RECORD`), which
+/// `remove_generated` reads to take what was installed. `spec/` is not in it,
+/// and must not be: it is where the user and their
+/// agents write the task's spec, not something the app regenerates. Deleting
+/// a task keeps it first (`spec_copy::archive_spec`), and Clean up reports a
+/// folder holding one as holding something the app did not make.
 const GENERATED_FILES: &[&str] = &[
     "CLAUDE.md",
     "AGENTS.md",
     super::task_context::TICKET_FILE,
-    super::spec::LEGACY_FILE,
+    super::spec_old::LEGACY_FILE,
     ".mcp.json",
     "PR_DESCRIPTION.md",
     super::github::FEEDBACK_FILE,
@@ -454,6 +475,7 @@ const GENERATED_FILES: &[&str] = &[
     FIRST_PROMPT,
     crate::loops::CHECKS_FILE,
     super::henchman_tools::MESSAGE_FILE,
+    super::spec_install::INSTALL_RECORD,
 ];
 
 /// An opening prompt too long to type, for a CLI that takes it typed.
@@ -496,19 +518,24 @@ const LEFT_BY_OTHERS: &[&str] = &[".claude/settings.local.json", ".DS_Store"];
 pub(crate) fn is_generated(rel: &str) -> bool {
     GENERATED_FILES.contains(&rel)
         || LEFT_BY_OTHERS.contains(&rel)
-        || rel.starts_with(&format!("{}/", super::spec::DRAFTS))
+        || [super::spec_old::DRAFTS, super::spec::CHECKS].iter().any(|d| rel.starts_with(&format!("{d}/")))
 }
 
 /// Take those files out of a task folder: when the task is deleted
 /// (DISK-2), and when Clean up finds a folder no task uses. Anything else
 /// in there is the user's, and stays.
 pub(crate) fn remove_generated(dir: &Path) {
+    // First, while the record that lists them is still there.
+    super::spec_install::remove_written(dir);
     for name in GENERATED_FILES.iter().chain(LEFT_BY_OTHERS) {
         let _ = std::fs::remove_file(dir.join(name));
     }
-    // Spec drafts not approved, and what is known of the spec beside them
-    // (SPEC-6): what was approved is in the repository, or the app's folder.
-    let _ = std::fs::remove_dir_all(dir.join(super::spec::DRAFTS));
+    // The drafts and approvals of a spec kept the old way (`spec_old.rs`: the
+    // spec itself was moved to `spec/`, which is kept first), and the last
+    // checks against it: what is known of the spec beside its files.
+    for d in [super::spec_old::DRAFTS, super::spec::CHECKS] {
+        let _ = std::fs::remove_dir_all(dir.join(d));
+    }
     // The folders those sit in, if that emptied them.
     for sub in [".gemini", ".claude"] {
         let _ = std::fs::remove_dir(dir.join(sub));
@@ -911,6 +938,18 @@ mod tests {
         assert!(typeable(None, "CONFLICTS.md", &long).is_err(), "nowhere to leave it: refused, not cut");
         assert!(is_generated("CONFLICTS.md"), "deleting the task takes it too (DISK-2)");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn claude_started_in_a_worktree_is_shown_the_task_folder_and_one_started_in_it_is_not() {
+        let claude = agents::find("claude").unwrap();
+        let folder = Path::new("/tasks/T-1");
+        // Every start, a restart and a restore among them, goes through
+        // `start_agent`, which asks this with the folder it starts in.
+        assert_eq!(task_folder_args(claude, Some(folder), "/tasks/T-1/api"), ["--add-dir", "/tasks/T-1"]);
+        assert!(task_folder_args(claude, Some(folder), "/tasks/T-1").is_empty(), "it sees its own folder");
+        assert!(task_folder_args(claude, None, "/tasks/T-1/api").is_empty(), "no folder of its own to show");
+        assert!(task_folder_args(agents::find("gemini").unwrap(), Some(folder), "/tasks/T-1/api").is_empty());
     }
 
     #[test]

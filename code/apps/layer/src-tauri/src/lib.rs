@@ -170,6 +170,8 @@ pub fn run() {
             // The workspace's Postgres and server, in the background (PROF-11).
             app.manage(workspace::ThisMac::new());
             workspace::attach(handle);
+            // Where a task is made, its spec toolset is installed in the background.
+            commands::attach_spec_install(handle);
             handle.state::<workspace::ThisMac>().resume(handle.clone());
             // Code Villain sign-in comes back on `layer://signed-in` (PROF-17).
             {
@@ -392,14 +394,12 @@ pub fn run() {
             commands::draft_spec,
             commands::apply_spec_answers,
             commands::read_spec,
-            commands::save_spec_draft,
-            commands::approve_spec,
-            commands::put_back_spec,
-            commands::turn_down_spec_proposal,
-            commands::merge_specs,
+            commands::write_spec_file,
+            commands::remove_spec_file,
+            commands::install_spec_toolset,
+            commands::watch_spec,
+            commands::commit_spec_cmd,
             commands::check_spec,
-            commands::spec_work_prompt,
-            commands::tell_spec_change,
             commands::set_project_specs,
             commands::request_pr_description,
             commands::take_pr_description,
@@ -449,6 +449,9 @@ pub fn run() {
             commands::check_repo_note,
             commands::delete_repo_note,
             commands::set_worktree_root,
+            commands::set_spec_first,
+            commands::set_default_toolset,
+            commands::set_custom_toolsets,
             commands::set_ui_prefs,
             commands::disconnect,
             commands::cursor_ide_installed,

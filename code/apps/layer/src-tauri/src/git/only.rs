@@ -1,4 +1,4 @@
-//! Committing some files and no others: a spec the user approved (SPEC-6),
+//! Committing some files and no others: the spec Commit spec puts (SPEC-35)
 //! in a worktree where an agent may be halfway through its own change.
 
 use std::path::Path;
@@ -107,6 +107,13 @@ pub fn head_commit(dir: &Path) -> Result<String> {
     Ok(run(dir, &["rev-parse", "HEAD"])?.trim().to_string())
 }
 
+/// What `rel` held at the commit `dir` is on; None when it held nothing
+/// there (not in it, or no commit yet). Commit spec compares this with what
+/// it would write, so a spec file committed by hand is not "changed".
+pub fn committed_text(dir: &Path, rel: &str) -> Option<String> {
+    run(dir, &["show", &format!("HEAD:{rel}")]).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +191,15 @@ mod tests {
         assert_eq!(in_house_style(&dir, "Approve the design for T-1."), "Approve the design for T-1.");
         assert!(!is_conventional("Keep new files: when a task is finished."));
         assert!(!is_conventional("feat(): nothing in the scope"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_file_is_read_as_the_current_commit_holds_it() {
+        let dir = repo();
+        std::fs::write(dir.join("a.txt"), "two\n").unwrap();
+        assert_eq!(committed_text(&dir, "a.txt").as_deref(), Some("one\n"), "not the unstaged edit");
+        assert_eq!(committed_text(&dir, "nope.txt"), None);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

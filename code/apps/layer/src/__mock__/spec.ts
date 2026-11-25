@@ -1,44 +1,30 @@
 /**
- * Specs (§19) for the mock harness: one per task, its requirements and
- * design the task's and each repository's tasks, approved or drafted;
- * drafts streamed in a line at a time; a copy changed outside the app and
- * an agent's proposal (SPEC-22, SPEC-24); and a check that answers from
- * the requirements. `&spec=split` gives ACME-123 a spec per repository from
- * before, to merge (SPEC-25). Parsing is rough, as far as the seeded texts
- * need; `spec.rs` is the real thing.
+ * Specs (§19) for the mock harness: the files of a spec in each task's
+ * `spec/` folder, held in memory. ACME-123 has a spec under way for api and
+ * web, with a check: Kiro's by default, OpenSpec's or superpowers' with
+ * `?toolset=` (`spec-worlds.ts`), and `?install=failed|running` shows the
+ * install it would be made with. ACME-130 has requirements drafted and half
+ * answered (SPEC-19). Draft streams a file in a line at a time, as
+ * `spec:draft`; Apply answers and Check answer from the requirements.
+ * `__mock.spec.write(task, path, text)` is an agent writing a file. Parsing is
+ * rough, as far as the seeded texts need; `spec/owned.rs` is the real thing.
  */
 import { emit } from "@tauri-apps/api/event";
 import { questions } from "../lib/questions";
 import type {
-  RepoSpec,
-  SpecKind,
+  InstallState,
+  RepoResult,
+  RepoSpecView,
+  SpecCommit,
   SpecPart,
-  SpecProposal,
+  SpecStep,
   SpecVerdict,
-  TaskSpec,
+  SpecView,
 } from "../lib/types";
+import { WORLDS, type ToolsetWorld } from "./spec-worlds";
 import type { World } from "./world";
 
-const PARTS: SpecPart[] = ["requirements", "design", "tasks"];
-
 type Check = { sha: string; at: number; results: SpecVerdict[]; stale: boolean };
-
-/** A task's spec, each file by its slot: `requirements`, `design`, `tasks:<checkout>`. */
-interface Kept {
-  kind: SpecKind;
-  approved: Record<string, string>;
-  drafts: Record<string, string>;
-  stale: string[];
-  /** A repository's copy that is not what was approved, by `<slot>@<checkout>`. */
-  outside: Record<string, string>;
-  proposals: Record<string, SpecProposal>;
-  checks: Record<string, Check>;
-  /** Each repository's spec from before, by checkout: the merge's input (SPEC-25). */
-  before: Record<string, Record<SpecPart, string>> | null;
-}
-
-const slot = (part: SpecPart, checkout: string | null) =>
-  part === "tasks" ? `tasks:${checkout}` : part;
 
 const API_REQUIREMENTS = `## Goal
 Two logins at once no longer leave one of them signed out.
@@ -93,26 +79,8 @@ const WEB_TASKS = `## Tasks
 - [ ] 3. Test both in Form.test.tsx (R-3, R-4)
 `;
 
-/** What an agent proposed for the api's tasks (SPEC-24). */
-const API_TASKS_PROPOSED = API_TASKS.replace(
-  "- [ ] 4. Test a forced lost race (R-2)",
-  "- [ ] 4. Test a forced lost race (R-2)\n- [ ] 5. Log each lost race with the account id (R-2)",
-);
-
-/** The web's spec from before, when each repository had its own (SPEC-25). */
-const WEB_REQUIREMENTS = `## Goal
-The sign-in page says so when a sign-in lost a race, instead of looping.
-
-## Requirements
-- R-1: WHEN the API answers 409 with reason session_race THE SYSTEM SHALL show "Signed in elsewhere at the same moment. Try again."
-- R-2: WHEN a sign-in is in flight THE SYSTEM SHALL disable the submit button.
-
-## Out of scope
-- The API's retry (\`api R-2\`).
-
-## Open questions
-None.
-`;
+/** Both repositories' steps in one file, each under its own first-level heading. */
+const TASKS = `# api\n\n${API_TASKS.trimEnd()}\n\n# web\n\n${WEB_TASKS.trimEnd()}\n`;
 
 /** What a draft streams in, by file. */
 const DRAFT: Record<SpecPart, (folder: string) => string> = {
@@ -222,94 +190,116 @@ function requirements(text: string) {
   );
 }
 
-function steps(text: string) {
-  return [...text.matchAll(/^- \[([ xX])\] (\d+)\. (.+)$/gm)].map((m) => {
-    const inner = m[3].match(/\(([^)]*)\)\s*$/)?.[1] ?? "";
-    return {
-      number: Number(m[2]),
-      text: m[3].trim(),
-      done: m[1] !== " ",
-      serves: [...inner.matchAll(/(?:^|[,;] ?)(R-\d+)/g)].map((x) => x[1]),
-      after: [...inner.matchAll(/after ([^,;)]+)/g)].map((x) => x[1].trim()),
-    };
-  });
+/**
+ * A step file's steps, each with the repository that owns it: the nearest
+ * heading above (any level) that is exactly a folder's name or tags one
+ * (`## 2. API [api]`), or a `[folder]` tag on the step's own line.
+ */
+function steps(text: string, folders: string[]): SpecStep[] {
+  let owner: string | null = null;
+  const found: SpecStep[] = [];
+  const tagged = (line: string) => folders.find((f) => line.includes(`[${f}]`)) ?? null;
+  for (const line of text.split("\n")) {
+    const heading = line.match(/^#{1,6}\s+(.+)$/)?.[1].trim();
+    if (heading) {
+      const named = folders.find((f) => f === heading) ?? tagged(heading);
+      if (named) owner = named;
+    }
+    const m = line.match(/^\s*- \[([ xX])\] (?:(\d+(?:\.\d+)*)\.? )?(.+)$/);
+    if (m) {
+      const own = tagged(m[3]) ?? owner;
+      found.push({
+        position: found.length + 1,
+        label: m[2] ?? "",
+        text: m[3].trim(),
+        done: m[1] !== " ",
+        repos: own ? [own] : [],
+      });
+    }
+  }
+  return found;
 }
 
 /** Streams `text` into an editor as `spec:draft`, a line at a time. */
-async function stream(
-  requestId: unknown,
-  part: SpecPart,
-  checkoutId: string | null,
-  text: string,
-  pause = 40,
-) {
+async function stream(requestId: unknown, path: string, text: string, pause = 40) {
   let sent = "";
   for (const piece of text.match(/[^\n]*\n?/g) ?? []) {
     await new Promise((r) => setTimeout(r, pause));
     sent += piece;
-    void emit("spec:draft", { request_id: requestId, part, checkout_id: checkoutId, text: sent });
+    void emit("spec:draft", { request_id: requestId, path, text: sent });
   }
   return sent;
 }
 
+/** An agent writing a file of a task's spec, for the console: the tab follows it (SPEC-36). */
+export const specDisk = {
+  /** Repositories whose Commit spec fails, by folder (`["web"]`); the others keep theirs. */
+  commitFails: [] as string[],
+  write: (_taskId: string, _path: string, _text: string): void => {},
+  remove: (_taskId: string, _path: string): void => {},
+};
+
+const KIRO: ToolsetWorld = {
+  toolset: {
+    id: "kiro",
+    name: "Kiro (Layer)",
+    version: null,
+    extras: ["draft", "check", "questions"],
+  },
+  holdsSteps: (path) => path === "tasks.md",
+  files: {},
+};
+
 export function specAnswers(world: World): Record<string, (a: Record<string, unknown>) => unknown> {
-  const kept = new Map<string, Kept>();
-  const get = (taskId: string): Kept => {
-    let k = kept.get(taskId);
-    if (!k) {
-      k = {
-        kind: "feature",
-        approved: {},
-        drafts: {},
-        stale: [],
-        outside: {},
-        proposals: {},
-        checks: {},
-        before: null,
-      };
-      kept.set(taskId, k);
+  const params = new URLSearchParams(location.search);
+  const kept = new Map<string, Record<string, string>>();
+  const installs = new Map<string, InstallState>();
+  // ACME-123's toolset; every other task is Kiro's.
+  const worldOf = (taskId: string): ToolsetWorld =>
+    (taskId === "t-login" ? WORLDS[params.get("toolset") ?? ""] : undefined) ?? KIRO;
+  const checks = new Map<string, Check>();
+  const files = (taskId: string) => {
+    let f = kept.get(taskId);
+    if (!f) {
+      f = {};
+      kept.set(taskId, f);
     }
-    return k;
+    return f;
   };
   const task = (id: string) => world.tasks.find((t) => t.id === id);
   const checkouts = (taskId: string) => task(taskId)?.checkouts ?? [];
-  const folderOf = (taskId: string, checkout: string) =>
-    checkouts(taskId).find((c) => c.id === checkout)?.project_name ?? "";
+  const requirementsOf = (taskId: string) => {
+    const f = files(taskId);
+    return f["bugfix.md"] ?? f["requirements.md"] ?? "";
+  };
 
-  // ACME-123, under way: one spec for api and web, api two steps in; the
-  // web's copy of the requirements edited by an agent (SPEC-22), and the
-  // api's agent proposing a step (SPEC-24). With `&spec=split`, the specs
-  // each repository had of its own before, to merge (SPEC-25).
+  const installing = params.get("install");
+  const seeded = (taskId: string) =>
+    Object.assign(
+      files(taskId),
+      worldOf(taskId) === KIRO
+        ? { "requirements.md": API_REQUIREMENTS, "design.md": API_DESIGN, "tasks.md": TASKS }
+        : worldOf(taskId).files,
+    );
+  const installState = (ok: boolean, running: boolean, error: string | null = null) => ({
+    toolset: worldOf("t-login").toolset.id,
+    version: worldOf("t-login").toolset.version,
+    ok,
+    error,
+    running,
+  });
   if (task("t-login")) {
-    const k = get("t-login");
-    if (new URLSearchParams(location.search).get("spec") === "split") {
-      k.before = {
-        "c-login-api": {
-          requirements: API_REQUIREMENTS.replace(/ \[[^\]]*\]/g, ""),
-          design: API_DESIGN,
-          tasks: API_TASKS,
-        },
-        "c-login-web": { requirements: WEB_REQUIREMENTS, design: "", tasks: "" },
-      };
+    // An install that has not finished, or failed, has written nothing yet.
+    if (installing === "failed") {
+      installs.set("t-login", installState(false, false, "npx: command not found"));
+    } else if (installing === "running") {
+      installs.set("t-login", installState(false, true));
     } else {
-      Object.assign(k.approved, {
-        requirements: API_REQUIREMENTS,
-        design: API_DESIGN,
-        [slot("tasks", "c-login-api")]: API_TASKS,
-        [slot("tasks", "c-login-web")]: WEB_TASKS,
-      });
-      k.outside[`requirements@c-login-web`] = API_REQUIREMENTS.replace(
-        "disable the submit button",
-        "disable the submit button and show a spinner",
-      );
-      k.drafts[slot("tasks", "c-login-api")] = API_TASKS_PROPOSED;
-      k.proposals[slot("tasks", "c-login-api")] = {
-        why: "A lost race leaves no trace in the logs, so step 3 cannot be checked in staging.",
-        by: "Claude Code",
-        pane_id: "pane-claude",
-        at: Date.now() - 120_000,
-      };
-      k.checks["c-login-api"] = {
+      seeded("t-login");
+    }
+    // Check against spec is Kiro's extra.
+    if (worldOf("t-login") === KIRO)
+      checks.set("t-login:c-login-api", {
         sha: "a1b2c3d4",
         at: Date.now() - 600_000,
         stale: true,
@@ -318,183 +308,143 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
           { id: "R-2", verdict: "not met", evidence: "no retry in login.ts yet" },
           { id: "R-3", verdict: "unclear", evidence: "the 409 body is not sent yet" },
         ],
-      };
-    }
+      });
   }
+  if (task("t-audit")) files("t-audit")["requirements.md"] = AUDIT_DRAFT;
 
-  // ACME-130: requirements drafted, with questions, one of them answered.
-  if (task("t-audit")) get("t-audit").drafts.requirements = AUDIT_DRAFT;
-
-  /** What an approved file is: what was recorded, or the first copy from before. */
-  const approved = (taskId: string, key: string, checkout: string | null): string | null => {
-    const k = get(taskId);
-    if (k.approved[key]) return k.approved[key];
-    if (!k.before) return null;
-    const part = key.startsWith("tasks") ? "tasks" : (key as SpecPart);
-    const from = checkout ?? Object.keys(k.before)[0];
-    return k.before[from]?.[part] || null;
-  };
-
-  const view = (taskId: string): TaskSpec => {
+  const view = (taskId: string): SpecView => {
     const t = task(taskId);
-    const k = get(taskId);
-    const files: { part: SpecPart; checkout: string | null }[] = [
-      { part: "requirements", checkout: null },
-      { part: "design", checkout: null },
-      ...checkouts(taskId).map((c) => ({ part: "tasks" as SpecPart, checkout: c.id })),
-    ];
-    const parts = files.map(({ part, checkout }) => {
-      const key = slot(part, checkout);
-      return {
-        part,
-        checkout_id: checkout,
-        file: part === "requirements" && k.kind === "bugfix" ? "bugfix.md" : `${part}.md`,
-        approved: approved(taskId, key, checkout),
-        draft: k.drafts[key] ?? null,
-        stale: k.stale.includes(key),
-        outside: Object.entries(k.outside)
-          .filter(([at]) => at.split("@")[0] === key)
-          .map(([at, text]) => ({
-            checkout_id: at.split("@")[1],
-            folder: folderOf(taskId, at.split("@")[1]),
-            text,
-          })),
-        proposal: k.proposals[key] ?? null,
-      };
-    });
-    const repos: RepoSpec[] = checkouts(taskId).map((c) => {
+    const f = files(taskId);
+    const folders = checkouts(taskId).map((c) => c.project_name);
+    const list = Object.keys(f)
+      .sort()
+      .map((path) => ({
+        path,
+        text: f[path],
+        steps: worldOf(taskId).holdsSteps(path) ? steps(f[path], folders) : [],
+      }));
+    const repos: RepoSpecView[] = checkouts(taskId).map((c) => {
       const project = world.projects.find((p) => p.id === c.project_id);
-      const inRepo = !project?.specs_in_app;
+      const own = list
+        .flatMap((x) => x.steps)
+        .filter((s) => s.repos.length === 0 || s.repos.includes(c.project_name));
       return {
         checkout_id: c.id,
         repo: c.project_name,
         folder: c.project_name,
-        home: inRepo
-          ? `${c.project_name}/${project?.spec_folder ?? "specs"}/${t!.branch}`
-          : `~/Library/Application Support/…/specs/${c.project_name}/${t!.branch}`,
-        in_repo: inRepo,
-        steps: steps(approved(taskId, slot("tasks", c.id), c.id) ?? ""),
-        check: k.checks[c.id] ?? null,
+        commit: (project?.spec_commit ?? "whole") as SpecCommit,
+        done: own.filter((s) => s.done).length,
+        total: own.length,
+        changed_since_commit:
+          list.length > 0 && project?.spec_commit !== "none" && !committed.has(`${taskId}:${c.id}`),
+        check: checks.get(`${taskId}:${c.id}`) ?? null,
       };
     });
-    const split = !!k.before && !k.approved.requirements;
     return structuredClone({
-      kind: k.kind,
-      parts,
-      requirements: requirements(approved(taskId, "requirements", null) ?? ""),
+      toolset: worldOf(taskId).toolset,
+      dir: `~/.villain-worktrees/${t?.branch ?? taskId}/spec`,
+      files: list,
+      unreadable: [],
       repos,
-      legacy: null,
-      split,
+      install: installs.get(taskId) ?? null,
     });
+  };
+  /** Repositories whose spec was committed since it last changed, as `task:checkout`. */
+  const committed = new Set<string>();
+  const written = (taskId: string) => {
+    for (const key of committed) if (key.startsWith(`${taskId}:`)) committed.delete(key);
+  };
+  specDisk.write = (taskId, path, text) => {
+    files(taskId)[path] = text;
+    written(taskId);
+    void emit("spec:changed", taskId);
+  };
+  specDisk.remove = (taskId, path) => {
+    delete files(taskId)[path];
+    written(taskId);
+    void emit("spec:changed", taskId);
   };
 
   return {
     read_spec: (a) => view(a.taskId as string),
-    save_spec_draft: (a) => {
-      const k = get(a.taskId as string);
-      const key = slot(a.part as SpecPart, (a.checkoutId as string | null) ?? null);
-      if (a.text) k.drafts[key] = a.text as string;
-      else delete k.drafts[key];
+    write_spec_file: (a) => {
+      const disk = files(a.taskId as string)[a.path as string];
+      // The backend's refusal: the file is no longer what the editor began from.
+      if (typeof a.base === "string" && !a.force && (disk ?? "") !== a.base) return false;
+      files(a.taskId as string)[a.path as string] = a.text as string;
+      written(a.taskId as string);
+      return true;
+    },
+    remove_spec_file: (a) => {
+      delete files(a.taskId as string)[a.path as string];
+      written(a.taskId as string);
       return null;
     },
-    approve_spec: (a) => {
+    // Retry: the install runs a moment, then has written the toolset's files.
+    install_spec_toolset: (a) => {
       const taskId = a.taskId as string;
-      const k = get(taskId);
-      if (a.kind) k.kind = a.kind as SpecKind;
-      const texts = a.texts as { part: SpecPart; checkout_id: string | null; text: string }[];
-      const first = Math.min(...texts.map((t) => PARTS.indexOf(t.part)));
-      const done = texts.map((t) => slot(t.part, t.checkout_id));
-      for (const t of texts) {
-        const key = slot(t.part, t.checkout_id);
-        if (t.text.trim()) k.approved[key] = t.text.trim() + "\n";
-        else delete k.approved[key];
-        delete k.drafts[key];
-        delete k.proposals[key];
-        for (const at of Object.keys(k.outside)) if (at.split("@")[0] === key) delete k.outside[at];
-      }
-      k.stale = k.stale.filter((s) => !done.includes(s));
-      const later = ["design", ...checkouts(taskId).map((c) => slot("tasks", c.id))];
-      for (const key of later) {
-        const part = key.startsWith("tasks") ? 2 : 1;
-        if (part > first && k.approved[key] && !done.includes(key) && !k.stale.includes(key))
-          k.stale.push(key);
-      }
-      return { spec: view(taskId), failed: [] };
+      const running = installState(false, true);
+      installs.set(taskId, running);
+      setTimeout(() => {
+        seeded(taskId);
+        const ok = installState(true, false);
+        installs.set(taskId, ok);
+        void emit("spec:install", { taskId, state: ok });
+      }, 1200);
+      return running;
     },
-    put_back_spec: (a) => {
-      const k = get(a.taskId as string);
-      delete k.outside[
-        `${slot(a.part as SpecPart, a.checkoutId as string)}@${a.checkoutId as string}`
-      ];
-      return view(a.taskId as string);
-    },
-    turn_down_spec_proposal: (a) => {
-      const k = get(a.taskId as string);
-      const key = slot(a.part as SpecPart, (a.checkoutId as string | null) ?? null);
-      delete k.drafts[key];
-      delete k.proposals[key];
-      return view(a.taskId as string);
+    // Commit spec: each repository's own mode decides; one in
+    // `__mock.spec.commitFails` fails, the others keep theirs (SPEC-35).
+    commit_spec_cmd: (a) => {
+      const taskId = a.taskId as string;
+      return checkouts(taskId).map((c): RepoResult => {
+        const mode = world.projects.find((p) => p.id === c.project_id)?.spec_commit ?? "whole";
+        if (specDisk.commitFails.includes(c.project_name)) {
+          return {
+            checkout_id: c.id,
+            repo: c.project_name,
+            ok: false,
+            detail: "the pre-commit hook refused it",
+          };
+        }
+        if (mode !== "none") committed.add(`${taskId}:${c.id}`);
+        return {
+          checkout_id: c.id,
+          repo: c.project_name,
+          ok: true,
+          detail: mode === "none" ? "kept by the app" : "committed 1a2b3c4",
+        };
+      });
     },
     draft_spec: async (a) => {
       const taskId = a.taskId as string;
-      const k = get(taskId);
+      const f = files(taskId);
       const part = a.part as SpecPart;
-      if (a.kind) k.kind = a.kind as SpecKind;
-      const cs = checkouts(taskId);
-      if (part === "tasks") {
-        for (const c of cs)
-          k.drafts[slot("tasks", c.id)] = await stream(
-            a.requestId,
-            part,
-            c.id,
-            DRAFT.tasks(c.project_name),
-          );
-      } else {
-        k.drafts[part] = await stream(
-          a.requestId,
-          part,
-          null,
-          DRAFT[part](cs.map((c) => c.project_name).join(", ")),
-        );
-      }
-      return null;
-    },
-    merge_specs: async (a) => {
-      const taskId = a.taskId as string;
-      const k = get(taskId);
-      k.drafts.requirements = await stream(
-        a.requestId,
-        "requirements",
-        null,
-        API_REQUIREMENTS.replace("instead of looping.", "instead of looping. (was web R-1)"),
-        25,
-      );
-      k.drafts.design = await stream(a.requestId, "design", null, API_DESIGN, 25);
-      k.drafts[slot("tasks", "c-login-api")] = await stream(
-        a.requestId,
-        "tasks",
-        "c-login-api",
-        API_TASKS,
-        25,
-      );
-      k.drafts[slot("tasks", "c-login-web")] = await stream(
-        a.requestId,
-        "tasks",
-        "c-login-web",
-        WEB_TASKS,
-        25,
-      );
-      return null;
+      const path =
+        part === "requirements"
+          ? (["bugfix.md", "requirements.md"].find((p) => p in f) ??
+            (a.kind === "bugfix" ? "bugfix.md" : "requirements.md"))
+          : `${part}.md`;
+      const folders = checkouts(taskId).map((c) => c.project_name);
+      const text =
+        part === "tasks"
+          ? folders.map((folder) => `# ${folder}\n\n${DRAFT.tasks(folder).trim()}\n`).join("\n")
+          : DRAFT[part](folders.join(", "));
+      const before = f[path] ?? null;
+      f[path] = await stream(a.requestId, path, text);
+      return { path, before };
     },
     apply_spec_answers: async (a) => {
-      const k = get(a.taskId as string);
-      const before = k.drafts.requirements ?? k.approved.requirements;
-      if (!before || !questions(before).some((q) => q.answer))
-        throw "no open question has an answer yet";
+      const taskId = a.taskId as string;
+      const path = files(taskId)["bugfix.md"] ? "bugfix.md" : "requirements.md";
+      const before = requirementsOf(taskId);
+      if (!questions(before).some((q) => q.answer)) throw "no open question has an answer yet";
       const after = applied(before);
-      k.drafts.requirements = await stream(a.requestId, "requirements", null, after, 30);
+      files(taskId)[path] = await stream(a.requestId, path, after, 30);
       const old = requirements(before).map((r) => r.id);
       return {
+        path,
+        before,
         changed: [],
         added: requirements(after)
           .map((r) => r.id)
@@ -505,8 +455,8 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
     check_spec: async (a) => {
       await new Promise((r) => setTimeout(r, 900));
       const taskId = a.taskId as string;
-      const folder = folderOf(taskId, a.checkoutId as string);
-      const mine = requirements(approved(taskId, "requirements", null) ?? "").filter(
+      const folder = checkouts(taskId).find((c) => c.id === a.checkoutId)?.project_name ?? "";
+      const mine = requirements(requirementsOf(taskId)).filter(
         (r) => r.repos.length === 0 || r.repos.includes(folder),
       );
       const results: SpecVerdict[] = mine.map((r, i) => ({
@@ -515,17 +465,14 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
         evidence: i === 0 ? "src/auth/session.ts:41" : "needs a run to tell",
       }));
       const check = { sha: "e5f6a7b8", at: Date.now(), results, stale: false };
-      get(taskId).checks[a.checkoutId as string] = check;
+      checks.set(`${taskId}:${a.checkoutId as string}`, check);
       return check;
     },
-    spec_work_prompt: (a) =>
-      `Work through the steps in the approved tasks.md, and call spec_task with task id \`${a.taskId as string}\` as soon as each is done.`,
-    tell_spec_change: (a) =>
-      world.panes.filter((p) => p.task_id === a.taskId && p.running && p.kind === "agent").length,
     set_project_specs: (a) => {
       const p = world.projects.find((x) => x.id === a.projectId);
       if (p) {
-        p.specs_in_app = a.inApp as boolean;
+        p.spec_toolset = (a.toolset as string | null) ?? null;
+        p.spec_commit = a.commit as SpecCommit;
         p.spec_folder = (a.folder as string) === "specs" ? null : (a.folder as string);
       }
       return null;

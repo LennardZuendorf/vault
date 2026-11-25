@@ -1,6 +1,6 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { type Confirmation, ConfirmDialog, NotAddedYet } from "@code-villain/web";
-import type { Note, Repository, UpdateBy } from "@layer/types";
+import type { Note, Repository, SpecCommit, UpdateBy } from "@layer/types";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { type FormEvent, useMemo, useState } from "react";
 import { ago } from "./format";
@@ -306,7 +306,7 @@ function RepositorySettings({ repository }: { repository: Repository }) {
   const [updateBy, setUpdateBy] = useState<UpdateBy | "">(repository.update_by ?? "");
   const [check, setCheck] = useState(repository.check_command ?? "");
   const [specFolder, setSpecFolder] = useState(repository.spec_folder ?? "");
-  const [specsInApp, setSpecsInApp] = useState(repository.specs_in_app);
+  const [specCommit, setSpecCommit] = useState<SpecCommit>(repository.spec_commit);
   const changed =
     name !== repository.name ||
     branch !== repository.default_branch ||
@@ -314,7 +314,7 @@ function RepositorySettings({ repository }: { repository: Repository }) {
     updateBy !== (repository.update_by ?? "") ||
     check !== (repository.check_command ?? "") ||
     specFolder !== (repository.spec_folder ?? "") ||
-    specsInApp !== repository.specs_in_app;
+    specCommit !== repository.spec_commit;
 
   const save = (event: FormEvent) => {
     event.preventDefault();
@@ -325,7 +325,7 @@ function RepositorySettings({ repository }: { repository: Repository }) {
       update_by: updateBy || null,
       check_command: orNull(check),
       spec_folder: orNull(specFolder),
-      specs_in_app: specsInApp,
+      spec_commit: specCommit,
     });
   };
 
@@ -388,8 +388,8 @@ function RepositorySettings({ repository }: { repository: Repository }) {
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
-            checked={specsInApp}
-            onChange={(e) => setSpecsInApp(e.target.checked)}
+            checked={specCommit === "none"}
+            onChange={(e) => setSpecCommit(e.target.checked ? "none" : "whole")}
           />
           Keep specs in Layer instead of committing them
         </label>

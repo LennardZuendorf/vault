@@ -13,9 +13,10 @@ import { emit } from "@tauri-apps/api/event";
  *   ?scenario=busy|empty|unlinked|tickets|reviews   which world (default busy)
  *   &view=work|tickets|reviews|chat|runs|repos
  *   &task=t-login          the selected task (none: the All agents overview)
- *   &tab=spec|terminals|diff|pr
+ *   &tab=terminals|spec|diff|pr
+ *   &toolset=openspec|superpowers   ACME-123's spec is that toolset's (§19); Kiro's otherwise
+ *   &install=failed|running         ACME-123's toolset install failed, or is still going
  *   &loop=checking|held|passed|gave_up   the task's agents on a loop (§21)
- *   &spec=split            ACME-123 with a spec per repository from before (SPEC-25)
  *   &role=member          a member of the workspace, who sees its settings (SET-7)
  *   &tracker=github       the workspace's tickets are GitHub issues (TKT-15)
  *   &theme=night|day|tokyo-night|cursor-dark|cursor-light|ayu-dark|ayu-light|system   the saved theme (SET-5)
@@ -29,6 +30,7 @@ import { emit } from "@tauri-apps/api/event";
  *   __mock.emit("pty:activity", id)  deliver a backend event
  *   __mock.print(id, "text\r\n")     a pane prints, live to its terminal if shown
  *   __mock.world                     the data being served; edit it, then emit
+ *   __mock.spec.write(task, path, text)   an agent writes a file of the task's spec (SPEC-36)
  *
  * A command with no answer here logs "[mock] unanswered" and returns null.
  * That is the cue to add it to `answer` below.
@@ -59,7 +61,7 @@ import { loopAnswers, seedLoop } from "./loop";
 import { profileAnswers } from "./profiles";
 import { routineAnswers } from "./routines";
 import { runAnswers } from "./runs";
-import { specAnswers } from "./spec";
+import { specAnswers, specDisk } from "./spec";
 import { githubTracker } from "./tracker";
 import { ago, SCENARIOS } from "./world";
 
@@ -428,6 +430,38 @@ const answer: Record<string, Answer> = {
   set_ui_prefs: (a) => {
     world.settings.ui = a.ui as typeof world.settings.ui;
   },
+  set_spec_first: (a) => {
+    world.settings.spec_first = a.on as boolean;
+  },
+  set_default_toolset: (a) => {
+    const id = a.id as string | null;
+    if (id && !world.settings.toolsets.some((t) => t.id === id))
+      throw `there is no spec toolset "${id}"`;
+    world.settings.default_toolset = id;
+  },
+  // The real one checks each manifest; here, that it is a list with an id, a name and files.
+  set_custom_toolsets: (a) => {
+    const text = (a.json as string).trim();
+    const list: unknown = text ? JSON.parse(text) : [];
+    if (!Array.isArray(list)) throw "custom toolsets must be a list of manifests";
+    for (const m of list as { id?: string; name?: string; files?: string[] }[]) {
+      if (!m.id || !m.name || !m.files?.length)
+        throw `${m.id ?? "toolset"}: it needs an id, a name and files`;
+    }
+    const builtIn = world.settings.toolsets.filter(
+      (t) => !t.custom && !list.some((m) => m.id === t.id),
+    );
+    world.settings.custom_toolsets = list;
+    world.settings.toolsets = [
+      ...builtIn,
+      ...(list as { id: string; name: string; version?: string }[]).map((m) => ({
+        id: m.id,
+        name: m.name,
+        version: m.version ?? null,
+        custom: true,
+      })),
+    ];
+  },
   take_notices: () => [],
   // Connecting checks the token against the site; here any token will do.
   grafana_connect: (a) => {
@@ -725,6 +759,8 @@ const answer: Record<string, Answer> = {
     "Continue ACME-123: Fix login race.\n\nWhat changed so far…\n\nThe last agent's terminal ended with…",
   // Specs (§19). A draft arrives in pieces, as the real one does.
   ...specAnswers(world),
+  // Following the spec folder (§19): nothing is written to one here.
+  watch_spec: () => null,
   // Epics (§26).
   ...epicAnswers(world, (a, taskId) => newPane(a, "agent", taskId)),
   // The run log (§22).
@@ -1054,6 +1090,7 @@ const answer: Record<string, Answer> = {
       created_at: new Date().toISOString(),
       pane_count: 0,
       epic: !!a.epic,
+      toolset: a.toolset as string | null,
       checkouts: (a.projectIds as string[]).map((pid) => {
         const name = world.projects.find((p) => p.id === pid)?.name ?? pid;
         return {
@@ -1420,6 +1457,8 @@ mockIPC(
   on: (cmd: string, fn: Answer) => overrides.set(cmd, fn),
   /** Each task's browser tab; edit one, then emit "browser:changed" with its task. */
   browsers,
+  /** An agent writing a file of a task's spec: `spec.write(task, path, text)`, and the tab follows. */
+  spec: specDisk,
   emit: (event: string, payload?: unknown) => emit(event, payload),
   print,
 };

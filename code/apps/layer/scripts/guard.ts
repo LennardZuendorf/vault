@@ -298,10 +298,15 @@ for (const c of commands) {
 // Tauri commands: the frontend side. Everything goes through src/lib/api.ts.
 
 const apiTs = "src/lib/api.ts";
-const api = read(apiTs);
+/**
+ * `api.ts` and the `api-*.ts` modules split from it along a seam (the spec's
+ * commands, `api-spec.ts`), spread into `api`: together, the frontend's one
+ * view of the backend.
+ */
+const apiFiles = [apiTs, ...tsFiles.filter((f) => /^src\/lib\/api-[\w-]+\.ts$/.test(f))];
 
 for (const f of tsFiles) {
-  if (f === apiTs) continue;
+  if (apiFiles.includes(f)) continue;
   const text = read(f);
   const m = text.match(/import\s*\{[^}]*\binvoke\b[^}]*\}\s*from\s*["']@tauri-apps\/api\/core["']/);
   if (m) {
@@ -309,7 +314,7 @@ for (const f of tsFiles) {
       "api-only",
       f,
       lineAt(text, m.index!),
-      `Calls \`invoke\` directly. Every command goes through ${apiTs}, which is the one place the frontend's view of the backend is written down — add a wrapper there and call that.`,
+      `Calls \`invoke\` directly. Every command goes through ${apiTs} (or an \`api-*.ts\` split from it), which is the one place the frontend's view of the backend is written down — add a wrapper there and call that.`,
     );
   }
 }
@@ -362,56 +367,59 @@ function objectKeys(s: string, open: number): string[] | null {
 
 const invoked = new Map<string, number>();
 const byName = new Map(commands.map((c) => [c.name, c]));
-for (const m of api.matchAll(/\binvoke\s*(?:<[\s\S]*?>)?\s*\(\s*"(\w+)"\s*(,\s*\{)?/g)) {
-  const name = m[1];
-  const line = lineAt(api, m.index!);
-  invoked.set(name, line);
-  const cmd = byName.get(name);
-  if (!cmd) {
-    report(
-      "api-command-exists",
-      apiTs,
-      line,
-      `Invokes \`${name}\`, which is not a #[tauri::command] in src-tauri/src. It fails at runtime with "command not found". Fix the name, or remove the wrapper.`,
-    );
-    continue;
-  }
-  if (!m[2]) {
-    const needed = cmd.params.filter((p) => !p.optional);
-    if (needed.length) {
+for (const apiFile of apiFiles) {
+  const api = read(apiFile);
+  for (const m of api.matchAll(/\binvoke\s*(?:<[\s\S]*?>)?\s*\(\s*"(\w+)"\s*(,\s*\{)?/g)) {
+    const name = m[1];
+    const line = lineAt(api, m.index!);
+    invoked.set(name, line);
+    const cmd = byName.get(name);
+    if (!cmd) {
       report(
-        "api-args",
-        apiTs,
+        "api-command-exists",
+        apiFile,
         line,
-        `\`${name}\` needs ${needed.map((p) => camel(p.name)).join(", ")} (${cmd.file}:${cmd.line}), and is invoked with no arguments.`,
+        `Invokes \`${name}\`, which is not a #[tauri::command] in src-tauri/src. It fails at runtime with "command not found". Fix the name, or remove the wrapper.`,
       );
+      continue;
     }
-    continue;
-  }
-  const keys = objectKeys(api, m.index! + m[0].length - 1);
-  if (!keys) continue;
-  const expected = new Map(cmd.params.map((p) => [camel(p.name), p]));
-  for (const k of keys) {
-    if (!expected.has(k)) {
-      const hint = k.includes("_")
-        ? ` Tauri renames Rust's snake_case parameters to camelCase — send \`${camel(k)}\`.`
-        : "";
-      report(
-        "api-args",
-        apiTs,
-        line,
-        `\`${name}\` is sent \`${k}\`, which is not one of its parameters (${[...expected.keys()].join(", ") || "none"}; ${cmd.file}:${cmd.line}).${hint}`,
-      );
+    if (!m[2]) {
+      const needed = cmd.params.filter((p) => !p.optional);
+      if (needed.length) {
+        report(
+          "api-args",
+          apiFile,
+          line,
+          `\`${name}\` needs ${needed.map((p) => camel(p.name)).join(", ")} (${cmd.file}:${cmd.line}), and is invoked with no arguments.`,
+        );
+      }
+      continue;
     }
-  }
-  for (const [k, p] of expected) {
-    if (!p.optional && !keys.includes(k)) {
-      report(
-        "api-args",
-        apiTs,
-        line,
-        `\`${name}\` needs \`${k}\` (${cmd.file}:${cmd.line}); without it the call fails at runtime.`,
-      );
+    const keys = objectKeys(api, m.index! + m[0].length - 1);
+    if (!keys) continue;
+    const expected = new Map(cmd.params.map((p) => [camel(p.name), p]));
+    for (const k of keys) {
+      if (!expected.has(k)) {
+        const hint = k.includes("_")
+          ? ` Tauri renames Rust's snake_case parameters to camelCase — send \`${camel(k)}\`.`
+          : "";
+        report(
+          "api-args",
+          apiFile,
+          line,
+          `\`${name}\` is sent \`${k}\`, which is not one of its parameters (${[...expected.keys()].join(", ") || "none"}; ${cmd.file}:${cmd.line}).${hint}`,
+        );
+      }
+    }
+    for (const [k, p] of expected) {
+      if (!p.optional && !keys.includes(k)) {
+        report(
+          "api-args",
+          apiFile,
+          line,
+          `\`${name}\` needs \`${k}\` (${cmd.file}:${cmd.line}); without it the call fails at runtime.`,
+        );
+      }
     }
   }
 }
@@ -422,27 +430,30 @@ for (const c of commands) {
       "dead-command",
       c.file,
       c.line,
-      `\`${c.name}\` is registered but nothing in ${apiTs} invokes it. Dead code goes: remove it from its module, from generate_handler! and from the types on both sides.`,
+      `\`${c.name}\` is registered but nothing in ${apiFiles.join(" or ")} invokes it. Dead code goes: remove it from its module, from generate_handler! and from the types on both sides.`,
     );
   }
 }
 
 // Wrappers nobody calls are dead too. A call may be chained onto `api` on
 // the line before it, as the formatter breaks a long one.
-const apiBody = api.slice(api.indexOf("export const api = {"));
-const wrappers = [...apiBody.matchAll(/^ {2}(\w+):/gm)].map((m) => m[1]);
 const everythingElse = tsFiles
-  .filter((f) => f !== apiTs)
+  .filter((f) => !apiFiles.includes(f))
   .map(read)
   .join("\n");
-for (const w of wrappers) {
-  if (!new RegExp(`\\bapi\\s*\\.${w}\\b`).test(everythingElse)) {
-    report(
-      "dead-wrapper",
-      apiTs,
-      lineAt(api, api.indexOf(`  ${w}:`)),
-      `\`api.${w}\` is never called. Dead code goes — remove it, and its command if nothing else uses that.`,
-    );
+for (const apiFile of apiFiles) {
+  const api = read(apiFile);
+  const apiBody = api.slice(api.search(/^export const \w+ = \{/m));
+  const wrappers = [...apiBody.matchAll(/^ {2}(\w+):/gm)].map((m) => m[1]);
+  for (const w of wrappers) {
+    if (!new RegExp(`\\bapi\\s*\\.${w}\\b`).test(everythingElse)) {
+      report(
+        "dead-wrapper",
+        apiFile,
+        lineAt(api, api.indexOf(`  ${w}:`)),
+        `\`api.${w}\` is never called. Dead code goes — remove it, and its command if nothing else uses that.`,
+      );
+    }
   }
 }
 
@@ -700,8 +711,9 @@ const CEILINGS: Record<string, number> = {
   // dispatch is here, the line that took it to 1101. The epic chat's tools
   // (EPIC-12) are in commands/epic_tools.rs; their dispatch and confirm gate
   // took it to 1113. The trackers' tools (TKT-20) moved out to
-  // commands/tracker_tools.rs, which brought it back to 944.
-  "src-tauri/src/mcp.rs": 960,
+  // commands/tracker_tools.rs, which brought it back to 944. The routine
+  // tools (§29) and set_base joining the spec tools' dispatch took it to 963.
+  "src-tauri/src/mcp.rs": 970,
   // The same for the browser's tools (BRW-*); each tool's work lives in
   // its own module (sign_in.rs, session.rs, tabs.rs), its definition here.
   "src-tauri/src/browser/tools.rs": 700,
@@ -711,7 +723,7 @@ const CEILINGS: Record<string, number> = {
   "src-tauri/src/git.rs": 1150,
   "src-tauri/src/commands/diff.rs": 700,
   // Every field of config.json is declared here, each with its reason and
-  // its serde default; a repository's spec settings (SPEC-1, SPEC-3) and its
+  // its serde default; a repository's spec settings (SPEC-28) and its
   // check command (LOOP-1) took it past 600, and a field split from its
   // struct is harder to find than a long file. `ConfigStore::with`, the
   // borrowing read beside `read` that the hot paths use, took it to 661; it
@@ -725,7 +737,8 @@ const CEILINGS: Record<string, number> = {
   // Oxfmt broke these files' long lines and took them past the default, with
   // no new code: TicketsView 637, types 613.
   "src/components/tickets/TicketsView.tsx": 660,
-  "src/lib/types.ts": 640,
+  // Settings gained spec_first (SPEC-38), the one line that is the mirror of the backend.
+  "src/lib/types.ts": 645,
   // Every command's wrapper must live here (api-only); the routines' six
   // (§29) took it to 607.
   "src/lib/api.ts": 640,
