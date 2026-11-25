@@ -44,6 +44,12 @@ export const specApi = {
     invoke<SpecCheck>("check_spec", { taskId, checkoutId }),
   /** Install the task's spec toolset again, after a failure; announced as `spec:install`. */
   installSpecToolset: (taskId: string) => invoke<InstallState>("install_spec_toolset", { taskId }),
+  /**
+   * Ask an agent to write the spec (SPEC-38's line): typed into `paneId` when
+   * given; otherwise only returned, to start an agent with.
+   */
+  askForSpec: (taskId: string, paneId: string | null) =>
+    invoke<string>("ask_for_spec", { taskId, paneId }),
   watchSpec: (taskId: string | null) => invoke<void>("watch_spec", { taskId }),
   /**
    * Commit spec: put the task's `spec/` into each repository per its

@@ -479,7 +479,7 @@ const GENERATED_FILES: &[&str] = &[
 ];
 
 /// An opening prompt too long to type, for a CLI that takes it typed.
-const FIRST_PROMPT: &str = "FIRST_PROMPT.md";
+pub(crate) const FIRST_PROMPT: &str = "FIRST_PROMPT.md";
 
 /// What to type into an agent to give it `text`: the text itself when it
 /// fits (`pty::MAX_TYPED`), or else a pointer to `file` in `dir`, where the

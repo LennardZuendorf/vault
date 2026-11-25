@@ -367,6 +367,8 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
 
   return {
     read_spec: (a) => view(a.taskId as string),
+    ask_for_spec: () =>
+      "Write or update the spec in /mock/spec before you change any code. Then stop: say the spec is ready, and change no code until the user tells you to go on.",
     write_spec_file: (a) => {
       const disk = files(a.taskId as string)[a.path as string];
       // The backend's refusal: the file is no longer what the editor began from.

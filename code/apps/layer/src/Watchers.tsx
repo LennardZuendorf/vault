@@ -363,12 +363,12 @@ export function Watchers() {
     };
   }, []);
 
-  // The spec folder of the task whose Spec tab is on screen, followed so an
-  // agent's writes show as they happen (SPEC-36); none when it is not. A
+  // The spec folder of the task or epic whose Spec tab is on screen, followed
+  // so an agent's writes show as they happen (SPEC-36); none when it is not. A
   // failure only means no live updates: the tab still reads on opening.
   const specOf = useStore((s) => {
     const task = selectedTask(s);
-    return s.view === "work" && s.tab === "spec" && task && !task.epic ? task.id : null;
+    return s.view === "work" && s.tab === "spec" && task ? task.id : null;
   });
   useEffect(() => {
     void api.watchSpec(specOf).catch(() => {});

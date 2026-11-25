@@ -187,6 +187,23 @@ pub async fn remove_spec_file(
     super::blocking(app, move |state| remove_spec(state, &state.config.task(&task_id)?, &path, base.as_deref())).await
 }
 
+/// Ask an agent to write the spec, from an empty Spec tab: Spec first's line
+/// (SPEC-38), typed into `pane_id` when given, else only returned, to start
+/// an agent with. The same words a task started with "Write a spec first"
+/// gives it, so the agent stops for the user's go either way.
+#[tauri::command]
+pub async fn ask_for_spec(app: tauri::AppHandle, task_id: String, pane_id: Option<String>) -> Result<String> {
+    super::blocking(app, move |state| {
+        let task = state.config.task(&task_id)?;
+        let prompt = super::spec_work::spec_first_line(&spec_dir(state, &task));
+        if let Some(id) = &pane_id {
+            super::panes::hand_over(state, &task, id, super::panes::FIRST_PROMPT, &prompt)?;
+        }
+        Ok(prompt)
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1395,6 +1395,7 @@ never hold credentials themselves.
 | `spec_write` | write one file of the task's spec, whole text, in the task's `spec/` folder, if its toolset lists the file (SPEC-13) | |
 | `spec_task` | tick (or untick) a step of the spec by file and position (SPEC-13) | |
 | `spec_commit` | Commit spec: put the spec into the task's repositories and commit it there (SPEC-35, SPEC-13) | yes |
+| `spec_propose` | gone (SPEC-24): listed for one release so agents that still have it in context are told where the spec's folder is and to write with `spec_write` | |
 | `epic_subtasks` | an epic's sub-tasks: ticket, task, steps ticked, what each waits for, its agents (EPIC-12); the tickets under it that are none yet (EPIC-14) | |
 | `subtask_start` | start a sub-task's agent on its spec, and move its ticket (EPIC-8) | yes |
 | `subtask_tell` | send one message to a sub-task's running agents (EPIC-12) | |
@@ -2397,8 +2398,16 @@ requirements, then design, then tasks.
   named in a note and not shown (SPEC-2). The editor saves a file as a file write
   (`write_spec_file`), through the same lock and refusals as an agent's
   `spec_write`. Commit spec is off while any editor holds text not saved, since
-  it puts the saved files into the repositories. An empty spec says where its
-  files go. An epic's spec is the same tab on the epic's page (§26).
+  it puts the saved files into the repositories. The tab MUST read the spec
+  every time it is shown (the folder is followed only while it is, SPEC-36), and
+  a read that fails MUST say so on the tab with Try again: in place of the spec
+  when there is none yet, above it when there is. An empty spec says where its
+  files go and offers **Ask an agent to write it** (`ask_for_spec`): Spec
+  first's line (SPEC-38), typed into an agent running in the task, or the
+  opening prompt of one it starts (`AgentTarget.tsx`), so the agent writes the
+  spec and stops for your go; not on an epic's page, where the epic chat is the
+  agent. An epic's spec is the same tab on the epic's
+  page (§26).
   The task's tabs MUST be Agents, Spec, Diff and Pull requests, in that order
   (`store.ts`, `TABS`; `App.tsx`), and selecting a task opens on Agents; Start
   work with "Write a spec first", and Start work on an epic, open on Spec
@@ -2408,7 +2417,7 @@ requirements, then design, then tasks.
   the user, MUST reach the tab as `spec:changed` once the folder has been quiet
   for 200 ms (and at least once a second while it is not), so a burst of writes
   is one re-read (`commands/spec_watch.rs`, the `watch_spec` command called from
-  `Watchers.tsx`). Only the task on screen is followed (one watcher, driven by
+  `Watchers.tsx`). Only the task or epic on screen is followed (one watcher, driven by
   the system's file events through the `notify` crate: never polled), none when
   its Spec tab is not, and a folder that does not exist yet is followed from its
   nearest existing folder and from the moment it appears. The tools `spec_write`
@@ -2676,7 +2685,8 @@ Requirements of the earlier text that no longer hold. Their ids are not reused.
 - ~~**SPEC-23**~~ Open pull requests warning of a spec changed outside the app.
   Replaced: Open pull requests runs Commit spec (SPEC-35).
 - ~~**SPEC-24**~~ An agent proposing a change with `spec_propose`. Replaced by
-  the spec tools (SPEC-13).
+  the spec tools (SPEC-13); the tool answers where to write instead, for one
+  release (§12).
 - ~~**SPEC-25**~~ Merging the specs of several repositories into one. Dropped:
   one working copy (SPEC-2); earlier copies are moved (SPEC-17).
 
@@ -2742,10 +2752,8 @@ Known gaps:
   does the work, and a draft cannot be stopped once started.
 - A drafted pull request description's spec section lists only requirements in
   Kiro's `R-n` form, so for OpenSpec and superpowers it is usually left out.
-- An epic's Spec tab is not followed by the watcher (SPEC-36): it reads when it
-  opens, when an agent in it stops and when a spec tool writes. An epic's plan
-  (SPEC-39) reads steps the way Kiro's `tasks.md` has them (numbered top-level
-  items), whatever the epic's toolset.
+- An epic's plan (SPEC-39) reads steps only the way Kiro's `tasks.md` has them
+  (numbered top-level items), which is why an epic is written with Kiro.
 - The extras are Kiro-shaped: they write `requirements.md`, `design.md` and
   `tasks.md`, so a custom toolset that lists `extras` must list those files.
 - Kiro runs independent tasks side by side; here one agent works through them in

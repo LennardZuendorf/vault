@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { api } from "../lib/api";
 import { requirementsPath, useSpecs } from "../lib/specs";
 import type { SpecKind, SpecPart, TaskView } from "../lib/types";
 import { useStore } from "../store";
+import { AgentTargetFields, useAgentTarget } from "./AgentTarget";
 import { SpecEditor } from "./spec/SpecEditor";
 import { SpecQuestions } from "./spec/SpecQuestions";
 import { SpecSide } from "./spec/SpecSide";
@@ -20,6 +22,8 @@ const DRAFTS: { part: SpecPart; label: string }[] = [
  * agent writes it, and followed live while an agent does. Beside them: how far
  * each repository is through the steps, and Commit spec. Kiro's extras (Draft,
  * Apply answers, Check against spec) show only for a toolset that has them.
+ * It is read every time it is shown: the folder is followed only while it is,
+ * and an agent may have written since.
  */
 export function SpecView({ task }: { task: TaskView }) {
   const state = useSpecs((s) => s.byTask[task.id]);
@@ -31,17 +35,34 @@ export function SpecView({ task }: { task: TaskView }) {
   const retryInstall = useSpecs((s) => s.retryInstall);
   const fail = useStore((s) => s.fail);
   const actions = useFailure();
+  // A read that fails says so here, with Try again, not in the window's corner.
+  const reading = useFailure();
+  const { clear: clearReading, fail: failReading } = reading;
+  const [reads, setReads] = useState(0);
   const [path, setPath] = useState<string | null>(null);
   const [kind, setKind] = useState<SpecKind>("feature");
   const [committing, setCommitting] = useState(false);
 
-  const loaded = state?.loaded ?? false;
   useEffect(() => {
-    if (!loaded) void load(task.id).catch(fail);
-  }, [task.id, loaded, load, fail]);
+    clearReading();
+    void load(task.id).catch(failReading);
+  }, [task.id, load, reads, clearReading, failReading]);
+  const readAgain = () => setReads((n) => n + 1);
 
+  const loaded = state?.loaded ?? false;
   const spec = state?.spec ?? null;
-  if (!loaded || !spec) return null;
+  if (!loaded || !spec) {
+    if (!reading.error) return null;
+    return (
+      <div className="empty">
+        <h2>The spec could not be read</h2>
+        <ErrorMessage>{reading.error}</ErrorMessage>
+        <button className="ui-button ui-button-primary" onClick={readAgain}>
+          Try again
+        </button>
+      </div>
+    );
+  }
 
   const edits = state?.edits ?? {};
   const unsaved = Object.keys(edits).length > 0;
@@ -140,6 +161,16 @@ export function SpecView({ task }: { task: TaskView }) {
         </div>
       )}
       <ErrorMessage>{actions.error}</ErrorMessage>
+      {reading.error && (
+        <div className="spec-bar">
+          <span className="spec-failed">
+            The spec was not read again, so what is shown may be out of date. {reading.error}
+          </span>
+          <button className="ui-button" onClick={readAgain}>
+            Try again
+          </button>
+        </div>
+      )}
       {spec.unreadable.length > 0 && (
         <p className="spec-unreadable" role="status">
           {spec.unreadable.join(", ")} {spec.unreadable.length === 1 ? "is" : "are"} not UTF-8 text,
@@ -148,13 +179,7 @@ export function SpecView({ task }: { task: TaskView }) {
         </p>
       )}
       {spec.files.length === 0 && current === null ? (
-        <div className="empty">
-          <h2>No spec yet</h2>
-          <p>
-            The spec is the files in <code>{spec.dir}</code>. An agent writes them there, or you
-            can.
-          </p>
-        </div>
+        <NoSpec task={task} dir={spec.dir} ask={!task.epic} />
       ) : (
         <div className="spec-body">
           <SpecTree
@@ -179,6 +204,56 @@ export function SpecView({ task }: { task: TaskView }) {
           </SpecSide>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * An empty spec: where its files go, and Ask an agent to write it (SPEC-8),
+ * sent to an agent already running in the task, or to one started with it.
+ * The agent is told what Spec first tells it (SPEC-38): write the spec, then
+ * stop for your go. Not on an epic's page, which has no agents of its own to
+ * start: its chat is beside it.
+ */
+function NoSpec({ task, dir, ask: offered }: { task: TaskView; dir: string; ask: boolean }) {
+  const at = useAgentTarget(task);
+  const asking = useFailure();
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState<string | null>(null);
+
+  async function ask() {
+    setBusy(true);
+    asking.clear();
+    try {
+      const who = await at.send((paneId) => api.askForSpec(task.id, paneId));
+      setSent(who);
+    } catch (e) {
+      asking.fail(e);
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="empty">
+      <h2>No spec yet</h2>
+      <p>
+        The spec is the files in <code>{dir}</code>. An agent writes them there, or you can.
+      </p>
+      {offered && (
+        <div className="row">
+          <AgentTargetFields task={task} at={at} disabled={busy} />
+          <button
+            className="ui-button ui-button-primary"
+            disabled={busy || at.stuck}
+            title={at.stuck ? "No agent is installed to ask." : undefined}
+            onClick={() => void ask()}
+          >
+            <BusyLabel busy={busy} idle="Ask an agent to write it" working="Asking…" />
+          </button>
+        </div>
+      )}
+      {sent && <p role="status">Asked {sent}. The spec shows here as it is written.</p>}
+      <ErrorMessage>{asking.error}</ErrorMessage>
     </div>
   );
 }
