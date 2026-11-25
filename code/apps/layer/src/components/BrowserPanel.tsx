@@ -1,6 +1,6 @@
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errMessage } from "../lib/api";
 import { key, mouse, pagePoint, wheel } from "../lib/browserInput";
 import { copyText } from "../lib/clipboard";
@@ -213,42 +213,49 @@ export function BrowserPanel({
   drivingRef.current = driving;
 
   // The wheel is a native listener: React's is passive, and the panel's own
-  // scrolling must not happen as well as the page's.
+  // scrolling must not happen as well as the page's. It goes on the canvas
+  // as the canvas mounts. It was an effect keyed on what the panel shows in
+  // the canvas's place, which left out the sign-in window (BRW-23): the
+  // canvas that came back after a sign-in had no listener, and the trackpad
+  // did nothing until the panel was opened again.
   const sizeRef = useRef(size);
   sizeRef.current = size;
-  const showing = !downloadFailed && !error;
-  useEffect(() => {
-    const el = canvasRef.current;
-    if (!el) return;
-    // A trackpad reports far more wheel events than frames are drawn:
-    // summed, and sent once per animation frame.
-    let pending: BrowserInput | null = null;
-    let frame = 0;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      if (drivingRef.current) return;
-      const page = sizeRef.current;
-      if (!page) return;
-      const next = wheel(e, pagePoint(e, el.getBoundingClientRect(), page));
-      if (pending?.kind === "wheel" && next.kind === "wheel") {
-        pending = { ...next, dx: pending.dx + next.dx, dy: pending.dy + next.dy };
-      } else {
-        pending = next;
-      }
-      if (!frame) {
-        frame = requestAnimationFrame(() => {
-          frame = 0;
-          if (pending) send(pending);
-          pending = null;
-        });
-      }
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => {
-      el.removeEventListener("wheel", onWheel);
-      cancelAnimationFrame(frame);
-    };
-  }, [showing, taskId]); // eslint-disable-line react-hooks/exhaustive-deps -- `send` reads only taskId
+  const canvas = useCallback(
+    (el: HTMLCanvasElement) => {
+      canvasRef.current = el;
+      // A trackpad reports far more wheel events than frames are drawn:
+      // summed, and sent once per animation frame.
+      let pending: BrowserInput | null = null;
+      let frame = 0;
+      const onWheel = (e: WheelEvent) => {
+        e.preventDefault();
+        if (drivingRef.current) return;
+        const page = sizeRef.current;
+        if (!page) return;
+        const next = wheel(e, pagePoint(e, el.getBoundingClientRect(), page));
+        if (pending?.kind === "wheel" && next.kind === "wheel") {
+          pending = { ...next, dx: pending.dx + next.dx, dy: pending.dy + next.dy };
+        } else {
+          pending = next;
+        }
+        if (!frame) {
+          frame = requestAnimationFrame(() => {
+            frame = 0;
+            if (pending) send(pending);
+            pending = null;
+          });
+        }
+      };
+      el.addEventListener("wheel", onWheel, { passive: false });
+      return () => {
+        el.removeEventListener("wheel", onWheel);
+        cancelAnimationFrame(frame);
+        canvasRef.current = null;
+      };
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `send` reads only taskId
+    [taskId],
+  );
 
   function send(input: BrowserInput) {
     void api.browserInput(taskId, input).catch(() => {});
@@ -552,7 +559,7 @@ export function BrowserPanel({
         ) : (
           <>
             <canvas
-              ref={canvasRef}
+              ref={canvas}
               width={size ? Math.round(size.width * (window.devicePixelRatio || 1)) : 0}
               height={size ? Math.round(size.height * (window.devicePixelRatio || 1)) : 0}
               style={size ? { width: size.width, height: size.height } : undefined}
