@@ -2614,7 +2614,12 @@ allowed), never the agent doing the work. The prompts are in `commands/spec_prom
 ### Epics
 
 - **SPEC-39** An epic's spec (§26) is the working copy of the epic's task, read
-  and written as any task's. Its sub-tasks MUST be planned from its step files
+  and written as any task's. An epic MUST be written with Kiro: only Kiro's
+  tasks draft heads the groups its sub-tasks are planned from, and with another
+  toolset the agent's own headings (`## 1. Setup`) became sub-tasks. Start work
+  on an epic offers no toolset pick, and a new epic with another toolset is
+  refused (`commands/tasks.rs`, `new_task`); without one it gets Kiro, not the
+  app's default. Its sub-tasks MUST be planned from its step files
   (`commands/epics.rs`, `plan`; `spec_view.rs`, `step_texts`): each repository's
   share is its own sections and steps and everyone's (SPEC-34), and a heading
   shared across repositories is one sub-task. Filing a sub-task makes a task with

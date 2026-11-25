@@ -414,12 +414,23 @@ pub(crate) fn link_chat(state: &AppState, mut task: Task, room: String) -> Resul
     Ok(task)
 }
 
+/// The one toolset an epic is written with (SPEC-39).
+const EPIC_TOOLSET: &str = "kiro";
+
 pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     if req.project_ids.is_empty() {
         return Err(Error::Other("pick at least one repository".into()));
     }
     let projects: Vec<Project> = req.project_ids.iter().map(|id| state.config.project(id)).collect::<Result<_>>()?;
 
+    // An epic's sub-tasks are planned from groups only Kiro's tasks draft
+    // heads (SPEC-39): with another toolset the agent's own headings
+    // (`## 1. Setup`) became sub-tasks.
+    if let Some(id) = req.toolset.as_deref().filter(|id| req.epic && *id != EPIC_TOOLSET) {
+        return Err(Error::Other(format!(
+            "an epic is written with Kiro, so its tasks can be split into sub-tasks; {id:?} cannot do that yet"
+        )));
+    }
     // Refused before a folder is made: a task cannot be installed with a toolset
     // nothing here has.
     if let Some(id) = req.toolset.as_deref() {
@@ -443,7 +454,8 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
         .as_ref()
         .and_then(|of| state.config.task(&of.epic).ok())
         .map(|epic| super::spec_copy::toolset_of(state, &epic).id)
-        .or(req.toolset.clone());
+        .or(req.toolset.clone())
+        .or(req.epic.then(|| EPIC_TOOLSET.to_string()));
     let task = Task {
         toolset,
         id: uuid::Uuid::new_v4().to_string(),
@@ -1068,6 +1080,36 @@ mod tests {
         assert_eq!(task.toolset.as_deref(), Some("openspec"));
         assert_eq!(state.config.task(&task.id).unwrap().toolset.as_deref(), Some("openspec"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_epic_is_made_with_kiro_and_refused_with_another_toolset() {
+        let root = std::env::temp_dir().join(format!("vl-tasks-{}", uuid::Uuid::new_v4()));
+        let api = github_and_clone(&root, "api", &["main"]);
+        let state = state(&root, vec![project("api", &api, "main")]);
+        state.config.update(|c| c.default_toolset = Some("openspec".into())).unwrap();
+        let request = |toolset: Option<&str>| NewTask {
+            name: "An epic".into(),
+            project_ids: vec!["api".into()],
+            branch: Some("ACME-3-epic".into()),
+            branch_suffix: None,
+            base: Some("main".into()),
+            issue_key: None,
+            issue_url: None,
+            epic_key: None,
+            epic: true,
+            sub_task: None,
+            toolset: toolset.map(String::from),
+        };
+
+        let said = new_task(&state, request(Some("openspec"))).unwrap_err().to_string();
+        assert!(said.contains("an epic is written with Kiro"), "{said}");
+        assert!(state.config.with(|c| c.tasks.is_empty()));
+
+        // Not the app's default either, which a task without a pick gets.
+        let task = new_task(&state, request(None)).unwrap();
+        assert_eq!(task.toolset.as_deref(), Some("kiro"));
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

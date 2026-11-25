@@ -56,13 +56,16 @@ export function StartWorkDialog({
   // Spec first (SPEC-38) already tells every agent: for a launch it cannot be turned off.
   const locked = settings?.spec_first ?? false;
   const toolsets = settings?.toolsets ?? [];
-  const toolset =
-    chosenToolset ??
-    suggestToolset(
-      selected,
-      toolsets.map((t) => t.id),
-      settings?.default_toolset ?? null,
-    );
+  // An epic is Kiro's (SPEC-39): only Kiro's tasks draft heads the groups the
+  // sub-tasks are planned from.
+  const toolset = epic
+    ? "kiro"
+    : (chosenToolset ??
+      suggestToolset(
+        selected,
+        toolsets.map((t) => t.id),
+        settings?.default_toolset ?? null,
+      ));
 
   // A default, once. Re-filled whenever the value was empty — and on every
   // render, since `installed` is a new list each time — this put the first
@@ -274,7 +277,7 @@ export function StartWorkDialog({
         />
       </Field>
 
-      {toolsets.length > 0 && (
+      {toolsets.length > 0 && !epic && (
         <Field
           label="Spec"
           hint="What the task writes its spec with. It is installed in the task folder, and the task keeps it."
@@ -296,8 +299,8 @@ export function StartWorkDialog({
 
       {epic ? (
         <div className="muted" style={{ marginBottom: 14, lineHeight: 1.6 }}>
-          An epic: its spec is written here, and its tasks become sub-tasks, each filed under{" "}
-          {issue.key} and worked in a task of its own.
+          An epic: its spec is written here, with Kiro, and its tasks become sub-tasks, each filed
+          under {issue.key} and worked in a task of its own.
         </div>
       ) : (
         <>
