@@ -3,10 +3,21 @@
 
 use serde_json::json;
 
-use super::conn::{Conn, Queued, Waiting};
+use super::conn::{Conn, Effects, Opening, Queued, State, Waiting};
 use super::{Image, View};
 use crate::error::{Error, Result};
 use crate::pty::Activity;
+
+/// The text is Layer's own `/clear` or `/new`, and not a command of the
+/// agent's by that name, which is the agent's to run.
+fn clears(st: &State, text: &str) -> bool {
+    let name = match text.trim() {
+        "/clear" => "clear",
+        "/new" => "new",
+        _ => return false,
+    };
+    !st.convo.commands.iter().any(|c| c.name == name)
+}
 
 /// What an image's media type may be: those every agent's model reads.
 const IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -31,6 +42,9 @@ impl Conn {
             if st.exited {
                 return Err(Error::Other("the agent has exited".into()));
             }
+            if images.is_empty() && clears(st, text) {
+                return self.clear(st, fx);
+            }
             if !images.is_empty() && !st.caps.image {
                 let agent = st.agent.clone().unwrap_or_else(|| "this agent".into());
                 return Err(Error::Other(format!("{agent} does not take images")));
@@ -43,6 +57,28 @@ impl Conn {
             self.next_prompt(st, fx);
             Ok(())
         })
+    }
+
+    /// `/clear` or `/new` (ACP-22): a new conversation in the same pane, on
+    /// the model and in the mode the old one had. Sent to the agent as a
+    /// prompt, it was only words: no agent over ACP has them as commands,
+    /// and the old conversation, its context full, went on.
+    fn clear(&self, st: &mut State, fx: &mut Effects) -> Result<()> {
+        if !st.ready || st.session.is_none() {
+            return Err(Error::Other("the conversation is not open yet".into()));
+        }
+        if st.busy || !st.questions.is_empty() {
+            return Err(Error::Other("stop the turn first (Esc), then clear".into()));
+        }
+        // Set again on the new one: an agent opens a conversation on its
+        // own defaults.
+        st.presets = st.convo.settings.iter().filter_map(|s| Some((s.category.clone()?, s.current.clone()))).collect();
+        st.convo.clear();
+        st.convo.note("A new conversation. The one before is cleared from here and from the agent.", false);
+        st.session = None;
+        st.ready = false;
+        self.open_as(st, fx, Opening::New);
+        Ok(())
     }
 
     /// Stop the running turn (ACP-6). Every open question is answered

@@ -2524,13 +2524,24 @@ count and banner treats it like any other.
   bytes, never overwrites a file or writes into a checkout, and appends
   quoted absolute paths to the editable draft. Saving blocks sending, not
   typing; failed images show an inline error and successful ones remain.
+- **ACP-21** What is typed or pasted into a conversation's message box and
+  not sent MUST still be there when the user leaves the pane (another task,
+  another view, the Henchman) and comes back, until it is sent or the pane
+  is closed. A send that fails puts it back.
+- **ACP-22** `/clear` and `/new`, sent alone, MUST start a new
+  conversation in the same pane, on the model and in the mode the old one
+  had, and show only a note that says so; the next prompt goes to the new
+  one. They are refused while a turn runs or a question is open. An agent
+  that offers a command by that name gets it instead, and the message
+  box's suggestions list Layer's own after the agent's.
 
 Code: `acp/` (`conn.rs` the protocol, `user.rs`, `conversation.rs`,
 `entry.rs`, `read.rs`, `process.rs`, `version.rs` for ACP-17), `pty/acp.rs`,
 `commands/acp_panes.rs`, `agents.rs` (`AcpCommand`), `AcpPane.tsx`,
 `lib/acpUpdates.ts`, `lib/types-acp.ts`, `AgentSettings.tsx`, `lib/issue-keys.ts` and
 `IssueKeyLink.tsx` (ACP-18), `lib/acpEntries.ts` (`layerSaid`, ACP-19),
-`commands/attachments.rs` and `lib/chatDrop.ts` (ACP-20). A real agent is checked with
+`commands/attachments.rs` and `lib/chatDrop.ts` (ACP-20), `lib/acpPool.ts`
+(ACP-21), `user.rs`, `Conversation::clear` and `lib/acpCommands.ts` (ACP-22). A real agent is checked with
 `VILLAIN_ACP_AGENT="opencode acp" cargo test --lib real_agent -- --ignored`.
 
 Known gaps:

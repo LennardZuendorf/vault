@@ -66,6 +66,18 @@ impl Conversation {
         Changes { rev: self.rev, base: self.base, len: self.base + self.entries.len(), reset, entries }
     }
 
+    /// Everything said let go, for a new conversation in the same pane
+    /// (ACP-22). The indexes go on from where they were, so a window that
+    /// asks since its revision is told by `base` to drop what it has.
+    pub fn clear(&mut self) {
+        self.base += self.entries.len();
+        self.entries.clear();
+        self.tools.clear();
+        self.plan = None;
+        self.usage = None;
+        self.bump();
+    }
+
     /// The text copy written since the last call (ACP-7).
     pub fn take_text(&mut self) -> String {
         std::mem::take(&mut self.text)
