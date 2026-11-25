@@ -39,6 +39,15 @@ pub(crate) fn target_path(t: &Toolset, task: &Task, project: &Project, rel: &str
     } else {
         rel.to_string()
     };
+    // A toolset's `commit_to` is the one folder it may write in a
+    // repository; a `files` pattern wider than that does not widen it.
+    if t.id != KIRO {
+        if let Some(only) = t.commit_to.as_deref().map(|c| c.replace("{task}", &spec::folder_name(&task.branch))) {
+            if to != only && !to.starts_with(&format!("{only}/")) {
+                return None;
+            }
+        }
+    }
     // A spec folder of `.git/hooks` would be a way to run something.
     (to.split('/').next() != Some(".git")).then_some(to)
 }
@@ -65,29 +74,62 @@ pub(crate) fn repositories(state: &AppState, task: &Task) -> Vec<Repo> {
 
 /// What Commit spec writes into `repo`: each file of the spec with the path
 /// it goes to. `own` filters the step files down to the repository's steps.
-/// The paths of files that are not UTF-8 text come with it, left out: one
-/// would otherwise fail the whole repository, and Open pull requests with it.
+/// The files left out come with it, each with why: one that is not UTF-8
+/// text would otherwise fail the whole repository, and Open pull requests
+/// with it, and one outside the toolset's `commit_to` is not its to write.
 fn would_write(spec: &Path, t: &Toolset, task: &Task, repo: &Repo, folders: &[String]) -> Result<Texts> {
     let (texts, skipped) = read_all(spec, t)?;
+    let mut skipped: Vec<String> = skipped.into_iter().map(|rel| format!("{rel} (not UTF-8 text)")).collect();
     let mut out = Vec::new();
     for (rel, mut text) in texts {
         if repo.project.spec_commit == SpecCommit::Own && t.steps.iter().any(|g| glob::matches(g, &rel)) {
             text = own_part(&text, &repo.folder, folders);
         }
-        let to = target_path(t, task, &repo.project, &rel).ok_or_else(|| {
-            Error::Other(format!("{rel} has no place inside {}: check its spec folder", repo.project.name))
-        })?;
-        out.push((to, text));
+        match target_path(t, task, &repo.project, &rel) {
+            Some(to) => out.push((to, text)),
+            None if t.id == KIRO => {
+                return Err(Error::Other(format!(
+                    "{rel} has no place inside {}: check its spec folder",
+                    repo.project.name
+                )));
+            }
+            None => skipped.push(match &t.commit_to {
+                Some(only) => format!("{rel} (outside {only}/)"),
+                None => format!("{rel} (no place in the repository)"),
+            }),
+        }
     }
     Ok((out, skipped))
 }
 
-/// What a row says of files left out for not being text.
+/// What a row says of files left out.
 fn left_out(skipped: &[String]) -> String {
     match skipped {
         [] => String::new(),
-        some => format!("; left out, not UTF-8 text: {}", some.join(", ")),
+        some => format!("; left out: {}", some.join(", ")),
     }
+}
+
+/// The spec files in `worktree` someone changed since its last commit: Commit
+/// spec would write over them, and commit what they did as the spec. A file
+/// that already holds what would be written is not one.
+fn edited_here(worktree: &Path, files: &[(String, String)], committed: &[Option<String>]) -> Vec<String> {
+    files
+        .iter()
+        .zip(committed)
+        .filter(|((rel, text), before)| {
+            let at = worktree.join(rel);
+            match std::fs::symlink_metadata(&at) {
+                Err(_) => before.is_some(),
+                Ok(m) if !m.is_file() => true,
+                Ok(_) => {
+                    let now = std::fs::read_to_string(&at).ok();
+                    now.as_deref() != Some(text.as_str()) && now != **before
+                }
+            }
+        })
+        .map(|((rel, _), _)| rel.clone())
+        .collect()
 }
 
 /// The sentence for a commit; `git::commit_only` writes it as the repository
@@ -111,6 +153,15 @@ fn commit_in(spec: &Path, t: &Toolset, task: &Task, repo: &Repo, folders: &[Stri
         });
     }
     let worktree = Path::new(&repo.checkout.path);
+    let paths: Vec<&str> = files.iter().map(|(rel, _)| rel.as_str()).collect();
+    // Nothing is written until every file is known to be safe to write.
+    let edited = edited_here(worktree, &files, &git::committed_texts(worktree, &paths)?);
+    if !edited.is_empty() {
+        return Err(Error::Other(format!(
+            "{} changed here since the last commit, and Commit spec would write over it: commit or undo that, then Commit spec again",
+            edited.join(", ")
+        )));
+    }
     for (rel, text) in &files {
         let same = std::fs::symlink_metadata(worktree.join(rel)).is_ok_and(|m| m.is_file())
             && std::fs::read_to_string(worktree.join(rel)).is_ok_and(|now| now == *text);
@@ -118,7 +169,6 @@ fn commit_in(spec: &Path, t: &Toolset, task: &Task, repo: &Repo, folders: &[Stri
             write_under(worktree, rel, text)?;
         }
     }
-    let paths: Vec<&str> = files.iter().map(|(rel, _)| rel.as_str()).collect();
     let said = match git::commit_only(worktree, &paths, &message(task))? {
         Some(sha) => format!("committed {}", sha.get(..7).unwrap_or(&sha)),
         None => "nothing changed".into(),
@@ -161,9 +211,15 @@ pub(crate) fn changed_since_commit(state: &AppState, task: &Task) -> Vec<String>
         .iter()
         .filter(|r| r.project.spec_commit != SpecCommit::None)
         .filter(|repo| match would_write(&spec, &t, task, repo, &folders) {
-            Ok((files, _)) => files
-                .iter()
-                .any(|(rel, text)| git::committed_text(Path::new(&repo.checkout.path), rel).as_deref() != Some(text)),
+            Ok((files, _)) => {
+                let paths: Vec<&str> = files.iter().map(|(rel, _)| rel.as_str()).collect();
+                match git::committed_texts(Path::new(&repo.checkout.path), &paths) {
+                    Ok(committed) => {
+                        files.iter().zip(&committed).any(|((_, text), before)| before.as_deref() != Some(text))
+                    }
+                    Err(_) => true,
+                }
+            }
             Err(_) => true,
         })
         .map(|r| r.folder.clone())
@@ -290,6 +346,53 @@ mod tests {
     }
 
     #[test]
+    fn a_spec_file_changed_in_the_worktree_and_not_committed_stops_that_repository() {
+        let (root, state, task) = repos(&["api", "web"], "openspec");
+        spec_file(&root, "openspec/changes/a/proposal.md", "Why\n");
+        assert!(commit_spec(&state, &task, None).iter().all(|r| r.ok));
+        let api = worktree(&root, "api");
+        put(&api.join("openspec/changes/a/proposal.md"), "Why, edited by hand here\n");
+        spec_file(&root, "openspec/changes/a/proposal.md", "Why, as the spec has it now\n");
+
+        let rows = commit_spec(&state, &task, None);
+
+        let row = by_repo(&rows, "api");
+        assert!(!row.ok && row.detail.contains("openspec/changes/a/proposal.md"), "{row:?}");
+        assert_eq!(get(&api.join("openspec/changes/a/proposal.md")), "Why, edited by hand here\n", "kept");
+        assert_eq!(log(&api).len(), 2, "nothing more committed");
+        assert!(by_repo(&rows, "web").ok, "the other repository is not held up: {rows:?}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_file_already_holding_what_the_spec_says_is_not_an_edit() {
+        let (root, state, task) = repos(&["api"], "openspec");
+        spec_file(&root, "openspec/changes/a/proposal.md", "Why\n");
+        put(&worktree(&root, "api").join("openspec/changes/a/proposal.md"), "Why\n");
+
+        let rows = commit_spec(&state, &task, None);
+
+        assert!(rows[0].ok && rows[0].detail.starts_with("committed"), "{rows:?}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_file_outside_the_toolsets_commit_to_is_left_out() {
+        let (root, state, task) = repos(&["api"], "openspec");
+        let mut wide = toolset::find("openspec", &[]).unwrap();
+        wide.files.push("**/*.md".into());
+        state.config.update(|c| c.toolsets.push(wide)).unwrap();
+        spec_file(&root, "openspec/changes/a/proposal.md", "Why\n");
+        spec_file(&root, "README.md", "# not the repository's readme\n");
+
+        let rows = commit_spec(&state, &task, None);
+
+        assert!(rows[0].ok && rows[0].detail.contains("README.md (outside openspec/)"), "{rows:?}");
+        assert_eq!(get(&worktree(&root, "api").join("README.md")), "# readme\n");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn what_openspec_init_leaves_beside_its_project_is_never_committed() {
         // `init` in spec/ writes each tool's skills and commands there too.
         let (root, state, task) = repos(&["api"], "openspec");
@@ -328,7 +431,7 @@ mod tests {
         assert!(rows.iter().all(|r| r.ok), "{rows:?}");
         for row in &rows {
             assert!(row.detail.starts_with("committed "), "{row:?}");
-            assert!(row.detail.ends_with("; left out, not UTF-8 text: openspec/changes/a/design.md"), "{row:?}");
+            assert!(row.detail.ends_with("; left out: openspec/changes/a/design.md (not UTF-8 text)"), "{row:?}");
         }
         let api = worktree(&root, "api");
         assert_eq!(touched(&api), ["openspec/changes/a/proposal.md"]);

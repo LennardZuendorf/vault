@@ -5,7 +5,11 @@
   "files": ["docs/superpowers/**/*.md"],
   "steps": ["docs/superpowers/plans/*.md"],
   "install": [
-    { "fetch": "https://github.com/obra/superpowers", "ref": "v{version}" },
+    {
+      "fetch": "https://github.com/obra/superpowers",
+      "ref": "v{version}",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7"
+    },
     { "skills": "skills/*" }
   ],
   "commit_to": "docs/superpowers"

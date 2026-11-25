@@ -179,12 +179,21 @@ pub(crate) fn write_checked(
 }
 
 /// Delete one file of `task`'s spec, under the lock every write takes: the
-/// Spec tab's Undo of a draft that made the file.
-pub(crate) fn remove_spec(state: &AppState, task: &Task, path: &str) -> Result<()> {
+/// Spec tab's Undo of a draft that made the file. With `base`, only while the
+/// file still holds it (false, and left alone, when an agent wrote it since).
+pub(crate) fn remove_spec(state: &AppState, task: &Task, path: &str, base: Option<&str>) -> Result<bool> {
     let task = with_spec_moved(state, task)?;
     let (t, dir) = (toolset_of(state, &task), spec_dir(state, &task));
     let _one = EDITING.lock();
-    remove_file(&dir, &t, path)
+    if let Some(base) = base {
+        match read_file(&dir, &t, path) {
+            Ok(now) if now != base => return Ok(false),
+            Ok(_) | Err(Error::NotFound(_)) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    remove_file(&dir, &t, path)?;
+    Ok(true)
 }
 
 /// What a spec tool answers, and the task whose spec it changed, so the

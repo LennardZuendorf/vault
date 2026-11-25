@@ -27,9 +27,12 @@ export const specApi = {
    */
   writeSpecFile: (taskId: string, path: string, text: string, base?: string, force?: boolean) =>
     invoke<boolean>("write_spec_file", { taskId, path, text, base, force }),
-  /** Delete one file of the spec: Undo of a draft that made it, so no empty file is left. */
-  removeSpecFile: (taskId: string, path: string) =>
-    invoke<void>("remove_spec_file", { taskId, path }),
+  /**
+   * Delete one file of the spec: Undo of a draft that made it, so no empty file
+   * is left. With `base`, not when the file holds something else (false).
+   */
+  removeSpecFile: (taskId: string, path: string, base?: string) =>
+    invoke<boolean>("remove_spec_file", { taskId, path, base }),
   /** Kiro's Draft: one part for the whole task, streamed as `spec:draft`, then written into its file. */
   draftSpec: (taskId: string, part: SpecPart, kind: SpecKind | null, requestId: string) =>
     invoke<Drafted>("draft_spec", { taskId, part, kind, requestId }),

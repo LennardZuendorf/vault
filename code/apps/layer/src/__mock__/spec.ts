@@ -376,9 +376,11 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
       return true;
     },
     remove_spec_file: (a) => {
+      const disk = files(a.taskId as string)[a.path as string];
+      if (typeof a.base === "string" && disk !== undefined && disk !== a.base) return false;
       delete files(a.taskId as string)[a.path as string];
       written(a.taskId as string);
-      return null;
+      return true;
     },
     // Retry: the install runs a moment, then has written the toolset's files.
     install_spec_toolset: (a) => {
@@ -432,7 +434,7 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
           : DRAFT[part](folders.join(", "));
       const before = f[path] ?? null;
       f[path] = await stream(a.requestId, path, text);
-      return { path, before };
+      return { path, before, after: f[path] };
     },
     apply_spec_answers: async (a) => {
       const taskId = a.taskId as string;
@@ -445,6 +447,7 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
       return {
         path,
         before,
+        after: files(taskId)[path],
         changed: [],
         added: requirements(after)
           .map((r) => r.id)

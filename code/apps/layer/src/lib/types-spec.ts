@@ -107,16 +107,19 @@ export interface SpecView {
   install: InstallState | null;
 }
 
-/** What a draft wrote, and what the file held before it (null: nothing), for Undo. */
+/** What a draft wrote (`after`), and what the file held before it (null: nothing), for Undo. */
 export interface Drafted {
   path: string;
   before: string | null;
+  after: string;
 }
 
 /** What Apply answers did to the requirements, by id, and what the file held before (SPEC-20). */
 export interface AppliedAnswers {
   path: string;
   before: string;
+  /** What it wrote: Undo puts `before` back only while the file holds this. */
+  after: string;
   changed: string[];
   added: string[];
   removed: string[];

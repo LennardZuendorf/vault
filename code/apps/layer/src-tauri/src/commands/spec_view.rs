@@ -174,10 +174,17 @@ pub async fn write_spec_file(
 }
 
 /// Delete one file of the spec, for the Undo of a draft that made it: the
-/// same refusals as a write, and nothing when it is already gone.
+/// same refusals as a write, and nothing when it is already gone. With
+/// `base`, what the draft wrote, not when an agent has changed it since
+/// (false).
 #[tauri::command]
-pub async fn remove_spec_file(app: tauri::AppHandle, task_id: String, path: String) -> Result<()> {
-    super::blocking(app, move |state| remove_spec(state, &state.config.task(&task_id)?, &path)).await
+pub async fn remove_spec_file(
+    app: tauri::AppHandle,
+    task_id: String,
+    path: String,
+    base: Option<String>,
+) -> Result<bool> {
+    super::blocking(app, move |state| remove_spec(state, &state.config.task(&task_id)?, &path, base.as_deref())).await
 }
 
 #[cfg(test)]
@@ -260,12 +267,14 @@ mod tests {
         put(&spec.join("design.md"), "# D\n");
         put(&spec.join("notes.txt"), "not Kiro's");
 
-        remove_spec(&state, &task, "design.md").unwrap();
+        assert!(!remove_spec(&state, &task, "design.md", Some("# Drafted\n")).unwrap(), "an agent changed it");
+        assert!(spec.join("design.md").exists(), "so it stays");
+        assert!(remove_spec(&state, &task, "design.md", Some("# D\n")).unwrap());
         assert!(!spec.join("design.md").exists(), "the drafted file is gone, not emptied");
-        remove_spec(&state, &task, "design.md").expect("already gone is what was asked for");
+        remove_spec(&state, &task, "design.md", None).expect("already gone is what was asked for");
 
-        assert!(remove_spec(&state, &task, "notes.txt").is_err(), "not a file Kiro keeps");
-        assert!(remove_spec(&state, &task, "../escape.md").is_err());
+        assert!(remove_spec(&state, &task, "notes.txt", None).is_err(), "not a file Kiro keeps");
+        assert!(remove_spec(&state, &task, "../escape.md", None).is_err());
         assert!(spec.join("notes.txt").exists());
         std::fs::remove_dir_all(&root).ok();
     }

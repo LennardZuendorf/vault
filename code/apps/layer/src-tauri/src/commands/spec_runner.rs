@@ -17,8 +17,9 @@ pub(crate) trait Runner {
     /// Run `argv` (never a shell string) in `cwd`; what it printed. An error
     /// when it fails or outlives `timeout`.
     fn run(&self, argv: &[String], cwd: &Path, timeout: Duration) -> Result<String>;
-    /// Clone `url` at `ref` into `into`, which does not exist yet.
-    fn fetch(&self, url: &str, r#ref: &str, into: &Path) -> Result<()>;
+    /// Clone `url` at `ref` into `into`, which does not exist yet; the
+    /// commit it got.
+    fn fetch(&self, url: &str, r#ref: &str, into: &Path) -> Result<String>;
 }
 
 /// The runner the app uses.
@@ -35,7 +36,7 @@ impl Runner for Real {
             .args(&argv[1..])
             .current_dir(cwd)
             .env_clear()
-            .envs(crate::shellenv::user_env())
+            .envs(step_env(crate::shellenv::user_env()))
             // Nothing to type into: a step that asks fails instead of waiting.
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -45,22 +46,29 @@ impl Runner for Real {
             .map_err(|e| Error::Other(format!("could not start {program}: {e}")))?;
         let out = child.stdout.take().map(read_tail);
         let err = child.stderr.take().map(read_tail);
+        // SAFETY: a negative pid is the process group, which is the step's
+        // own (process_group(0) above): what it started goes too.
+        let group = child.id() as i32;
+        let stop_group = move || unsafe { libc::kill(-group, libc::SIGKILL) };
         let deadline = Instant::now() + timeout;
         let status = loop {
             if let Some(status) = child.try_wait()? {
                 break Some(status);
             }
             if Instant::now() >= deadline {
-                // SAFETY: a negative pid is the process group, which is the
-                // step's own (process_group(0) above): what it started goes too.
-                unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+                stop_group();
                 let _ = child.wait();
                 break None;
             }
             std::thread::sleep(Duration::from_millis(20));
         };
-        let said = |h: Option<std::thread::JoinHandle<Vec<u8>>>| {
-            String::from_utf8_lossy(&h.and_then(|h| h.join().ok()).unwrap_or_default()).to_string()
+        // A step is over when its process is: what it left running in its
+        // group (a daemon, a watcher) would hold the pipes open, and the
+        // install would wait on them for ever.
+        stop_group();
+        let said = |r: Option<std::sync::mpsc::Receiver<Vec<u8>>>| {
+            let got = r.and_then(|r| r.recv_timeout(Duration::from_secs(5)).ok()).unwrap_or_default();
+            String::from_utf8_lossy(&got).to_string()
         };
         let printed = format!("{}{}", said(out), said(err));
         match status {
@@ -75,15 +83,54 @@ impl Runner for Real {
         }
     }
 
-    fn fetch(&self, url: &str, r#ref: &str, into: &Path) -> Result<()> {
-        git::clone_at(url, r#ref, into)
+    fn fetch(&self, url: &str, r#ref: &str, into: &Path) -> Result<String> {
+        git::clone_at(url, r#ref, into)?;
+        git::head_commit(into)
     }
 }
 
-/// What a pipe printed, its last 16 KB. Read to the end whatever it holds: a
-/// full pipe would stop the step.
-fn read_tail(mut from: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+/// The environment a step runs with: the user's, as a terminal has it, less
+/// what is not needed to run a package or fetch one. A step is code from the
+/// network, and a token in the environment (GITHUB_TOKEN, an API key) would
+/// be its to read.
+fn step_env(user: &std::collections::HashMap<String, String>) -> Vec<(String, String)> {
+    const KEPT: &[&str] = &[
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TMPDIR",
+        "LANG",
+        "TERM",
+        "TZ",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "NODE_EXTRA_CA_CERTS",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "NVM_DIR",
+        "VOLTA_HOME",
+        "BUN_INSTALL",
+        "PNPM_HOME",
+    ];
+    user.iter()
+        .filter(|(k, _)| KEPT.contains(&k.as_str()) || k.starts_with("LC_"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// What a pipe printed, its last 16 KB, sent when the pipe closes. Read to
+/// the end whatever it holds: a full pipe would stop the step.
+fn read_tail(mut from: impl Read + Send + 'static) -> std::sync::mpsc::Receiver<Vec<u8>> {
     const KEPT: usize = 16 * 1024;
+    let (send, got) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut kept: Vec<u8> = Vec::new();
         let mut buf = [0u8; 8 * 1024];
@@ -97,8 +144,9 @@ fn read_tail(mut from: impl Read + Send + 'static) -> std::thread::JoinHandle<Ve
             }
         }
         let from = kept.len().saturating_sub(KEPT);
-        kept.split_off(from)
-    })
+        let _ = send.send(kept.split_off(from));
+    });
+    got
 }
 
 /// The end of `text`, at most `max` bytes, from a character boundary.
@@ -159,5 +207,38 @@ mod tests {
         assert!(err.to_string().contains("did not finish"), "{err}");
         assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_step_that_leaves_something_running_on_its_pipes_is_over_when_its_process_is() {
+        let dir = std::env::temp_dir().join(format!("vl-run-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let started = std::time::Instant::now();
+
+        let argv = ["sh", "-c", "echo done; sleep 30 &"].map(String::from);
+        let out = Real.run(&argv, &dir, Duration::from_secs(60)).unwrap();
+
+        assert_eq!(out.trim(), "done");
+        assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_step_gets_the_users_path_and_home_but_no_tokens() {
+        let user: std::collections::HashMap<String, String> = [
+            ("PATH", "/opt/homebrew/bin:/usr/bin"),
+            ("HOME", "/Users/me"),
+            ("LC_ALL", "en_US.UTF-8"),
+            ("GITHUB_TOKEN", "ghp_secret"),
+            ("ANTHROPIC_API_KEY", "sk-secret"),
+            ("AWS_SECRET_ACCESS_KEY", "secret"),
+        ]
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .into();
+
+        let mut kept: Vec<String> = step_env(&user).into_iter().map(|(k, _)| k).collect();
+        kept.sort();
+
+        assert_eq!(kept, ["HOME", "LC_ALL", "PATH"]);
     }
 }

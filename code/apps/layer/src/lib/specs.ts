@@ -36,8 +36,13 @@ export interface SpecState {
   drafting: { requestId: string } | null;
   /** Repositories whose check is running (SPEC-15). */
   checking: string[];
-  /** What the last draft or Apply answers replaced, for Undo (SPEC-20). */
-  last: { path: string; before: string | null; results: AppliedAnswers | null } | null;
+  /** What the last draft or Apply answers replaced and wrote, for Undo (SPEC-20). */
+  last: {
+    path: string;
+    before: string | null;
+    after: string;
+    results: AppliedAnswers | null;
+  } | null;
   /** What the last Commit spec did in each repository, until the spec changes again. */
   committed: RepoResult[] | null;
 }
@@ -182,12 +187,19 @@ export const useSpecs = create<Specs>((set, get) => {
       // The backend checks `base` under the lock every write takes, so an agent's
       // write between the last read and this save is not overwritten unseen.
       const written = await api.writeSpecFile(taskId, path, edit.text, edit.base, force);
+      // What is typed while the save is under way is kept, over the text it saved.
+      const now = state(taskId).edits[path] ?? edit;
       if (!written) {
-        put(taskId, { edits: { ...state(taskId).edits, [path]: { ...edit, conflict: true } } });
+        put(taskId, { edits: { ...state(taskId).edits, [path]: { ...now, conflict: true } } });
         await get().load(taskId);
         return false;
       }
-      put(taskId, { edits: without(state(taskId).edits, path) });
+      put(taskId, {
+        edits:
+          now.text === edit.text
+            ? without(state(taskId).edits, path)
+            : { ...state(taskId).edits, [path]: { ...now, base: edit.text, conflict: false } },
+      });
       await get().load(taskId);
       return true;
     },
@@ -195,7 +207,9 @@ export const useSpecs = create<Specs>((set, get) => {
     draft: (taskId, part, kind) =>
       streamed(taskId, async (requestId) => {
         const done = await api.draftSpec(taskId, part, kind, requestId);
-        put(taskId, { last: { path: done.path, before: done.before, results: null } });
+        put(taskId, {
+          last: { path: done.path, before: done.before, after: done.after, results: null },
+        });
         return done.path;
       }),
     check: async (taskId, checkoutId) => {
@@ -215,18 +229,27 @@ export const useSpecs = create<Specs>((set, get) => {
       }
       await streamed(taskId, async (requestId) => {
         const done = await api.applySpecAnswers(taskId, requestId);
-        put(taskId, { last: { path: done.path, before: done.before, results: done } });
+        put(taskId, {
+          last: { path: done.path, before: done.before, after: done.after, results: done },
+        });
         return done.path;
       });
     },
     undo: async (taskId) => {
       const last = state(taskId).last;
       if (!last) return;
-      // A draft that made the file leaves none behind, not an empty one.
-      if (last.before === null) await api.removeSpecFile(taskId, last.path);
-      else await api.writeSpecFile(taskId, last.path, last.before);
-      put(taskId, { last: null, edits: without(state(taskId).edits, last.path) });
+      // A draft that made the file leaves none behind, not an empty one. Only
+      // while the file is what the draft wrote: an agent's text since is kept.
+      const undone =
+        last.before === null
+          ? await api.removeSpecFile(taskId, last.path, last.after)
+          : await api.writeSpecFile(taskId, last.path, last.before, last.after);
+      put(taskId, {
+        last: null,
+        edits: undone ? without(state(taskId).edits, last.path) : state(taskId).edits,
+      });
       await get().load(taskId);
+      if (!undone) throw new Error(`${last.path} changed since, so Undo left it as it is.`);
     },
     chunk: (requestId, path, text) => {
       const entry = Object.entries(get().byTask).find(

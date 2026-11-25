@@ -16,7 +16,7 @@ mod snapshot;
 mod store;
 mod upkeep;
 pub use landed::{all_landed, have_commit, landed_through};
-pub use only::{commit_only, committed_text, head_commit};
+pub use only::{commit_only, committed_texts, head_commit};
 pub use outgoing::{outgoing_commits, outgoing_from, outgoing_patch};
 pub use remote::{clone_at, clone_by_key, forget_origins, origin_slug, origin_slug_cached};
 pub use snapshot::fingerprint;

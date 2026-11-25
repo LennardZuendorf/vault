@@ -4,7 +4,7 @@
 //! the extra in its manifest.
 //!
 //! They read and write the working copy's files like anything else that
-//! touches the spec: a draft is written into the file (`write_spec`) and what
+//! touches the spec: a draft is written into the file (`update_spec`) and what
 //! it replaced is returned, so the tab can offer Undo. Nothing is held back
 //! as a draft elsewhere.
 //!
@@ -36,7 +36,7 @@ use super::spec_commit::{repositories, Repo};
 use super::spec_copy::{read_file, spec_dir, toolset_of};
 use super::spec_prompts::{answers_prompt, check_prompt, design_prompt, requirements_prompt, tasks_prompt};
 use super::spec_view::CheckView;
-use super::spec_work::{update_spec, with_spec_moved, write_spec};
+use super::spec_work::{update_spec, with_spec_moved};
 use super::task_context::TICKET_FILE;
 use super::AppState;
 
@@ -50,12 +50,14 @@ struct SpecDraftChunk<'a> {
     text: &'a str,
 }
 
-/// What a draft did: the file it wrote and what that file held before (None
-/// when there was none), for Undo.
+/// What a draft did: the file it wrote, what that file held before (None
+/// when there was none) and what it wrote, for Undo, which puts `before`
+/// back only while the file still holds `after`.
 #[derive(Debug, Serialize)]
 pub struct Drafted {
     pub path: String,
     pub before: Option<String>,
+    pub after: String,
 }
 
 /// What Apply answers did to the requirements (SPEC-20), by id, and what the
@@ -64,6 +66,8 @@ pub struct Drafted {
 pub struct AppliedAnswers {
     pub path: String,
     pub before: String,
+    /// What it wrote: Undo puts `before` back only while the file holds this.
+    pub after: String,
     pub changed: Vec<String>,
     pub added: Vec<String>,
     pub removed: Vec<String>,
@@ -286,7 +290,7 @@ fn draft_inner(
         })
     })?;
     say(rel, &out);
-    Ok(Drafted { path: rel.to_string(), before })
+    Ok(Drafted { path: rel.to_string(), before, after: out })
 }
 
 /// What a draft is to write: a whole text, or the tasks' parts by repository
@@ -377,10 +381,24 @@ fn apply_inner(state: &AppState, task: &Task, say: &dyn Fn(&str, &str), run: Run
         say(rel, &before);
         return Err(Error::Other("claude returned nothing".into()));
     }
+    // The run took a while, and an agent may have written the requirements
+    // in it: what it built on is then not the file, and writing it would
+    // lose theirs.
+    let wrote = update_spec(state, task, rel, |now| {
+        if now != Some(before.as_str()) {
+            return Err(Error::Other(format!(
+                "{rel} changed while the answers were applied, so nothing was written: Apply answers again"
+            )));
+        }
+        Ok(out.clone())
+    });
+    if let Err(e) = wrote {
+        say(rel, &before);
+        return Err(e);
+    }
     say(rel, &out);
-    write_spec(state, task, rel, &out)?;
     let (changed, added, removed) = compare(&before, &out);
-    Ok(AppliedAnswers { path: rel.to_string(), before, changed, added, removed })
+    Ok(AppliedAnswers { path: rel.to_string(), before, after: out, changed, added, removed })
 }
 
 /// Check one repository's work against the requirements that name it
@@ -770,10 +788,29 @@ mod tests {
             (done.path.as_str(), done.before.as_str(), done.changed.as_slice()),
             ("requirements.md", before, ["R-1".to_string()].as_slice())
         );
+        assert_eq!(done.after, get(&spec_at(&root, "requirements.md")), "what Undo checks the file against");
         assert!(get(&spec_at(&root, "requirements.md")).contains("saying when"));
         put(&spec_at(&root, "requirements.md"), "## Requirements\n- R-1: x\n");
         let none = apply_inner(&state, &task, &quiet, &mut refusing).unwrap_err();
         assert_eq!(none.to_string(), "no open question has an answer yet");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn answers_applied_while_an_agent_wrote_the_requirements_are_not_written_over_them() {
+        let (root, state, task) = world(&["api"]);
+        let file = spec_at(&root, "requirements.md");
+        put(&file, "## Requirements\n- R-1: x\n\n## Open questions\n- Q-1: When?\n  Answer: now\n");
+        let agent = file.clone();
+        let mut meanwhile = move |_: &str, _: &Path, _: bool, _: &mut dyn FnMut(&str)| {
+            put(&agent, "## Requirements\n- R-1: x, as the agent wrote it\n");
+            Ok("## Requirements\n- R-1: x, now\n".to_string())
+        };
+
+        let err = apply_inner(&state, &task, &quiet, &mut meanwhile).unwrap_err();
+
+        assert!(err.to_string().contains("changed while the answers were applied"), "{err}");
+        assert!(get(&file).contains("as the agent wrote it"));
         std::fs::remove_dir_all(&root).ok();
     }
 

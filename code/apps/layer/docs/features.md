@@ -2182,7 +2182,8 @@ requirements, then design, then tasks.
     the commands its paragraph gives.
   - **superpowers** (`superpowers`, pinned `7.0.2`): `docs/superpowers/**/*.md`;
     steps in `docs/superpowers/plans/*.md`; installed by fetching
-    `https://github.com/obra/superpowers` at `v7.0.2` and copying its skills.
+    `https://github.com/obra/superpowers` at `v7.0.2`, which must be commit
+    `22f0b463e7a5e579904dd6211a520321035526f7`, and copying its skills.
 
   The paragraphs of OpenSpec and of superpowers tell the agent where to save:
   OpenSpec's commands are run from `spec/` as
@@ -2204,7 +2205,8 @@ requirements, then design, then tasks.
   it names a folder; at least one file glob; every glob (`files`, `steps`, a
   `skills` glob, `commit_to`) a relative path inside its folder, with no `..`,
   `.`, empty segment, backslash or leading `/`; every step glob inside `files`;
-  a `run` step with a command, a `fetch` step with a URL and a ref, and each
+  a `run` step with a command, a `fetch` step with a URL and a ref (and, if it
+  names a `commit`, a full 40-character commit id), and each
   install step of exactly one kind (`run`, `fetch` or `skills`, never two). The
   field says that `run` steps execute as written, on this Mac, as the user. The
   config file is read more leniently than Settings: an entry in it that is not
@@ -2253,13 +2255,21 @@ requirements, then design, then tasks.
   threads (`commands/spec_install_run.rs`, `commands/spec_install.rs`). It runs
   the manifest's steps in order and stops at the first that fails:
   - `run`: an argv (never a shell string) in `spec/` or in the task folder,
-    with the login shell's environment, no input, and a timeout (120 s unless
-    the step says), which kills the step's whole process group;
+    with no input, a timeout (120 s unless the step says), which kills the
+    step's whole process group, and of the login shell's environment only
+    `PATH`, `HOME`, the user and shell, `TMPDIR`, the locale (`LANG`, `LC_*`,
+    `TZ`), proxies, certificate files, `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` and
+    where node managers live (`NVM_DIR`, `VOLTA_HOME`, `BUN_INSTALL`,
+    `PNPM_HOME`) (`spec_runner.rs`, `step_env`): a step is code from the
+    network, and a token or key in the environment would be its to read. A
+    step is over when its process is: what it left running in its group is
+    killed, so it cannot hold the step's output open and the install with it;
   - `fetch`: a git URL at a pinned ref, cloned once into
     `<config folder>/toolsets/<id>/<version>/` and reused by every task after,
-    beside a marker of the URL and ref it came from, so a copy fetched for
-    another is not taken for this one (a manifest that fetches must name a
-    version);
+    beside a marker of the URL, ref and commit it came from, so a copy fetched
+    for another is not taken for this one (a manifest that fetches must name a
+    version). A step that names a `commit` refuses a clone of another commit
+    (a tag moved since it was pinned), and keeps nothing of it;
   - `skills`: copy the skill folders a glob names in the fetched copy into
     `.claude/skills/` (which Claude Code reads) and `.agents/skills/` (Codex and
     OpenCode) of the task folder. A file the user already has there is kept;
@@ -2267,7 +2277,9 @@ requirements, then design, then tasks.
 
   `{version}`, `{task}` (the branch as one path segment), `{skill_dirs}` and
   `{openspec_tools}` (the OpenSpec ids of the agent CLIs in Layer's catalogue
-  that OpenSpec has an id for, today `claude,gemini,opencode`) are filled in a
+  that OpenSpec has an id for and keeps the files of in the folder it runs in,
+  today `claude,gemini,opencode`: for codex it writes to `~/.codex/prompts`,
+  which every project shares) are filled in a
   step's arguments. An install writes only in the task folder, never in a
   worktree, and records every path it wrote, those a `run` step made too (found
   by comparing the folder before and after), in `.spec-install.json`, with the
@@ -2277,6 +2289,9 @@ requirements, then design, then tasks.
   (each path in the record is checked first: inside the folder, through no link,
   not in a worktree). Nothing is installed globally or in the user's own
   `~/.claude` or `~/.agents`.
+  When the spec of an earlier build is still to be moved (SPEC-17) and the
+  move fails, nothing is installed and the error says so: the install would
+  make `spec/`, and the old spec could not be moved after.
 - **SPEC-31** An install that fails MUST NOT stop the task or its agents: how it
   went is its record, and the Spec tab says "Installing…" while it runs and
   shows the error with **Retry** when it failed (`install_spec_toolset`,
@@ -2328,22 +2343,29 @@ requirements, then design, then tasks.
   ACME-1." (`docs: update the spec for ACME-1` for a repository that writes
   conventional commits, or lints them). `spec/` mirrors a repository root: a
   file goes to the same path, except Kiro's, whose files are flat, which go
-  under `<spec_folder, else specs>/<task>/` (`<task>` as in SPEC-3). It writes
+  under `<spec_folder, else specs>/<task>/` (`<task>` as in SPEC-3). Another
+  toolset's files go only inside its `commit_to` (`{task}` filled in): one its
+  `files` list names outside that is left out and named in the row. It writes
   only files that exist in `spec/` and that the toolset lists, never deletes
   anything in a repository (an older `openspec/specs/` stays as it is), writes
   nothing under `.git` or through a link, and does not rewrite a file that is
-  already what it would write. `whole` copies every file; `own` copies the step
+  already what it would write. A repository where one of those files was
+  changed since its last commit (edited, made or deleted by hand or by an
+  agent, and not already what Commit spec would write) is refused before
+  anything is written, its row naming the files: Commit spec would write over
+  that work, and commit what was left of it as the spec. `whole` copies every file; `own` copies the step
   files with only the steps that belong to that repository and to everyone
   (SPEC-34), and what is above the first repository's section, and every other
   file whole; `none` writes nothing and says so in its row. A file that is not UTF-8
-  text is left out and named in the row's detail (`; left out, not UTF-8 text:
-  <path>`), and the repository's commit goes on without it. The result is a row
+  text is left out and named in the row's detail (`; left out: <path> (not
+  UTF-8 text)`), and the repository's commit goes on without it. The result is a row
   per repository, a failed one named with why, and the others keep their
   commit. A review task, which has no spec, is refused. Open pull requests
   (PR-1, `commands/open_prs.rs`) MUST run Commit spec first, for the
   repositories ticked whose last commit does not hold what Commit spec would
   write now (`spec_commit.rs`, `commit_changed`, `changed_since_commit`, which
-  reads the committed text), say so in that repository's row, and not open the
+  reads the committed text of every file in one `git cat-file --batch` per
+  repository, `git::committed_texts`), say so in that repository's row, and not open the
   code of one it could not commit.
 - **SPEC-16** A drafted pull request description (PR-4, `spec_work.rs`,
   `pr_section`) MUST, for each repository whose requirements it can read, say
@@ -2400,6 +2422,9 @@ requirements, then design, then tasks.
   file holds something else. The tab then marks the edit a conflict and reads the
   file again, and only Save mine (`force`) writes over it. Apply answers, which
   saves first, stops with that message instead of running over the agent's text.
+  What is typed while a save is under way stays in the editor, now over the text
+  it saved (its new `base`), so the file's next read is not taken for an agent's
+  write (`lib/specs.ts`, `save`).
 ### Working to it
 
 - **SPEC-10** The context file (PANE-13, `commands/task_context.rs`) MUST have a
@@ -2558,8 +2583,13 @@ allowed), never the agent doing the work. The prompts are in `commands/spec_prom
   repositories they name, puts in Out of scope what an answer leaves out, and
   removes each answered question; a requirement no answer touches keeps its
   text, id and repositories, a new one takes the next free id and a question with
-  no answer stays. The tab then names the requirements changed, added and
-  removed, and Undo writes back the text the call returned.
+  no answer stays. It writes only while the file still holds what the run was
+  given: an agent that wrote the requirements meanwhile keeps its text, and the
+  call fails saying to apply the answers again. The tab then names the
+  requirements changed, added and removed, and Undo writes back the text the call
+  returned. Undo, of this or of a draft, writes (or, for a draft that made the
+  file, removes, `remove_spec_file`) only while the file holds what the call wrote
+  (`after`, sent as `base`), and otherwise leaves it and says it changed since.
 - **SPEC-15** Check against spec (`check_spec`, a Check button per repository, not
   offered on an epic, EPIC-6) MUST run, for one repository, a run allowed to read
   its worktree, over the requirements that name it, the contracts it provides or

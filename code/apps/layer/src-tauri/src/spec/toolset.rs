@@ -42,8 +42,15 @@ pub struct Toolset {
 pub enum InstallStep {
     /// An argv, never a shell string.
     Run { run: Vec<String>, cwd: RunIn, timeout_secs: Option<u64> },
-    /// A git URL at a pinned ref, cloned once and reused.
-    Fetch { fetch: String, r#ref: String },
+    /// A git URL at a pinned ref, cloned once and reused. `commit`, when
+    /// given, is the commit the ref must be: a tag can be moved after it was
+    /// pinned, and the copy is kept and run by every task after.
+    Fetch {
+        fetch: String,
+        r#ref: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        commit: Option<String>,
+    },
     /// Copy skill folders (a glob in the fetched copy) into the skill
     /// directories of the agent CLIs set up on this Mac.
     Skills { skills: String },
@@ -61,6 +68,8 @@ struct RawStep {
     fetch: Option<String>,
     #[serde(rename = "ref")]
     r#ref: Option<String>,
+    #[serde(default)]
+    commit: Option<String>,
     skills: Option<String>,
 }
 
@@ -69,21 +78,30 @@ impl TryFrom<RawStep> for InstallStep {
 
     fn try_from(raw: RawStep) -> Result<Self, String> {
         match raw {
-            RawStep { run: Some(run), cwd, timeout_secs, fetch: None, r#ref: None, skills: None } => {
+            RawStep { run: Some(run), cwd, timeout_secs, fetch: None, r#ref: None, commit: None, skills: None } => {
                 Ok(InstallStep::Run { run, cwd: cwd.unwrap_or_default(), timeout_secs })
             }
             RawStep {
                 fetch: Some(fetch),
                 r#ref: Some(r#ref),
+                commit,
                 run: None,
                 cwd: None,
                 timeout_secs: None,
                 skills: None,
-            } => Ok(InstallStep::Fetch { fetch, r#ref }),
-            RawStep { skills: Some(skills), run: None, cwd: None, timeout_secs: None, fetch: None, r#ref: None } => {
-                Ok(InstallStep::Skills { skills })
+            } => Ok(InstallStep::Fetch { fetch, r#ref, commit }),
+            RawStep {
+                skills: Some(skills),
+                run: None,
+                cwd: None,
+                timeout_secs: None,
+                fetch: None,
+                r#ref: None,
+                commit: None,
+            } => Ok(InstallStep::Skills { skills }),
+            _ => {
+                Err("an install step is one of run (with cwd, timeout_secs), fetch (with ref, commit) or skills".into())
             }
-            _ => Err("an install step is one of run (with cwd, timeout_secs), fetch (with ref) or skills".into()),
         }
     }
 }
@@ -218,8 +236,13 @@ pub fn validate(t: &Toolset) -> Result<(), String> {
             InstallStep::Run { run, .. } if run.first().is_none_or(|a| a.is_empty()) => {
                 return Err(format!("{label}: a run step needs a command"));
             }
-            InstallStep::Fetch { fetch, r#ref } if fetch.trim().is_empty() || r#ref.trim().is_empty() => {
+            InstallStep::Fetch { fetch, r#ref, .. } if fetch.trim().is_empty() || r#ref.trim().is_empty() => {
                 return Err(format!("{label}: a fetch step needs a URL and a ref"));
+            }
+            InstallStep::Fetch { commit: Some(c), .. }
+                if c.len() != 40 || !c.chars().all(|ch| ch.is_ascii_hexdigit()) =>
+            {
+                return Err(format!("{label}: the commit {c:?} is not a full 40-character commit id"));
             }
             InstallStep::Skills { skills } if !glob::is_safe_rel(skills) => {
                 return Err(format!("{label}: the skills glob {skills:?} must stay inside the fetched copy"));
@@ -305,7 +328,11 @@ mod tests {
         assert_eq!(
             sp.install,
             vec![
-                InstallStep::Fetch { fetch: "https://github.com/obra/superpowers".into(), r#ref: "v{version}".into() },
+                InstallStep::Fetch {
+                    fetch: "https://github.com/obra/superpowers".into(),
+                    r#ref: "v{version}".into(),
+                    commit: Some("22f0b463e7a5e579904dd6211a520321035526f7".into()),
+                },
                 InstallStep::Skills { skills: "skills/*".into() },
             ]
         );

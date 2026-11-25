@@ -109,14 +109,11 @@ fn refused(what: impl std::fmt::Display) -> Error {
 }
 
 /// The OpenSpec tool ids of the agent CLIs given, by Layer's ids for them.
-/// OpenSpec has an id for these four, so only they are named: it refuses a
-/// `--tools` it does not know.
+/// Only those whose files OpenSpec writes into the task folder: it refuses a
+/// `--tools` it does not know, and for codex it writes to `~/.codex/prompts`,
+/// which every task and every project shares.
 fn openspec_tools_for<'a>(agents: impl IntoIterator<Item = &'a str>) -> String {
-    agents
-        .into_iter()
-        .filter(|a| matches!(*a, "claude" | "codex" | "opencode" | "gemini"))
-        .collect::<Vec<_>>()
-        .join(",")
+    agents.into_iter().filter(|a| matches!(*a, "claude" | "opencode" | "gemini")).collect::<Vec<_>>().join(",")
 }
 
 /// Install `task`'s toolset: each step of its manifest in order, stopping at
@@ -127,8 +124,10 @@ pub(crate) fn install(state: &AppState, task: &Task, runner: &dyn Runner) -> Ins
     // absent (SPEC-17), and the pin below and the install itself would make it,
     // so a task given a repository (or its install retried) before its Spec
     // tab was opened would lose its approved spec for good. The move also pins
-    // the task to Kiro, which is what it moves.
-    let task = &with_spec_moved(state, task).unwrap_or_else(|_| task.clone());
+    // the task to Kiro, which is what it moves. A move that fails stops the
+    // install: it would make `spec/`, and the old spec could never move after.
+    let moved = with_spec_moved(state, task);
+    let task = moved.as_ref().unwrap_or(task);
     let toolset = toolset_of(state, task);
     let mut out = InstallState {
         toolset: toolset.id.clone(),
@@ -137,6 +136,12 @@ pub(crate) fn install(state: &AppState, task: &Task, runner: &dyn Runner) -> Ins
         error: None,
         running: false,
     };
+    if let Err(e) = &moved {
+        out.error = Some(format!(
+            "the spec from before could not be moved into spec/ ({e}), so nothing is installed: Retry once it can be"
+        ));
+        return out;
+    }
     let Some(_busy) = Busy::take(&task.id) else {
         out.running = true;
         return out;
@@ -238,9 +243,9 @@ impl<'a> Work<'a> {
                     };
                     self.run_step(runner, &argv, &at, timeout)?;
                 }
-                InstallStep::Fetch { fetch, r#ref } => {
+                InstallStep::Fetch { fetch, r#ref, commit } => {
                     let (url, r#ref) = (toolset::expand(fetch, &vars), toolset::expand(r#ref, &vars));
-                    self.fetched = Some(self.fetch(runner, toolset, &url, &r#ref)?);
+                    self.fetched = Some(self.fetch(runner, toolset, &url, &r#ref, commit.as_deref())?);
                 }
                 InstallStep::Skills { skills } => {
                     let cache =
@@ -269,7 +274,16 @@ impl<'a> Work<'a> {
     /// The fetched copy for `url` at `ref`: the one kept from an earlier
     /// install, or one made now. A copy is cloned beside its folder and moved
     /// into place, so one that stopped halfway is never taken for whole.
-    fn fetch(&mut self, runner: &dyn Runner, toolset: &Toolset, url: &str, r#ref: &str) -> Result<PathBuf> {
+    /// With `commit`, the ref must be that commit: a tag moved since it was
+    /// pinned is refused, and nothing it holds is kept.
+    fn fetch(
+        &mut self,
+        runner: &dyn Runner,
+        toolset: &Toolset,
+        url: &str,
+        r#ref: &str,
+        commit: Option<&str>,
+    ) -> Result<PathBuf> {
         let version = toolset
             .version
             .as_deref()
@@ -278,7 +292,7 @@ impl<'a> Work<'a> {
         let cache = kept.join(version);
         // The URL and ref it came from: a copy fetched for another is not
         // this one, whatever its folder is called.
-        let marker = format!("{url}\n{}\n", r#ref);
+        let marker = format!("{url}\n{}\n{}\n", r#ref, commit.unwrap_or(""));
         let source = kept.join(format!("{version}{SOURCE}"));
         let _one_at_a_time = FETCHING.lock();
         if std::fs::read_to_string(&source).is_ok_and(|m| m == marker) && cache.is_dir() {
@@ -292,7 +306,13 @@ impl<'a> Work<'a> {
         let _ = std::fs::remove_dir_all(&cache);
         let stage = kept.join(format!(".fetching-{}", uuid::Uuid::new_v4()));
         // The marker last: a copy that stopped halfway has none.
-        let made = runner.fetch(url, r#ref, &stage).and_then(|()| {
+        let made = runner.fetch(url, r#ref, &stage).and_then(|got| {
+            if let Some(pinned) = commit.filter(|c| !c.eq_ignore_ascii_case(&got)) {
+                return Err(refused(format!(
+                    "{url} at {} is commit {got}, not the pinned {pinned}; it was moved, so it is not used",
+                    r#ref
+                )));
+            }
             std::fs::rename(&stage, &cache)?;
             Ok(std::fs::write(&source, &marker)?)
         });
@@ -585,6 +605,8 @@ mod tests {
         cache: Vec<(&'static str, &'static str)>,
         /// Links the fetched copy holds, by name, and what they point at.
         links: Vec<(&'static str, PathBuf)>,
+        /// The tag was moved: a fetch gets another commit than the pinned one.
+        moved: bool,
     }
 
     impl Runner for Fake {
@@ -599,7 +621,7 @@ mod tests {
             Ok("initialised".into())
         }
 
-        fn fetch(&self, url: &str, r#ref: &str, into: &Path) -> Result<()> {
+        fn fetch(&self, url: &str, r#ref: &str, into: &Path) -> Result<String> {
             self.fetched.borrow_mut().push((url.into(), r#ref.into()));
             for (rel, text) in &self.cache {
                 put(&into.join(rel), text);
@@ -609,7 +631,7 @@ mod tests {
                 std::fs::create_dir_all(at.parent().unwrap()).unwrap();
                 std::os::unix::fs::symlink(target, at).unwrap();
             }
-            Ok(())
+            Ok(if self.moved { "0".repeat(40) } else { "22f0b463e7a5e579904dd6211a520321035526f7".into() })
         }
     }
 
@@ -773,11 +795,8 @@ mod tests {
     }
 
     #[test]
-    fn openspec_is_told_only_the_agent_clis_it_has_an_id_for() {
-        assert_eq!(
-            openspec_tools_for(["claude", "codex", "copilot", "gemini", "opencode"]),
-            "claude,codex,gemini,opencode"
-        );
+    fn openspec_is_told_only_the_agent_clis_whose_files_it_keeps_in_the_task() {
+        assert_eq!(openspec_tools_for(["claude", "codex", "copilot", "gemini", "opencode"]), "claude,gemini,opencode");
         assert_eq!(openspec_tools_for(["copilot"]), "");
     }
 
@@ -836,12 +855,54 @@ mod tests {
         let fake = superpowers_cache();
         assert!(install(&state, &task, &fake).ok);
         let mut custom = toolset::find("superpowers", &[]).unwrap();
-        custom.install[0] = InstallStep::Fetch { fetch: "https://example.com/fork".into(), r#ref: "v7.0.2".into() };
+        custom.install[0] =
+            InstallStep::Fetch { fetch: "https://example.com/fork".into(), r#ref: "v7.0.2".into(), commit: None };
         state.config.update(|c| c.toolsets.push(custom)).unwrap();
 
         assert!(install(&state, &task, &fake).ok);
 
         assert_eq!(fake.fetched.borrow().len(), 2, "a different URL under the same version is fetched again");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_tag_moved_since_it_was_pinned_is_refused_and_nothing_of_it_is_kept() {
+        let (root, state, task) = world(&["api"], "superpowers");
+        let fake = Fake { moved: true, ..superpowers_cache() };
+
+        let done = install(&state, &task, &fake);
+
+        assert!(!done.ok, "{done:?}");
+        assert!(done.error.as_deref().is_some_and(|e| e.contains("not the pinned")), "{done:?}");
+        assert!(!Path::new(&task.root).join(".claude/skills/debugging/SKILL.md").exists());
+        let kept = root.join("toolsets/superpowers");
+        assert!(!kept.join("7.0.2").exists(), "the moved copy is not cached");
+        assert!(
+            std::fs::read_dir(&kept)
+                .unwrap()
+                .flatten()
+                .all(|e| !e.file_name().to_string_lossy().starts_with(".fetching")),
+            "nor left half-way"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn an_old_spec_that_cannot_be_moved_stops_the_install_so_it_can_move_later() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, state, task) = world(&["api"], "openspec");
+        let dir = PathBuf::from(&task.root);
+        put(&dir.join(".spec-drafts/approved/requirements.md"), "# Approved\n");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let fake = Fake::default();
+
+        let done = install(&state, &task, &fake);
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!done.ok, "{done:?}");
+        assert!(done.error.as_deref().is_some_and(|e| e.contains("could not be moved")), "{done:?}");
+        assert!(fake.ran.borrow().is_empty(), "nothing ran");
+        assert!(!dir.join("spec").exists(), "and spec/ was not made, so the move can happen later");
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -873,7 +934,7 @@ mod tests {
                 put(&cwd.join("openspec/half.md"), "h");
                 self.0.run(argv, cwd, timeout)
             }
-            fn fetch(&self, url: &str, r#ref: &str, into: &Path) -> Result<()> {
+            fn fetch(&self, url: &str, r#ref: &str, into: &Path) -> Result<String> {
                 self.0.fetch(url, r#ref, into)
             }
         }
