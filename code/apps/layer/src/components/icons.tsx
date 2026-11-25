@@ -8,6 +8,8 @@ import {
   ChevronRight,
   Coffee,
   Copy,
+  Eye,
+  EyeOff,
   Globe,
   KeyRound,
   PanelLeft,
@@ -62,6 +64,9 @@ export const ForwardIcon = icon(ArrowRight);
 export const ReloadIcon = icon(RotateCw);
 /** A camera, for a screenshot of the browser's tab (BRW-22). */
 export const CameraIcon = icon(Camera);
+/** A password field shown, or hidden again. */
+export const EyeIcon = icon(Eye);
+export const EyeOffIcon = icon(EyeOff);
 /** A key, for a saved sign-in. */
 export const KeyIcon = icon(KeyRound);
 /** Two arrows chasing each other, for a loop (§21). */

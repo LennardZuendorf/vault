@@ -1250,6 +1250,16 @@ const answer: Record<string, Answer> = {
     world.settings.browser_sign_ins.push(saved);
     return saved;
   },
+  change_browser_sign_in: (a) => {
+    const all = world.settings.browser_sign_ins;
+    const site = (a.site as string).trim().toLowerCase();
+    const username = (a.username as string).trim();
+    if (all.some((s) => s.id !== a.id && s.site === site && s.username === username))
+      throw `a sign-in for ${username} on ${site} is already saved`;
+    const changed = { id: a.id as string, site, username };
+    world.settings.browser_sign_ins = all.map((s) => (s.id === a.id ? changed : s));
+    return changed;
+  },
   forget_browser_sign_in: (a) => {
     world.settings.browser_sign_ins = world.settings.browser_sign_ins.filter((s) => s.id !== a.id);
     return null;

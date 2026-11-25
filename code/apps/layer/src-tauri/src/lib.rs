@@ -471,6 +471,7 @@ pub fn run() {
             commands::browser_sign_in_window,
             commands::browser_sign_in_done,
             commands::add_browser_sign_in,
+            commands::change_browser_sign_in,
             commands::forget_browser_sign_in,
             commands::browser_sign_in_form,
             commands::browser_save_sign_in,

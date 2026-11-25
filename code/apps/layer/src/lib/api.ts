@@ -580,6 +580,9 @@ export const api = {
   browserSignInDone: () => invoke<void>("browser_sign_in_done"),
   addBrowserSignIn: (site: string, username: string, password: string) =>
     invoke<SavedSignIn>("add_browser_sign_in", { site, username, password }),
+  /** An empty or absent password keeps the saved one (BRW-18). */
+  changeBrowserSignIn: (id: string, site: string, username: string, password: string | null) =>
+    invoke<SavedSignIn>("change_browser_sign_in", { id, site, username, password }),
   forgetBrowserSignIn: (id: string) => invoke<void>("forget_browser_sign_in", { id }),
   /** The site and username the page's sign-in form holds; never its password. */
   browserSignInForm: (taskId: string) => invoke<SignInForm>("browser_sign_in_form", { taskId }),

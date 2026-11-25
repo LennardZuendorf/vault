@@ -1,10 +1,18 @@
 import { useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
+import { BrowserSignIns } from "./BrowserSignIns";
 import { CloseIcon } from "./icons";
 import { ErrorMessage, Field, useFailure } from "./ui";
 
-/** Settings → Browser: the sites agents may use besides this machine's (BRW-3). */
+/**
+ * Settings → Browser: the sites agents may use besides this machine's
+ * (BRW-3), and the saved sign-ins (BRW-18).
+ *
+ * The sites are chips, not a row each: fourteen hosts as fourteen tall rows
+ * pushed the field to add one, and the explanation, below the dialog's
+ * fold. The field to add one comes first, as the action the list needs.
+ */
 export function BrowserSettings() {
   const sites = useStore((s) => s.settings?.browser_sites) ?? [];
   const refreshSettings = useStore((s) => s.refreshSettings);
@@ -12,10 +20,10 @@ export function BrowserSettings() {
   const failure = useFailure();
   const [adding, setAdding] = useState("");
 
-  async function save(next: string[]) {
+  async function remove(site: string) {
     failure.clear();
     try {
-      await api.setBrowserSites(next);
+      await api.setBrowserSites(sites.filter((x) => x !== site));
       await refreshSettings();
     } catch (e) {
       failure.fail(e);
@@ -42,149 +50,45 @@ export function BrowserSettings() {
   return (
     <>
       <Field
-        label="Sites agents may use"
-        hint={
-          <>
-            Agents open this Mac's pages whenever they like, and other sites only as listed here or
-            asked for in a task's browser: a page's text can tell an agent what to do. A site covers
-            its subdomains.
-          </>
-        }
+        label="Sites agents may open"
+        hint="A page's text can tell an agent what to do, so agents open only these. A site covers its subdomains."
       >
-        <div className="col">
-          {sites.length === 0 && (
-            <span className="muted">None yet: only this machine's pages.</span>
-          )}
-          {sites.map((s) => (
-            <div key={s} className="row site-row">
-              <code>{s}</code>
-              <div className="spacer" />
-              <button
-                className="ui-button ui-icon-button"
-                title={`Stop agents using ${s}`}
-                onClick={() => void save(sites.filter((x) => x !== s))}
-              >
-                <CloseIcon />
-              </button>
-            </div>
-          ))}
-          <form className="row" onSubmit={(e) => void add(e)}>
-            <input
-              className="ui-field"
-              value={adding}
-              placeholder="github.com"
-              spellCheck={false}
-              onChange={(e) => setAdding(e.target.value)}
-            />
-            <button className="ui-button" disabled={!adding.trim()}>
-              Allow
-            </button>
-          </form>
-          <ErrorMessage>{failure.error}</ErrorMessage>
-        </div>
-      </Field>
-      <SignIns />
-    </>
-  );
-}
-
-/** Saved sign-ins (BRW-18): agents have them filled in, and never see the password. */
-function SignIns() {
-  const signIns = useStore((s) => s.settings?.browser_sign_ins) ?? [];
-  const refreshSettings = useStore((s) => s.refreshSettings);
-  const failure = useFailure();
-  const [site, setSite] = useState("localhost");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function add(e: React.FormEvent) {
-    e.preventDefault();
-    if (busy) return;
-    setBusy(true);
-    failure.clear();
-    try {
-      await api.addBrowserSignIn(site.trim(), username.trim(), password);
-      await refreshSettings();
-      setUsername("");
-      setPassword("");
-    } catch (err) {
-      failure.fail(err);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function forget(id: string) {
-    failure.clear();
-    try {
-      await api.forgetBrowserSignIn(id);
-      await refreshSettings();
-    } catch (e) {
-      failure.fail(e);
-    }
-  }
-
-  return (
-    <Field
-      label="Saved sign-ins"
-      hint={
-        <>
-          The app types the password in, so an agent never sees it, and keeps it in the keychain.{" "}
-          <code>localhost</code> is every port of this Mac; elsewhere, that host only. Use test
-          accounts.
-        </>
-      }
-    >
-      <div className="col">
-        {signIns.length === 0 && <span className="muted">None saved.</span>}
-        {signIns.map((s) => (
-          <div key={s.id} className="row site-row">
-            <code>{s.site}</code>
-            <span>{s.username}</span>
-            <div className="spacer" />
-            <button
-              className="ui-button ui-icon-button"
-              title={`Forget the sign-in for ${s.username} on ${s.site}`}
-              onClick={() => void forget(s.id)}
-            >
-              <CloseIcon />
-            </button>
-          </div>
-        ))}
-        <form className="row" onSubmit={(e) => void add(e)}>
+        <form className="browser-add" onSubmit={(e) => void add(e)}>
           <input
             className="ui-field"
-            value={site}
-            placeholder="localhost"
+            value={adding}
+            placeholder="Allow a site, like github.com"
+            aria-label="Allow a site"
             spellCheck={false}
-            style={{ width: 140 }}
-            onChange={(e) => setSite(e.target.value)}
+            onChange={(e) => setAdding(e.target.value)}
           />
-          <input
-            className="ui-field"
-            value={username}
-            placeholder="username or email"
-            spellCheck={false}
-            onChange={(e) => setUsername(e.target.value)}
-          />
-          <input
-            className="ui-field"
-            type="password"
-            value={password}
-            placeholder="password"
-            autoComplete="off"
-            onChange={(e) => setPassword(e.target.value)}
-          />
-          <button
-            className="ui-button"
-            disabled={busy || !site.trim() || !username.trim() || !password}
-          >
-            Save
+          <button className="ui-button" disabled={!adding.trim()}>
+            Allow
           </button>
         </form>
+        <ul className="site-chips">
+          {/* What needs no allowing, said where the list is rather than in
+              a paragraph under it. */}
+          <li className="ui-chip site-chip site-chip-mac" title="localhost, 127.0.0.1 and [::1]">
+            This Mac, always
+          </li>
+          {sites.map((s) => (
+            <li key={s} className="ui-chip site-chip">
+              <code>{s}</code>
+              <button
+                className="site-chip-remove"
+                aria-label={`Stop agents opening ${s}`}
+                title={`Stop agents opening ${s}`}
+                onClick={() => void remove(s)}
+              >
+                <CloseIcon size={12} />
+              </button>
+            </li>
+          ))}
+        </ul>
         <ErrorMessage>{failure.error}</ErrorMessage>
-      </div>
-    </Field>
+      </Field>
+      <BrowserSignIns />
+    </>
   );
 }

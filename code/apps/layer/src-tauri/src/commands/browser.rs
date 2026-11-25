@@ -339,6 +339,20 @@ pub async fn add_browser_sign_in(
     super::blocking(app, move |state| sign_in::save(state, &site, &username, &password)).await
 }
 
+/// Change a saved sign-in from Settings → Browser (BRW-18): its site and
+/// username, and its password only when a new one is typed. Off the command
+/// thread: the keychain can stop and ask.
+#[tauri::command]
+pub async fn change_browser_sign_in(
+    app: AppHandle,
+    id: String,
+    site: String,
+    username: String,
+    password: Option<String>,
+) -> Result<SavedSignIn> {
+    super::blocking(app, move |state| sign_in::change(state, &id, &site, &username, password.as_deref())).await
+}
+
 /// Forget a saved sign-in, its password with it.
 #[tauri::command]
 pub async fn forget_browser_sign_in(app: AppHandle, id: String) -> Result<()> {

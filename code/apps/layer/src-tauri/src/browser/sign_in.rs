@@ -107,6 +107,37 @@ pub fn save(state: &AppState, site: &str, username: &str, password: &str) -> Res
     Ok(saved)
 }
 
+/// Change a saved sign-in in place (BRW-18): its site, its username, and its
+/// password only when a new one is given. It keeps its id, so its keychain
+/// item stays where it is. Before, the only way to a new password was to
+/// forget the sign-in and type all of it again. Blocking.
+pub fn change(state: &AppState, id: &str, site: &str, username: &str, password: Option<&str>) -> Result<SavedSignIn> {
+    let site = site_of(site)
+        .ok_or_else(|| Error::Other(format!("{site} is not a site: give one like localhost or app.example.com")))?;
+    let username = username.trim();
+    if username.is_empty() {
+        return Err(Error::Other("a sign-in needs a username".into()));
+    }
+    let saved = state.config.read().browser.sign_ins;
+    if !saved.iter().any(|s| s.id == id) {
+        return Err(Error::Other("that sign-in is no longer saved".into()));
+    }
+    if saved.iter().any(|s| s.id != id && s.site == site && s.username == username) {
+        return Err(Error::Other(format!("a sign-in for {username} on {site} is already saved")));
+    }
+    if let Some(password) = password.filter(|p| !p.is_empty()) {
+        secrets::set(&secrets::sign_in_key(id), password)?;
+    }
+    let changed = SavedSignIn { id: id.to_string(), site, username: username.to_string() };
+    let kept = changed.clone();
+    state.config.update(|c| {
+        if let Some(s) = c.browser.sign_ins.iter_mut().find(|s| s.id == kept.id) {
+            *s = kept;
+        }
+    })?;
+    Ok(changed)
+}
+
 /// Forget a sign-in, its password with it. Blocking.
 pub fn forget(state: &AppState, id: &str) -> Result<()> {
     secrets::delete(&secrets::sign_in_key(id))?;
@@ -349,6 +380,37 @@ mod tests {
         assert!(!is_for("example.com", "https://app.example.com/"), "a subdomain is another site");
         assert!(!is_for("app.example.com", "https://evil.test/?app.example.com"));
         assert!(!is_for("localhost", "http://localhost@evil.test/"));
+    }
+
+    #[test]
+    fn a_sign_in_changes_in_place_and_keeps_its_password_unless_given_a_new_one() {
+        let (app, root, _) = crate::browser::tests::app_in_task();
+        let state = app.state::<AppState>();
+        let ada = save(&state, "localhost", "ada@acme.test", "first-pw").unwrap();
+        save(&state, "localhost", "bo@acme.test", "bo-pw").unwrap();
+        let key = secrets::sign_in_key(&ada.id);
+
+        let moved = change(&state, &ada.id, "localhost:4200", "ada@acme.test", None).unwrap();
+        assert_eq!((moved.id.as_str(), moved.site.as_str()), (ada.id.as_str(), "localhost:4200"));
+        assert_eq!(secrets::get(&key).unwrap().as_deref(), Some("first-pw"), "no password given: kept");
+
+        change(&state, &ada.id, "localhost:4200", "ada@acme.test", Some("")).unwrap();
+        assert_eq!(secrets::get(&key).unwrap().as_deref(), Some("first-pw"), "an empty one is kept too");
+
+        change(&state, &ada.id, "localhost:4200", "ada@acme.test", Some("second-pw")).unwrap();
+        assert_eq!(secrets::get(&key).unwrap().as_deref(), Some("second-pw"));
+
+        let taken = change(&state, &ada.id, "localhost", "bo@acme.test", None).unwrap_err();
+        assert!(taken.to_string().contains("already saved"), "{taken}");
+        let gone = change(&state, "no-such-id", "localhost", "cy@acme.test", None).unwrap_err();
+        assert!(gone.to_string().contains("no longer saved"), "{gone}");
+
+        let kept = state.config.read().browser.sign_ins;
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().any(|s| s.id == ada.id && s.site == "localhost:4200"));
+        forget(&state, &ada.id).unwrap();
+        state.ptys.shutdown(Duration::from_secs(1));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -1959,7 +1959,11 @@ ring marks where it clicked.
   in `config.json`. A site is a host with or without a port: `localhost`
   alone is every port of this machine's (one app runs on :4200 for one
   task and :4210 for another), and a site elsewhere without a port is
-  its default port only. A site's subdomains are other sites.
+  its default port only. A site's subdomains are other sites. A saved
+  sign-in MAY be changed in place: its site, its username, and its
+  password only when a new one is typed (an empty one keeps it). The
+  password is never shown again, and a change that would save the same
+  account on the same site twice is refused.
 - **BRW-19** An agent MUST NOT see a saved password. `browser_sign_in`
   has the app fill the username, the password, or both (a login asks
   for them on one page or on two) into the fields the agent names, and
