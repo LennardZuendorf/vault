@@ -53,6 +53,16 @@ fn find_in(roots: &[PathBuf]) -> Option<PathBuf> {
 pub const MISSING: &str = "No Chrome or Chromium is installed in /Applications or ~/Applications. \
      The browser runs on Google Chrome (or Chromium): install it, and the browser starts the next time it is needed.";
 
+/// What both ways of running the browser share, on the app's own profile.
+///
+/// `--use-mock-keychain`: Chrome keeps the key its cookies are locked with
+/// in a fixed place rather than the keychain. Chrome for Testing is signed
+/// for no one, so each new version was a new app to macOS, and it asked for
+/// "Chromium Safe Storage" again after every update (BRW-1). The profile is
+/// the app's own, in the user's own folder, and was never shared with
+/// another Chrome.
+const PROFILE_ARGS: &[&str] = &["--no-first-run", "--no-default-browser-check", "--use-mock-keychain"];
+
 /// The running browser's process.
 pub struct Process {
     child: Child,
@@ -72,9 +82,8 @@ pub fn launch(binary: &Path, profile: &Path) -> Result<(Process, PipeWriter, Pip
     cmd.arg("--headless")
         .arg("--remote-debugging-pipe")
         .arg(format!("--user-data-dir={}", profile.display()))
+        .args(PROFILE_ARGS)
         .args([
-            "--no-first-run",
-            "--no-default-browser-check",
             // No sync, no update checks, no GCM registration: a profile no
             // one signs in to has nothing to sync, and each of these logs
             // errors or phones home on every start.
@@ -130,7 +139,7 @@ pub fn launch(binary: &Path, profile: &Path) -> Result<(Process, PipeWriter, Pip
 /// driving it (BRW-23): no pipe, not headless. Google signs no one in to a
 /// browser a program drives; the cookies this one keeps are the profile's,
 /// and the headless browser reads them once it starts again. Both are the
-/// same browser (`find`) and use its key in the keychain, so one can read
+/// same browser (`find`) with the same `PROFILE_ARGS`, so one can read
 /// what the other wrote.
 ///
 /// Blocking: spawning waits on the disk. Call it through `off_runtime`.
@@ -139,7 +148,8 @@ pub fn launch_window(binary: &Path, profile: &Path, url: &str) -> Result<Process
     use std::os::unix::process::CommandExt;
     let child = Command::new(binary)
         .arg(format!("--user-data-dir={}", profile.display()))
-        .args(["--no-first-run", "--no-default-browser-check", "--disable-sync", url])
+        .args(PROFILE_ARGS)
+        .args(["--disable-sync", url])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -243,5 +253,14 @@ mod tests {
     #[test]
     fn nothing_is_run_without_a_chrome() {
         assert_eq!(find_in(&installed(&[])), None);
+    }
+
+    /// The headless browser and the sign-in window both lock cookies
+    /// without the keychain: with it, macOS asked for "Chromium Safe
+    /// Storage" after every update, and one that locked them with another
+    /// key could not read what the other wrote.
+    #[test]
+    fn the_browser_never_asks_the_keychain_for_its_cookies_key() {
+        assert!(PROFILE_ARGS.contains(&"--use-mock-keychain"));
     }
 }

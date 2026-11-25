@@ -1824,7 +1824,10 @@ ring marks where it clicked.
   Testing or Chromium MUST be run over Google Chrome when one is installed:
   macOS takes a headless Google Chrome for the user's own, and while it
   ran, opening Chrome from the Dock or Finder showed nothing. Without any
-  Chrome, the tools say what to install.
+  Chrome, the tools say what to install. The profile's cookies are not
+  locked with a key in the keychain (`--use-mock-keychain`): Chrome for
+  Testing is signed for no one, so macOS took each new version for a new
+  app and asked for "Chromium Safe Storage" again.
 - **BRW-2** An agent's tools MUST act on its own task's tab, found from the
   pane that calls (`X-Villain-Pane`). The chats have one browser between
   them, as a task's agents share the task's, shown beside them by the
