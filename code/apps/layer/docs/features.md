@@ -4398,9 +4398,11 @@ Layer is back.
   `<worktree root>/_chat/routines/<routine>/<run>`, with the routine's
   prompt as its first message, in auto mode where its agent has one, on
   the routine's model and effort. It gets a chat's context and Layer's
-  MCP tools, as any chat (§5). It is not listed in Chat, does not count
-  as a chat at work, is not put back at launch (PANE-7) and is not heard
-  by the Henchman (HEN-9).
+  MCP tools, as any chat (§5), and its context also says it is this
+  routine's run: its name, id and schedule, and that doing something
+  automatically means changing this routine, not making another. It is
+  not listed in Chat, does not count as a chat at work, is not put back
+  at launch (PANE-7) and is not heard by the Henchman (HEN-9).
 - **ROUT-5** A routine that is on MUST run when its time comes while
   Layer runs, with the window open or closed. A routine made, turned on,
   or given another time waits for its next time; it does not run at
