@@ -42,6 +42,7 @@ export interface CheckRun {
 }
 
 export interface CheckoutPr {
+  source?: string | null;
   checkout_id: string;
   repo: string;
   pr: PullRequest | null;
@@ -115,6 +116,7 @@ export interface FailedCheck {
 
 /** What reviewers and CI have said on one repository's open PR. */
 export interface RepoFeedback {
+  source?: string | null;
   checkout_id: string;
   repo: string;
   number: number;
@@ -170,6 +172,7 @@ export interface TaskPrs {
 
 /** A pull request waiting on a person or a team (REV-9). */
 export interface ReviewRequest {
+  source?: string;
   repo: string;
   number: number;
   title: string;
@@ -203,8 +206,14 @@ export interface TeamReviews {
 }
 
 export interface ReviewQueue {
+  sources: SourceReviews[];
+}
+
+export interface SourceReviews {
+  source: string;
   mine: ReviewRequest[];
   mine_more: boolean;
+  mine_error: string | null;
   /** Null when no review team is configured. */
   team: TeamReviews | null;
   /** The pull requests you opened (REV-4). Always sent to the view. */
@@ -218,6 +227,7 @@ export interface AuthoredPrs {
 }
 
 export interface AuthoredPr {
+  source?: string;
   /** `owner/name`. */
   repo: string;
   number: number;
@@ -244,6 +254,7 @@ export interface AuthoredPr {
 
 /** A screenshot a drafted description came with (PR-4). `preview` is the image as a data URL. */
 export interface DraftImage {
+  checkout_id?: string;
   path: string;
   caption: string;
   repo: string | null;

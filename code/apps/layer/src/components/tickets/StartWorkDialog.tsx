@@ -139,6 +139,7 @@ export function StartWorkDialog({
         suffix || null,
         base.trim() || null,
         epic,
+        issue.url,
       );
       // Refresh the issues too: the ticket has usually just moved, and the
       // status on the card is the thing the move was meant to correct.

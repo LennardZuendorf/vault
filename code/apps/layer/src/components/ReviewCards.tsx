@@ -1,6 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState, type MouseEvent } from "react";
 import { api } from "../lib/api";
+import { githubPrKey, githubPrRepo, githubRepoLabel } from "../lib/github-source";
 import { goTo } from "../lib/goto";
 import { menuKeys, pressKeys } from "../lib/press";
 import { ago } from "../lib/time";
@@ -10,10 +11,7 @@ import { BusyLabel, ErrorMessage, useFailure } from "./ui";
 
 const NO_BROWSER = "Couldn't open the browser. Try again.";
 
-/** How a banner names a pull request: `owner/repo#n`, as `news.rs` writes it. */
-export function identity(pr: { repo: string; number: number }): string {
-  return pr.repo ? `${pr.repo}#${pr.number}` : `#${pr.number}`;
-}
+export const identity = githubPrKey;
 
 /**
  * A pull request waiting on your review, and what it asks of you (REV-9).
@@ -48,7 +46,7 @@ export function ReviewCard({
       title={pr.url}
     >
       <div className="top">
-        <span className="repo">{pr.repo || "pull request"}</span>
+        <span className="repo">{githubRepoLabel(pr) || "pull request"}</span>
         <span className="num">#{pr.number}</span>
         {pr.draft && <span className="ui-chip">draft</span>}
         <span className="spacer" />
@@ -148,7 +146,7 @@ export function AuthoredCard({
     setStarting(true);
     failure.clear();
     try {
-      const made = await api.taskForPr(pr.repo, pr.head, pr.base, pr.title);
+      const made = await api.taskForPr(githubPrRepo(pr), pr.head, pr.base, pr.title, pr.url);
       // In the list before going to it: a task the store has not seen yet
       // routes to the overview instead.
       await refreshTasks();
@@ -177,7 +175,7 @@ export function AuthoredCard({
       title={task ? `Open ${task.name}` : pr.url}
     >
       <div className="top">
-        <span className="repo">{pr.repo}</span>
+        <span className="repo">{githubRepoLabel(pr)}</span>
         <span className="num">#{pr.number}</span>
         <span className="spacer" />
         <span className="when">{ago(pr.updated_at)}</span>

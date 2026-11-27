@@ -180,12 +180,16 @@ export function PrPanel({
   /** What the review step before pushing asks a second look at (PR-11). */
   const [flags, setFlags] = useState(0);
 
+  const sourcesAtRender = JSON.stringify(settings?.github_sources ?? []);
   const load = useCallback(async () => {
     if (!settings?.github_connected) return;
     setLoading(true);
     clear();
     try {
-      setTaskPrs(task.id, await api.githubTaskPrs(task.id));
+      const got = await api.githubTaskPrs(task.id);
+      if (JSON.stringify(useStore.getState().settings?.github_sources ?? []) === sourcesAtRender) {
+        setTaskPrs(task.id, got);
+      }
     } catch (e) {
       fail(e);
     } finally {
@@ -194,7 +198,7 @@ export function PrPanel({
       setAskedFor(task.id);
       setLoading(false);
     }
-  }, [task.id, settings?.github_connected, fail, clear, setTaskPrs]);
+  }, [task.id, settings?.github_connected, fail, clear, setTaskPrs, sourcesAtRender]);
 
   useEffect(() => {
     void load();
@@ -252,9 +256,10 @@ export function PrPanel({
   }
 
   async function retarget(row: CheckoutPr) {
+    if (!row.pr) return;
     try {
       // The row shows the new base once it is read again (NOTE-7).
-      await api.githubRetargetPr(row.checkout_id);
+      await api.githubRetargetPr(row.checkout_id, row.pr.url);
       await load();
     } catch (e) {
       fail(e);
@@ -263,8 +268,9 @@ export function PrPanel({
 
   /** Draft to ready for review and back (PR-15); the card shows it once read again. */
   async function markDraft(row: CheckoutPr, draft: boolean) {
+    if (!row.pr) return;
     try {
-      await api.githubSetPrDraft(row.checkout_id, row.pr!.number, draft);
+      await api.githubSetPrDraft(row.checkout_id, row.pr.number, draft, row.pr.url);
       await load();
     } catch (e) {
       fail(e);
@@ -295,8 +301,7 @@ export function PrPanel({
         draft,
         leftOut,
       );
-      const skipped = rows.filter((r) => leftOut.includes(r.checkout_id)).map((r) => r.repo);
-      const results = [...opened, ...(await description.addImages(task.id, opened, skipped))];
+      const results = [...opened, ...(await description.addImages(task.id, opened, leftOut, rows))];
       reportRepoResults(dialog.fail, results);
       // A repository that refused keeps the dialog open, its reason in it.
       if (results.length > 0 && results.every((r) => r.ok)) setCreating(false);
@@ -313,7 +318,10 @@ export function PrPanel({
       <div className="empty">
         <h2>GitHub not connected</h2>
         <p>Connect GitHub or GitHub Enterprise to open pull requests and read CI from here.</p>
-        <button className="ui-button ui-button-primary" onClick={() => toggleSettings(true)}>
+        <button
+          className="ui-button ui-button-primary"
+          onClick={() => toggleSettings(true, "github")}
+        >
           Connect GitHub
         </button>
       </div>
@@ -387,6 +395,7 @@ export function PrPanel({
             }}
           >
             {r.repo}
+            {r.source ? ` · ${r.source}` : ""}
           </span>
           <span>
             {r.pr && r.pr.state === "open"
@@ -538,7 +547,11 @@ export function PrPanel({
                 </span>
               )}
               <h3 style={{ margin: 0 }}>
-                <span style={{ color: "var(--muted)" }}>{row.repo}</span> #{pr.number} {pr.title}
+                <span style={{ color: "var(--muted)" }}>
+                  {row.repo}
+                  {row.source ? ` · ${row.source}` : ""}
+                </span>{" "}
+                #{pr.number} {pr.title}
               </h3>
               <div className="spacer" />
               {pr.draft && <span className="ui-chip">draft</span>}

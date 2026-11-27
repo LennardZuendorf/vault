@@ -32,6 +32,8 @@ export interface Project {
   spec_folder?: string | null;
   /** Specs are kept by the app instead of committed here (SPEC-3). */
   specs_in_app?: boolean;
+  /** Host-qualified registered origin, or a local path. */
+  remote?: string | null;
 }
 
 /** How a registered repository is doing (REPO-5). */
@@ -470,7 +472,9 @@ export interface UiPrefs {
 export interface Settings {
   ui: UiPrefs;
   jira: JiraConfig | null;
-  github: GithubConfig | null;
+  github_sources: GithubSource[];
+  github_legacy_host: string | null;
+  github_issue_source: string | null;
   slack: SlackConfig | null;
   grafana: GrafanaConfig | null;
   slack_bot: SlackBotConfig | null;
@@ -506,7 +510,14 @@ export interface Settings {
   workspace: WorkspaceView | null;
 }
 
-export type ConnectionKind = "jira" | "github" | "slack" | "grafana" | "tracker";
+export interface GithubSource extends GithubConfig {
+  key: string;
+  shared: boolean;
+  status: "connected" | "disconnected" | "reconnect_required";
+  revision: string | null;
+}
+
+export type ConnectionKind = "jira" | "github" | "github_sources" | "slack" | "grafana" | "tracker";
 
 /** Settings' workspace (SET-7): who changes its connections, and what they say. */
 export interface WorkspaceView {

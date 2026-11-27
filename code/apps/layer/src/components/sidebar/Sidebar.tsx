@@ -7,7 +7,7 @@ import { byEpic, groupBy } from "../../lib/grouping";
 import { useFleetAgents } from "../../lib/panes";
 import { readOneOf, write } from "../../lib/persist";
 import { pressKeys } from "../../lib/press";
-import { trackerOfKey } from "../../lib/tracker";
+import { taskUsesTracker, trackerOfKey } from "../../lib/tracker";
 import type { JiraTransition, TaskView } from "../../lib/types";
 import { useStore } from "../../store";
 import { FinishTask } from "../FinishTask";
@@ -286,10 +286,12 @@ export function Sidebar() {
         onSelect: () => void openUrl(task.issue_url!),
       });
     }
-    if (task.issue_key) {
+    if (task.issue_key && taskUsesTracker(useStore.getState().settings, task)) {
       items.push({
         label: "Show in Tickets",
-        onSelect: () => showIssue(task.issue_key!),
+        onSelect: () => {
+          if (taskUsesTracker(useStore.getState().settings, task)) showIssue(task.issue_key!);
+        },
       });
     }
     items.push(

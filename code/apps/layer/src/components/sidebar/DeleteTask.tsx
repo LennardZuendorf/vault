@@ -24,7 +24,7 @@ export function DeleteTask({
 }) {
   const settings = useStore((s) => s.settings);
   const rows = useStore((s) => s.prs[task.id]);
-  const issue = useStore((s) => s.issues.find((i) => i.key === task.issue_key));
+  const issue = useStore((s) => issueForTask(s.issues, task));
   // Only Jira has transitions to offer (TKT-18).
   const key = settings?.tracker === "jira" ? task.issue_key : null;
   const merged = (rows ?? []).some((r) => r.pr?.merged);
@@ -123,3 +123,4 @@ export function DeleteTask({
     </Modal>
   );
 }
+import { issueForTask } from "../../lib/tracker";

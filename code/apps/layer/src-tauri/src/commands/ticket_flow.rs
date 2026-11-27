@@ -51,7 +51,7 @@ pub fn stage(rows: &[CheckoutPr]) -> Option<Stage> {
     if live.is_empty() {
         return None;
     }
-    if live.iter().all(|p| p.merged) && rows.iter().all(|r| r.changed == 0) {
+    if live.iter().all(|p| p.merged) && rows.iter().all(|r| r.changed == 0 && r.error.is_none()) {
         return Some(Stage::Merged);
     }
     live.iter().any(|p| p.state == "open" && !p.draft).then_some(Stage::Review)
@@ -80,8 +80,21 @@ pub struct TicketMove {
 /// Move `task`'s ticket if its pull requests have reached a stage it has
 /// not been moved for. None when there is nothing to say.
 pub(crate) async fn follow(state: &AppState, client: &Jira, task: &Task, rows: &[CheckoutPr]) -> Option<TicketMove> {
+    if !state.config.with(|c| crate::tickets::task_on_tracker(c, task)) {
+        return None;
+    }
     let key = task.issue_key.clone()?;
     let stage = due(task, stage(rows))?;
+    if stage == Stage::Merged {
+        // Only the UI sweep may use cached origins. A merge-driven ticket
+        // move needs a fresh read of every checkout.
+        let fresh = super::github::read_task_prs(state, &task.id, true).await.ok()?;
+        if self::stage(&fresh) != Some(Stage::Merged)
+            || !state.config.with(|c| crate::tickets::task_on_tracker(c, task))
+        {
+            return None;
+        }
+    }
     let project = key.split('-').next()?.to_string();
     let target = state.config.read().jira.and_then(|j| j.flow.get(&project).cloned()).and_then(|f| {
         if stage == Stage::Review {
@@ -245,6 +258,7 @@ mod tests {
 
     fn row(state: &str, draft: bool, merged: bool, changed: usize) -> CheckoutPr {
         CheckoutPr {
+            source: None,
             checkout_id: "c".into(),
             repo: "api".into(),
             pr: (!state.is_empty()).then(|| PullRequest {
@@ -309,6 +323,13 @@ mod tests {
             "a repo with work and no PR"
         );
         assert_eq!(stage(&[row("closed", false, false, 2)]), None, "closed without merging is given up on");
+    }
+
+    #[test]
+    fn an_unreadable_repository_does_not_prove_the_task_merged() {
+        let mut unreadable = row("", false, false, 0);
+        unreadable.error = Some("Enterprise is unavailable".into());
+        assert_eq!(stage(&[row("closed", false, true, 0), unreadable]), None);
     }
 
     #[test]

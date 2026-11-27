@@ -6,54 +6,32 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
-use crate::config::GithubConfig;
+use super::panes::agent_file_dir;
+use super::{off_runtime, AppState};
+use crate::config::github::GithubSource;
 use crate::error::{Error, Result};
 use crate::git;
 use crate::integrations::github::{self, CodeLine, GitHub};
-use crate::secrets;
-
-use super::jira::stored_or;
-use super::panes::agent_file_dir;
-use super::{off_runtime, AppState};
 
 // ------------------------------------------------------------------ github
 
-pub(crate) fn github_client(state: &AppState) -> Result<(GitHub, GithubConfig)> {
-    let cfg = state.config.with(|c| c.github.clone()).ok_or(Error::NotConfigured("GitHub"))?;
-    let token = secrets::get(secrets::GITHUB)?.ok_or(Error::NotConfigured("GitHub"))?;
-    Ok((GitHub::new(&cfg, &token)?, cfg))
-}
-
 #[tauri::command]
 pub async fn github_connect(
-    state: State<'_, AppState>,
+    app: AppHandle,
+    source: Option<String>,
     api_url: String,
     web_url: String,
     token: String,
     review_team: Option<String>,
 ) -> Result<String> {
-    let cfg = GithubConfig {
-        api_url: api_url.trim_end_matches('/').to_string(),
-        web_url: web_url.trim_end_matches('/').to_string(),
-        review_team: review_team.as_deref().and_then(github::normalize_review_team),
-    };
-    let was = state.config.read().github.as_ref().map(|g| g.api_url.clone());
-    let typed = !token.trim().is_empty();
-    let token = stored_or(secrets::GITHUB, &token, "GitHub", was.as_deref(), &cfg.api_url)?;
-    let login = match GitHub::new(&cfg, &token)?.login().await {
-        // A token just typed in is not the saved one yet.
-        Err(Error::TokenRejected(_)) if typed => Err(Error::Other("GitHub did not accept this token".into())),
-        other => other,
-    }?;
-    secrets::set(secrets::GITHUB, &token)?;
-    state.config.update(|c| c.github = Some(cfg))?;
-    Ok(login)
+    super::github_sources::connect(app, source, &api_url, &web_url, token, review_team.as_deref()).await
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CheckoutPr {
     pub checkout_id: String,
     pub repo: String,
+    pub source: Option<String>,
     pub pr: Option<crate::integrations::github::PullRequest>,
     pub checks: Vec<crate::integrations::github::CheckRun>,
     /// Every review submitted on `pr`, so the panel can name who said what.
@@ -159,19 +137,22 @@ pub async fn checkout_branches(app: AppHandle, checkout_id: String) -> Result<Ve
 
 /// Move the open pull request for a checkout onto its current base.
 #[tauri::command]
-pub async fn github_retarget_pr(state: State<'_, AppState>, checkout_id: String) -> Result<String> {
+pub async fn github_retarget_pr(
+    state: State<'_, AppState>,
+    checkout_id: String,
+    expected_url: String,
+) -> Result<String> {
     let checkout = state.config.checkout(&checkout_id)?;
     let task = state.config.task(&checkout.task_id)?;
-    let (client, _) = github_client(&state)?;
-
-    let dir = PathBuf::from(&checkout.path);
-    let (owner, name) = off_runtime(move || git::origin_slug(&dir)).await??;
+    let (origin, client) = super::github_sources::checkout_client(&state, &checkout.path).await?;
+    let (owner, name) = origin.slug();
     let branches = super::pr_branches::branches(&checkout, &task.branch).await?;
-    let pr = super::pr_branches::open_pull(&client, &owner, &name, &branches)
+    let pr = super::pr_branches::open_pull(&client, owner, name, &branches)
         .await?
         .ok_or_else(|| Error::NotFound(format!("an open PR for {}", task.branch)))?;
+    super::github_sources::verify_pull_url(&expected_url, &pr.url)?;
 
-    client.set_pull_base(&owner, &name, pr.number, &checkout.base).await?;
+    client.set_pull_base(owner, name, pr.number, &checkout.base).await?;
     Ok(format!("#{} now targets {}", pr.number, checkout.base))
 }
 
@@ -187,11 +168,10 @@ pub struct TaskPrs {
 /// PR state for every repository in the task, one row each.
 #[tauri::command]
 pub async fn github_task_prs(state: State<'_, AppState>, task_id: String) -> Result<Vec<CheckoutPr>> {
-    let (client, _) = github_client(&state)?;
-    task_prs(&state, &client, &task_id).await
+    task_prs(&state, &task_id).await
 }
 
-/// The same for every task, over one client.
+/// The same for every task, routing each checkout to its GitHub source.
 ///
 /// A task whose rows cannot be read is left out rather than failing the sweep:
 /// the watch runs unattended, and one unreadable repo must not blind the rest.
@@ -200,7 +180,6 @@ pub async fn github_task_prs(state: State<'_, AppState>, task_id: String) -> Res
 /// it is due again (`SETTLED_SWEEP`); the window keeps its last rows.
 #[tauri::command]
 pub async fn github_all_prs(state: State<'_, AppState>) -> Result<Vec<TaskPrs>> {
-    let (client, _) = github_client(&state)?;
     let ids = sweep_ids(&state);
 
     // A few tasks at a time rather than one after another: with every task's
@@ -209,13 +188,12 @@ pub async fn github_all_prs(state: State<'_, AppState>) -> Result<Vec<TaskPrs>> 
     // opens dozens of requests together.
     use futures_util::stream::{self, StreamExt};
     let state = &*state;
-    let client = &client;
     // Tickets follow only with Jira connected; the sweep runs without it.
     let jira = super::jira_client(state).ok().map(|(j, _)| j);
     let jira = &jira;
     let out = stream::iter(ids)
         .map(|task_id| async move {
-            let rows = task_prs(state, client, &task_id).await.ok()?;
+            let rows = task_prs(state, &task_id).await.ok()?;
             let ticket = match (jira, state.config.task(&task_id)) {
                 (Some(j), Ok(task)) => super::ticket_flow::follow(state, j, &task, &rows).await,
                 _ => None,
@@ -275,9 +253,18 @@ fn settled(rows: &[CheckoutPr]) -> bool {
 /// Pull requests waiting on the signed-in user, and on the configured team.
 #[derive(Debug, Serialize)]
 pub struct ReviewQueue {
+    pub sources: Vec<SourceReviews>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SourceReviews {
+    pub source: String,
+    #[serde(skip)]
+    pub(crate) revision: Option<uuid::Uuid>,
     pub mine: Vec<github::ReviewRequest>,
     /// GitHub had more personal hits than the one page we asked for.
     pub mine_more: bool,
+    pub mine_error: Option<String>,
     /// Absent when no review team is configured. Present, with `error` set,
     /// when the team was configured but could not be resolved or searched —
     /// the personal list is still worth showing.
@@ -307,43 +294,101 @@ pub struct TeamReviews {
 
 #[tauri::command]
 pub async fn github_review_queue(app: AppHandle, state: State<'_, AppState>) -> Result<ReviewQueue> {
-    let (queue, authored) = tokio::join!(review_queue(&state), authored_prs(&state));
-    let mut queue = queue?;
+    let queue = review_queue(&state, true).await?;
     crate::news::saw_reviews(&app, &queue);
-    queue.authored = Some(authored);
     Ok(queue)
 }
 
 /// A failure here is a note on its own section (REV-5), never the queue's.
-async fn authored_prs(state: &AppState) -> AuthoredPrs {
-    let got = match github_client(state) {
-        Ok((client, _)) => client.authored_prs().await,
-        Err(e) => Err(e),
-    };
-    match got {
-        Ok((prs, more)) => AuthoredPrs { prs, more, error: None },
+async fn authored_prs(client: &GitHub, source: &str) -> AuthoredPrs {
+    match client.authored_prs().await {
+        Ok((mut prs, more)) => {
+            for pr in &mut prs {
+                pr.source = source.to_string();
+            }
+            AuthoredPrs { prs, more, error: None }
+        }
         Err(e) => AuthoredPrs { prs: Vec::new(), more: false, error: Some(e.to_string()) },
     }
 }
 
 /// The queue itself, for the UI and for the watch that banners what is new.
-pub(crate) async fn review_queue(state: &AppState) -> Result<ReviewQueue> {
-    let (client, cfg) = github_client(state)?;
-    // The two searches need nothing from each other, so they go together;
-    // only the de-duplication waits for both.
+pub(crate) async fn review_queue(state: &AppState, with_authored: bool) -> Result<ReviewQueue> {
+    use futures_util::stream::{self, StreamExt};
+    let cfg = state.config.read();
+    let sources = off_runtime(move || {
+        cfg.github_source_list()
+            .into_iter()
+            .filter(|source| source.status != "disconnected")
+            .map(|source| {
+                let route = super::github_sources::client_for(&cfg, &source.key).map(|(client, _)| client);
+                (source, route)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await?;
+    let sources = stream::iter(sources)
+        .map(|(source, client)| source_reviews(source, client, with_authored))
+        .buffered(SWEEP_TASKS)
+        .collect()
+        .await;
+    Ok(ReviewQueue { sources })
+}
+
+async fn source_reviews(source: GithubSource, client: Result<GitHub>, with_authored: bool) -> SourceReviews {
+    let mut result = SourceReviews {
+        source: source.key.clone(),
+        revision: source.revision,
+        mine: Vec::new(),
+        mine_more: false,
+        mine_error: None,
+        team: None,
+        authored: None,
+    };
+    let client = match client {
+        Ok(client) => client,
+        Err(error) => {
+            let error = error.to_string();
+            result.mine_error = Some(error.clone());
+            if with_authored {
+                result.authored = Some(AuthoredPrs { prs: Vec::new(), more: false, error: Some(error) });
+            }
+            return result;
+        }
+    };
     let team = async {
-        match cfg.review_team.as_deref() {
-            Some(raw) => Some(load_team_reviews(&client, &cfg.api_url, raw).await),
+        match source.config.review_team.as_deref() {
+            Some(raw) => Some(load_team_reviews(&client, &source, raw).await),
             None => None,
         }
     };
-    let (mine, team) = tokio::join!(client.requested_prs(github::mine_review_query()), team);
-    let (mine, mine_more) = mine?;
-    let team = team.map(|mut t| {
-        github::drop_already_listed(&mut t.prs, &mine);
+    let authored = async {
+        if with_authored {
+            Some(authored_prs(&client, &source.key).await)
+        } else {
+            None
+        }
+    };
+    let (mine, team, authored) = tokio::join!(client.requested_prs(github::mine_review_query()), team, authored);
+    match mine {
+        Ok((mut prs, more)) => {
+            for pr in &mut prs {
+                pr.source = source.key.clone();
+            }
+            result.mine = prs;
+            result.mine_more = more;
+        }
+        Err(e) => result.mine_error = Some(e.to_string()),
+    }
+    result.team = team.map(|mut t| {
+        github::drop_already_listed(&mut t.prs, &result.mine);
+        for pr in &mut t.prs {
+            pr.source = source.key.clone();
+        }
         t
     });
-    Ok(ReviewQueue { mine, mine_more, team, authored: None })
+    result.authored = authored;
+    result
 }
 
 /// The last review team resolved, keyed by the API and the setting it came
@@ -352,23 +397,30 @@ pub(crate) async fn review_queue(state: &AppState) -> Result<ReviewQueue> {
 /// A team given without its org is found by walking `/user/teams`, up to ten
 /// pages, and that walk was repeated on every poll of the review queue for an
 /// answer that changes when the setting does.
-static RESOLVED_TEAM: parking_lot::Mutex<Option<(String, String, github::GhTeam)>> = parking_lot::Mutex::new(None);
+type ResolvedTeam = (Option<uuid::Uuid>, String, String, github::GhTeam);
+static RESOLVED_TEAM: std::sync::LazyLock<parking_lot::Mutex<HashMap<String, ResolvedTeam>>> =
+    std::sync::LazyLock::new(Default::default);
 
 /// The team column must not take the personal one down with it: a missing
 /// `read:org` scope, or a slug that matches nothing, is a problem with that
 /// column alone.
-async fn load_team_reviews(client: &GitHub, api_url: &str, raw: &str) -> TeamReviews {
+async fn load_team_reviews(client: &GitHub, source: &GithubSource, raw: &str) -> TeamReviews {
     let fallback = raw.trim_start_matches('@').to_string();
     let cached = RESOLVED_TEAM
         .lock()
-        .as_ref()
-        .filter(|(api, setting, _)| api == api_url && setting == raw)
-        .map(|(_, _, team)| team.clone());
+        .get(&source.key)
+        .filter(|(revision, api, setting, _)| {
+            *revision == source.revision && api == &source.config.api_url && setting == raw
+        })
+        .map(|(_, _, _, team)| team.clone());
     let team = match cached {
         Some(team) => team,
         None => match client.resolve_team(raw).await {
             Ok(team) => {
-                *RESOLVED_TEAM.lock() = Some((api_url.to_string(), raw.to_string(), team.clone()));
+                RESOLVED_TEAM.lock().insert(
+                    source.key.clone(),
+                    (source.revision, source.config.api_url.clone(), raw.to_string(), team.clone()),
+                );
                 team
             }
             Err(e) => {
@@ -389,7 +441,11 @@ async fn load_team_reviews(client: &GitHub, api_url: &str, raw: &str) -> TeamRev
     }
 }
 
-pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -> Result<Vec<CheckoutPr>> {
+pub(crate) async fn task_prs(state: &AppState, task_id: &str) -> Result<Vec<CheckoutPr>> {
+    read_task_prs(state, task_id, false).await
+}
+
+pub(super) async fn read_task_prs(state: &AppState, task_id: &str, finish_preflight: bool) -> Result<Vec<CheckoutPr>> {
     let task = state.config.task(task_id)?;
     let checkouts = state.config.checkouts_of(task_id);
 
@@ -399,6 +455,7 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
     let local = {
         let checkouts = checkouts.clone();
         let task_branch = task.branch.clone();
+        let cfg = state.config.read();
         off_runtime(move || {
             checkouts
                 .iter()
@@ -409,7 +466,13 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
                     // untracked file.
                     let changed = git::changed_count(&dir, &c.base, c.base_commit.as_deref(), git::Scope::Branch);
                     let branches = super::pr_branches::branches_of(c, &task_branch);
-                    (changed, git::origin_slug_cached(&dir), branches)
+                    let origin =
+                        if finish_preflight { git::github_origin(&dir) } else { git::github_origin_cached(&dir) };
+                    let source = origin.as_ref().ok().map(|r| r.host.clone());
+                    let route = origin.and_then(|remote| {
+                        super::github_sources::client_for_repo(&cfg, &remote).map(|(client, _)| (remote, client))
+                    });
+                    (changed, source, route, branches)
                 })
                 .collect::<Vec<_>>()
         })
@@ -417,7 +480,7 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
     };
 
     // Then GitHub, for every repo at once.
-    let rows = checkouts.into_iter().zip(local).map(|(checkout, (changed, slug, branches))| {
+    let rows = checkouts.into_iter().zip(local).map(|(checkout, (changed, source, route, branches))| {
         let task = &task;
         async move {
             let repo =
@@ -426,6 +489,7 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
             let mut row = CheckoutPr {
                 checkout_id: checkout.id.clone(),
                 repo,
+                source,
                 pr: None,
                 checks: Vec::new(),
                 reviews: Vec::new(),
@@ -438,9 +502,10 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
             };
 
             // One repo without a GitHub remote should not fail the whole view.
-            match slug {
-                Ok((owner, name)) => {
-                    match super::pr_branches::pulls(client, &owner, &name, &branches).await {
+            match route {
+                Ok((remote, client)) => {
+                    let (owner, name) = remote.slug();
+                    match super::pr_branches::pulls(&client, owner, name, &branches).await {
                         Ok(mut all) if !all.is_empty() => {
                             // The open one is the one still being decided. With
                             // none open, the newest says what became of the branch.
@@ -450,7 +515,7 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
                             // merged never went back to zero, so a task with one
                             // repo merged and another in review read "partly up
                             // for review, one repo still without a PR".
-                            if let Some(pr) = super::landed(&all) {
+                            if let Some(pr) = super::landed(&all).filter(|_| !finish_preflight) {
                                 if let Ok(Some(point)) = super::advance(state, &checkout, &pr.head_sha).await {
                                     let (dir, base) = (PathBuf::from(&checkout.path), checkout.base.clone());
                                     if let Ok(n) = off_runtime(move || {
@@ -478,13 +543,13 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
                                     // The commit, not the branch name: a name is
                                     // read by the URL, a sha is not.
                                     client.checks(
-                                        &owner,
-                                        &name,
+                                        owner,
+                                        name,
                                         if found.head_sha.is_empty() { &task.branch } else { &found.head_sha },
                                     ),
-                                    client.reviews(&owner, &name, found.number),
-                                    client.pull(&owner, &name, found.number),
-                                    client.pr_to_reply(&owner, &name, found.number),
+                                    client.reviews(owner, name, found.number),
+                                    client.pull(owner, name, found.number),
+                                    client.pr_to_reply(owner, name, found.number),
                                 );
 
                                 row.checks = checks.unwrap_or_default();
@@ -513,6 +578,9 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
         }
     });
     let rows = futures_util::future::join_all(rows).await;
+    if finish_preflight {
+        return Ok(rows);
+    }
     // Whoever asked, the sweep or the PR tab, this is the newest read.
     if settled(&rows) {
         state.prs_settled.lock().insert(task_id.to_string(), std::time::Instant::now());
@@ -532,6 +600,7 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
 pub struct RepoFeedback {
     pub checkout_id: String,
     pub repo: String,
+    pub source: Option<String>,
     pub number: u64,
     pub title: String,
     pub url: String,
@@ -550,32 +619,27 @@ const LOGS_PER_REPO: usize = 6;
 #[tauri::command]
 pub async fn github_pr_feedback(state: State<'_, AppState>, task_id: String) -> Result<Vec<RepoFeedback>> {
     let task = state.config.task(&task_id)?;
-    let (client, _) = github_client(&state)?;
     let checkouts = state.config.checkouts_of(&task_id);
 
-    let slugs = {
-        let dirs: Vec<PathBuf> = checkouts.iter().map(|c| PathBuf::from(&c.path)).collect();
-        off_runtime(move || dirs.iter().map(|d| git::origin_slug(d)).collect::<Vec<_>>()).await?
-    };
-
-    let rows = checkouts.into_iter().zip(slugs).map(|(checkout, slug)| {
-        let (client, task, state) = (&client, &task, &*state);
+    let rows = checkouts.into_iter().map(|checkout| {
+        let (task, state) = (&task, &*state);
         async move {
             let repo =
                 state.config.project(&checkout.project_id).map(|p| p.name).unwrap_or_else(|_| "(unknown)".into());
+            let mut source = None;
             let found: Result<Option<RepoFeedback>> = async {
-                let (owner, name) = slug?;
+                let (origin, client) = super::github_sources::checkout_client(state, &checkout.path).await?;
+                source = Some(origin.host.clone());
+                let (owner, name) = origin.slug();
                 let branches = super::pr_branches::branches(&checkout, &task.branch).await?;
-                let Some(pr) = super::pr_branches::open_pull(client, &owner, &name, &branches).await? else {
+                let Some(pr) = super::pr_branches::open_pull(&client, owner, name, &branches).await? else {
                     return Ok(None);
                 };
                 // The commit GitHub has, not the local branch: what was checked
                 // is what was pushed, and local commits since have no runs yet.
                 let at = if pr.head_sha.is_empty() { task.branch.clone() } else { pr.head_sha.clone() };
-                let (feedback, checks) = tokio::join!(
-                    client.pr_feedback(&owner, &name, pr.number),
-                    client.failed_checks(&owner, &name, &at),
-                );
+                let (feedback, checks) =
+                    tokio::join!(client.pr_feedback(owner, name, pr.number), client.failed_checks(owner, name, &at),);
                 let mut checks = checks.unwrap_or_default();
                 // Counted among the checks that have a log to read: six failing
                 // external checks listed first left the Actions job without one.
@@ -586,7 +650,7 @@ pub async fn github_pr_feedback(state: State<'_, AppState>, task_id: String) -> 
                     .take(LOGS_PER_REPO)
                     .collect();
                 let logs = futures_util::future::join_all(jobs.iter().map(|&(_, id)| {
-                    let (owner, name) = (&owner, &name);
+                    let client = &client;
                     async move { client.job_log_tail(owner, name, id).await.ok() }
                 }))
                 .await;
@@ -596,6 +660,7 @@ pub async fn github_pr_feedback(state: State<'_, AppState>, task_id: String) -> 
                 Ok(Some(RepoFeedback {
                     checkout_id: checkout.id.clone(),
                     repo: repo.clone(),
+                    source: source.clone(),
                     number: pr.number,
                     title: pr.title,
                     url: pr.url,
@@ -612,6 +677,7 @@ pub async fn github_pr_feedback(state: State<'_, AppState>, task_id: String) -> 
                 Err(e) => Some(RepoFeedback {
                     checkout_id: checkout.id,
                     repo,
+                    source,
                     number: 0,
                     title: String::new(),
                     url: String::new(),
@@ -945,6 +1011,7 @@ mod tests {
         CheckoutPr {
             checkout_id: "c".into(),
             repo: "api".into(),
+            source: None,
             pr,
             checks: Vec::new(),
             reviews: Vec::new(),

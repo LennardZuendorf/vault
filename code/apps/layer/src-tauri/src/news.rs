@@ -7,12 +7,12 @@
 //! keeps what has been seen, from every fetch the UI makes and from one of
 //! its own while the window is away, and says what is new.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
 
-use crate::commands::{banner, AppState, ReviewQueue};
+use crate::commands::{banner, AppState, ReviewQueue, SourceReviews};
 use crate::messages::{self, Kind, Level, New};
 use crate::target::Target;
 
@@ -27,17 +27,23 @@ const BATCH: usize = 3;
 /// otherwise banner every pull request and ticket already waiting.
 #[derive(Default)]
 pub struct Seen {
-    reviews: parking_lot::Mutex<Option<HashSet<String>>>,
-    /// The team list's first arrival is a snapshot too, whenever it comes.
-    team_primed: parking_lot::Mutex<bool>,
+    reviews: parking_lot::Mutex<HashMap<String, SeenReviewSource>>,
     tickets: parking_lot::Mutex<Option<HashSet<String>>>,
 }
 
-fn identity(pr: &crate::integrations::github::ReviewRequest) -> String {
-    if pr.repo.is_empty() {
-        format!("#{}", pr.number)
+#[derive(Default)]
+struct SeenReviewSource {
+    revision: Option<uuid::Uuid>,
+    mine: Option<HashSet<String>>,
+    team: Option<HashSet<String>>,
+}
+
+fn identity(source: &str, pr: &crate::integrations::github::ReviewRequest) -> String {
+    let repo = pr.repo.to_ascii_lowercase();
+    if source.is_empty() {
+        format!("{repo}#{}", pr.number)
     } else {
-        format!("{}#{}", pr.repo, pr.number)
+        format!("{source}/{repo}#{}", pr.number)
     }
 }
 
@@ -46,36 +52,10 @@ impl Seen {
     ///
     /// A team lookup that failed comes back with nothing in it. Forgetting
     /// what it held would make the next success announce all of it again.
+    #[cfg(test)]
     fn reviews(&self, queue: &ReviewQueue) -> Vec<(String, String)> {
         let mut seen = self.reviews.lock();
-        let mut primed = self.team_primed.lock();
-        let team_ok = queue.team.as_ref().is_some_and(|t| t.error.is_none());
-
-        let mut next: HashSet<String> = queue.mine.iter().map(identity).collect();
-        match &queue.team {
-            Some(t) if t.error.is_none() => next.extend(t.prs.iter().map(identity)),
-            Some(_) => {
-                if let Some(prev) = seen.as_ref() {
-                    next.extend(prev.iter().cloned());
-                }
-            }
-            None => *primed = false,
-        }
-
-        let mut fresh: Vec<&crate::integrations::github::ReviewRequest> = Vec::new();
-        if let Some(prev) = seen.as_ref() {
-            fresh.extend(queue.mine.iter().filter(|pr| !prev.contains(&identity(pr))));
-            if let (true, Some(t)) = (team_ok, &queue.team) {
-                if *primed {
-                    fresh.extend(t.prs.iter().filter(|pr| !prev.contains(&identity(pr))));
-                }
-            }
-        }
-        if team_ok {
-            *primed = true;
-        }
-        *seen = Some(next);
-        fresh.into_iter().map(|pr| (identity(pr), pr.title.clone())).collect()
+        queue.sources.iter().flat_map(|q| seen.entry(q.source.clone()).or_default().seen(q)).collect()
     }
 
     /// The tickets in `issues` not seen before, remembering them.
@@ -98,9 +78,42 @@ impl Seen {
     /// center keeps these either way (MSG-2), and a snapshot every three
     /// minutes made nearly every new ticket part of one.
     pub fn forget(&self) {
-        *self.reviews.lock() = None;
-        *self.team_primed.lock() = false;
+        self.reviews.lock().clear();
+        self.forget_tickets();
+    }
+
+    pub fn forget_tickets(&self) {
         *self.tickets.lock() = None;
+    }
+}
+
+impl SeenReviewSource {
+    fn seen(&mut self, queue: &SourceReviews) -> Vec<(String, String)> {
+        if self.revision != queue.revision {
+            *self = Self { revision: queue.revision, ..Self::default() };
+        }
+        let key = |pr: &crate::integrations::github::ReviewRequest| identity(&queue.source, pr);
+        let mut known: HashSet<String> = self.mine.iter().chain(self.team.iter()).flatten().cloned().collect();
+        let mut fresh = Vec::new();
+        let mut read = |before: &mut Option<HashSet<String>>, prs: &[crate::integrations::github::ReviewRequest]| {
+            let primed = before.is_some();
+            *before = Some(prs.iter().map(&key).collect());
+            for pr in prs {
+                let id = key(pr);
+                if known.insert(id.clone()) && primed {
+                    fresh.push((id, pr.title.clone()));
+                }
+            }
+        };
+        if queue.mine_error.is_none() {
+            read(&mut self.mine, &queue.mine);
+        }
+        match &queue.team {
+            Some(team) if team.error.is_none() => read(&mut self.team, &team.prs),
+            None if queue.mine_error.is_none() => self.team = None,
+            _ => {}
+        }
+        fresh
     }
 }
 
@@ -113,7 +126,19 @@ fn announce_now(app: &AppHandle) -> bool {
 
 /// A review queue has come in, from wherever it was asked for.
 pub fn saw_reviews(app: &AppHandle, queue: &ReviewQueue) {
-    let fresh = app.state::<AppState>().news.reviews(queue);
+    let state = app.state::<AppState>();
+    // A result already on the wire when a source was disconnected must
+    // not announce old information about that account.
+    let now = state.config.with(|c| c.github_source_list());
+    let sources: Vec<_> = queue
+        .sources
+        .iter()
+        .filter(|q| now.iter().any(|g| g.key == q.source && g.status == "connected" && g.revision == q.revision))
+        .collect();
+    let fresh: Vec<_> = {
+        let mut seen = state.news.reviews.lock();
+        sources.into_iter().flat_map(|q| seen.entry(q.source.clone()).or_default().seen(q)).collect()
+    };
     let news = review_news(&fresh);
     messages::record_all(app, news.clone());
     if news.is_empty() || !announce_now(app) {
@@ -190,10 +215,10 @@ pub fn spawn(app: AppHandle) {
             }
             let (github, tickets) = {
                 let cfg = state.config.read();
-                (cfg.github.is_some(), cfg.tracker_in_use().is_some())
+                (cfg.github_any_connected(), cfg.tracker_in_use().is_some())
             };
             if github {
-                if let Ok(queue) = crate::commands::review_queue(&state).await {
+                if let Ok(queue) = crate::commands::review_queue(&state, false).await {
                     saw_reviews(&app, &queue);
                 }
             }
@@ -218,16 +243,21 @@ mod tests {
 
     fn queue(mine: Vec<ReviewRequest>, team: Option<(Vec<ReviewRequest>, bool)>) -> ReviewQueue {
         ReviewQueue {
-            mine,
-            mine_more: false,
-            team: team.map(|(prs, failed)| TeamReviews {
-                slug: "o/t".into(),
-                name: "t".into(),
-                prs,
-                more: false,
-                error: failed.then(|| "boom".into()),
-            }),
-            authored: None,
+            sources: vec![SourceReviews {
+                source: String::new(),
+                revision: None,
+                mine,
+                mine_more: false,
+                mine_error: None,
+                team: team.map(|(prs, failed)| TeamReviews {
+                    slug: "o/t".into(),
+                    name: "t".into(),
+                    prs,
+                    more: false,
+                    error: failed.then(|| "boom".into()),
+                }),
+                authored: None,
+            }],
         }
     }
 
@@ -251,6 +281,23 @@ mod tests {
         // ... so the next success does not announce it all again.
         let fresh = seen.reviews(&queue(vec![], Some((vec![pr("b", 5), pr("b", 6)], false))));
         assert_eq!(fresh.iter().map(|f| f.0.as_str()).collect::<Vec<_>>(), ["b#6"]);
+    }
+
+    #[test]
+    fn two_review_hosts_keep_independent_baselines_when_one_is_down() {
+        let seen = Seen::default();
+        let got = |source: &str, numbers: &[u64], error: bool| {
+            let mut source_queue = queue(numbers.iter().map(|&n| pr("acme/web", n)).collect(), None);
+            source_queue.sources[0].source = source.into();
+            source_queue.sources[0].mine_error = error.then(|| "unavailable".into());
+            source_queue.sources.remove(0)
+        };
+        let both = |left, right| ReviewQueue { sources: vec![left, right] };
+        assert!(seen.reviews(&both(got("github.com", &[7], false), got("ghe.test", &[7], false))).is_empty());
+        let changed = seen.reviews(&both(got("github.com", &[7, 8], false), got("ghe.test", &[], true)));
+        assert_eq!(changed, [("github.com/acme/web#8".into(), "t8".into())]);
+        let recovered = seen.reviews(&both(got("github.com", &[7, 8], false), got("ghe.test", &[7, 8], false)));
+        assert_eq!(recovered, [("ghe.test/acme/web#8".into(), "t8".into())]);
     }
 
     #[test]

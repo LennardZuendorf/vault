@@ -103,15 +103,14 @@ pub fn spawn_henchman_watch(app: AppHandle) {
 
 /// The window's sweep, without following tickets: only the reads count here.
 async fn sweep(state: &AppState) {
-    let Ok((client, _)) = super::github::github_client(state) else {
+    if !state.config.with(|c| c.github_any_connected()) {
         return;
-    };
+    }
     use futures_util::stream::{self, StreamExt};
-    let client = &client;
     stream::iter(super::github::sweep_ids(state))
         .for_each_concurrent(super::github::SWEEP_TASKS, |id| async move {
             // One that can't be read is tried again at the next sweep.
-            let _ = super::github::task_prs(state, client, &id).await;
+            let _ = super::github::task_prs(state, &id).await;
         })
         .await;
 }
@@ -205,6 +204,7 @@ mod tests {
 
     fn row(state: &str, sha: &str, merge: &str) -> CheckoutPr {
         CheckoutPr {
+            source: None,
             checkout_id: "c1".into(),
             repo: "api".into(),
             pr: Some(PullRequest {

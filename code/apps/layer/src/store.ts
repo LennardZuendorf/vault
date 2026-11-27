@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { api, errMessage, failureText } from "./lib/api";
+import { coalesce, type Slot } from "./lib/coalesce";
 import { CHAT_TASK_ID } from "./lib/derive";
 import type { EpicOf } from "./lib/grouping";
 import { forgetAllBut, read, readOneOf, write } from "./lib/persist";
@@ -175,7 +176,7 @@ export interface State {
   refreshWaiting: () => Promise<void>;
   refreshPrs: () => Promise<void>;
   /** `quiet` is a timer tick: no toast, and no spinner if a queue is already shown. */
-  refreshReviewQueue: (opts?: { quiet?: boolean }) => Promise<void>;
+  refreshReviewQueue: (opts?: { quiet?: boolean; sourceChanged?: boolean }) => Promise<void>;
   /** The message center's log (MSG-1), newest first. */
   messages: Message[];
   refreshMessages: () => Promise<void>;
@@ -223,46 +224,6 @@ let reviewsInflight: Promise<void> | null = null;
 let tasksInflight: Promise<void> | null = null;
 let panesInflight: Promise<void> | null = null;
 
-interface Slot {
-  get: () => Promise<void> | null;
-  set: (p: Promise<void> | null) => void;
-  /** The one refresh queued behind the call in flight, shared by everyone who asked meanwhile. */
-  next?: Promise<void> | null;
-}
-
-/**
- * Run `work` once, sharing it with polls that overlap and queueing behind it
- * for anything that is not a poll.
- *
- * Everything that queues while a call is out shares one refresh after it:
- * each hook post announces itself, and five of them during one call became
- * five calls in a row, each waiting for the last.
- */
-async function coalesce(slot: Slot, poll: boolean, work: () => Promise<void>): Promise<void> {
-  const current = slot.get();
-  if (current) {
-    if (poll) return current;
-    // Wait the in-flight one out, then ask again: what it returns was asked
-    // for before whatever just changed.
-    if (!slot.next) {
-      slot.next = current
-        .catch(() => {})
-        .then(() => {
-          slot.next = null;
-          return coalesce(slot, false, work);
-        });
-    }
-    return slot.next;
-  }
-  const run = work();
-  slot.set(run);
-  try {
-    await run;
-  } finally {
-    if (slot.get() === run) slot.set(null);
-  }
-}
-
 const tasksSlot: Slot = {
   get: () => tasksInflight,
   set: (p) => {
@@ -281,6 +242,8 @@ const reviewsSlot: Slot = {
     reviewsInflight = p;
   },
 };
+let githubEpoch = 0;
+let issueEpoch = 0;
 let messagesInflight: Promise<void> | null = null;
 const messagesSlot: Slot = {
   get: () => messagesInflight,
@@ -594,23 +557,28 @@ export const useStore = create<State>((set, get) => {
       }
       sweeping = true;
       const began = Date.now();
+      const sourceEpoch = githubEpoch;
       try {
         const all = await api.githubAllPrs();
-        // Merged, not replaced: a task the sweep could not read is left out of
-        // its result, and dropping it here would blank a panel that had just
-        // fetched those rows for itself. Nor over rows fetched after it began.
-        const fresh = all.filter((t) => (prsFetchedAt.get(t.task_id) ?? 0) < began);
-        for (const t of fresh) prsFetchedAt.set(t.task_id, began);
-        set((s) => {
-          const changed = fresh.filter((t) => !sameJson(s.prs[t.task_id], t.rows));
-          if (changed.length === 0) return s;
-          return {
-            prs: { ...s.prs, ...Object.fromEntries(changed.map((t) => [t.task_id, t.rows])) },
-          };
-        });
-        const moves = all.map((t) => t.ticket).filter((m): m is TicketMove => m !== null);
-        reportTickets(moves, get().toast, get().fail);
-        if (moves.some((m) => m.moved_to)) void get().refreshIssues({ quiet: true });
+        if (sourceEpoch !== githubEpoch) {
+          sweepAgain = true;
+        } else {
+          // Merged, not replaced: a task the sweep could not read is left out of
+          // its result, and dropping it here would blank a panel that had just
+          // fetched those rows for itself. Nor over rows fetched after it began.
+          const fresh = all.filter((t) => (prsFetchedAt.get(t.task_id) ?? 0) < began);
+          for (const t of fresh) prsFetchedAt.set(t.task_id, began);
+          set((s) => {
+            const changed = fresh.filter((t) => !sameJson(s.prs[t.task_id], t.rows));
+            if (changed.length === 0) return s;
+            return {
+              prs: { ...s.prs, ...Object.fromEntries(changed.map((t) => [t.task_id, t.rows])) },
+            };
+          });
+          const moves = all.map((t) => t.ticket).filter((m): m is TicketMove => m !== null);
+          reportTickets(moves, get().toast, get().fail);
+          if (moves.some((m) => m.moved_to)) void get().refreshIssues({ quiet: true });
+        }
       } catch {
         // Left as it was: stale rows beat empty ones.
       } finally {
@@ -645,44 +613,74 @@ export const useStore = create<State>((set, get) => {
     },
 
     refreshSettings: async () => {
-      const before = get().settings;
       // Kept when unchanged: this runs after every preference toggle, and a new
       // object redrew every view that reads the settings, about a dozen.
       const settings = await api.getSettings();
+      const before = get().settings;
       set((s) => ({ settings: keep(s.settings, settings) }));
-      // Only until the first list lands: someone with nothing assigned has an
-      // empty list for good, and every settings change re-fetched 500 issues.
-      if (settings.tracker != null && !get().issuesLoaded && !get().issuesLoading) {
-        void get().refreshIssues();
-      }
-      // Disconnecting has to take the list with it, or the badge keeps counting
-      // tickets from a site the app can no longer reach.
-      if (settings.tracker == null && (get().issues.length > 0 || get().issuesLoaded)) {
+      const issuesChanged =
+        before?.tracker !== settings.tracker ||
+        before?.github_issue_source !== settings.github_issue_source;
+      if (issuesChanged) {
+        issueEpoch++;
         set({
           issues: [],
           issueTypes: [],
           priorities: [],
           issuesTruncated: false,
           issuesLoaded: false,
+          issuesLoading: false,
         });
+      }
+      if (settings.tracker != null && !get().issuesLoaded && !get().issuesLoading) {
+        void get().refreshIssues();
       }
       // Only when GitHub itself changed. Every slider moved and every update
       // from base refreshed settings, and each ran a search — which GitHub
       // allows thirty of a minute.
       const githubChanged =
         before?.github_connected !== settings.github_connected ||
-        JSON.stringify(before?.github) !== JSON.stringify(settings.github);
+        !sameJson(before?.github_sources, settings.github_sources);
+      if (githubChanged) {
+        githubEpoch++;
+        const previous = before?.github_sources ?? [];
+        const stable = new Set(
+          (settings.github_sources ?? [])
+            .filter((source) =>
+              sameJson(
+                previous.find((old) => old.key === source.key),
+                source,
+              ),
+            )
+            .map((source) => source.key),
+        );
+        set((s) => ({
+          prs: Object.fromEntries(
+            Object.entries(s.prs).map(([task, rows]) => [
+              task,
+              rows.filter((row) => row.source == null || stable.has(row.source)),
+            ]),
+          ),
+          reviewQueue: s.reviewQueue
+            ? { sources: s.reviewQueue.sources.filter((q) => stable.has(q.source)) }
+            : null,
+          reviewQueueError: null,
+        }));
+        prsFetchedAt.clear();
+        if (settings.github_connected) void get().refreshPrs();
+      }
       if (settings.github_connected) {
         if (githubChanged || get().reviewQueue === null)
-          void get().refreshReviewQueue({ quiet: true });
+          void get().refreshReviewQueue({ quiet: true, sourceChanged: githubChanged });
       } else if (get().reviewQueue || get().reviewQueueError) {
-        set({ reviewQueue: null, reviewQueueError: null });
+        set({ reviewQueue: null, reviewQueueError: null, reviewQueueLoading: false });
       }
     },
 
     refreshReviewQueue: (opts) =>
-      coalesce(reviewsSlot, opts?.quiet ?? false, async () => {
+      coalesce(reviewsSlot, (opts?.quiet ?? false) && !opts?.sourceChanged, async () => {
         if (!get().settings?.github_connected) return;
+        const sourceEpoch = githubEpoch;
         // A timer tick should not flash the spinner over a list already on
         // screen. The first load has nothing to keep, so it still shows one.
         const spin = !opts?.quiet || get().reviewQueue === null;
@@ -691,9 +689,10 @@ export const useStore = create<State>((set, get) => {
           const queue = await api.githubReviewQueue();
           // Disconnected while this was out: the list goes with the
           // connection, or the badge counts reviews from nothing connected.
-          if (!get().settings?.github_connected) return;
+          if (sourceEpoch !== githubEpoch || !get().settings?.github_connected) return;
           set((s) => ({ reviewQueue: keep(s.reviewQueue, queue), reviewQueueError: null }));
         } catch (e) {
+          if (sourceEpoch !== githubEpoch) return;
           // A timer tick stays quiet — the view shows the message — but a
           // Refresh you pressed should also say so up top.
           set({ reviewQueueError: errMessage(e) });
@@ -711,6 +710,7 @@ export const useStore = create<State>((set, get) => {
 
     refreshIssues: async (opts) => {
       if (get().settings?.tracker == null) return;
+      const epoch = issueEpoch;
       // A timer tick should not flash the spinner over a list already on screen.
       const spin = !opts?.quiet || !get().issuesLoaded;
       if (spin) set({ issuesLoading: true });
@@ -725,7 +725,7 @@ export const useStore = create<State>((set, get) => {
           get().priorities.length > 0 ? get().priorities : api.ticketPriorities().catch(() => []),
         ]);
         // As for reviews: an answer from a site disconnected meanwhile is not kept.
-        if (get().settings?.tracker == null) return;
+        if (epoch !== issueEpoch || get().settings?.tracker == null) return;
         set((s) => ({
           issues: reuse(s.issues, page.issues, (i) => i.key),
           issuesTruncated: page.more,
@@ -734,9 +734,9 @@ export const useStore = create<State>((set, get) => {
           issuesLoaded: true,
         }));
       } catch (e) {
-        if (!opts?.quiet) get().fail(e);
+        if (epoch === issueEpoch && !opts?.quiet) get().fail(e);
       } finally {
-        if (spin) set({ issuesLoading: false });
+        if (epoch === issueEpoch && spin) set({ issuesLoading: false });
       }
     },
   };

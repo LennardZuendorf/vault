@@ -773,6 +773,7 @@ async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) ->
                 arg(&args, "branch_suffix").map(str::to_string),
                 arg(&args, "base").map(str::to_string),
                 None,
+                None,
             )
             .await?;
             if let Some(room) = chat {
