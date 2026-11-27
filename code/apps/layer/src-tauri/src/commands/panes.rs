@@ -618,6 +618,14 @@ pub(crate) fn write_chat_context(state: &AppState, dir: &Path) -> Result<()> {
         "ACME-12 to Done\", \"finish that task\") is their agreement: do it, don't ask again. ",
         "A ticket goes to done by `jira_transition` into a status whose `to_category` is ",
         "`done`.\n\n",
+        "## Work goes in a task\n\n",
+        "The user follows all work in Layer's Work tab, and only tasks are shown there. ",
+        "Before you change a repository, commit, push or open a pull request, put the work ",
+        "in a task: one of the tasks in flight below when it is the same work (`add_repo` ",
+        "when it needs another repository), else `start_work` for a Jira ticket or ",
+        "`create_task` without one. Then work in that task's worktrees, never in the clones ",
+        "under Repositories. Answering questions, reading code, drafting tickets and reading ",
+        "logs need no task.\n\n",
         "## Routines\n\n",
         "A routine is a prompt Layer asks on a schedule, each time as a new chat, shown in ",
         "its Routines tab. When the user wants something asked every morning or every hour, ",
@@ -923,6 +931,39 @@ pub(crate) fn restart(app: &AppHandle, state: &AppState, id: &str) -> Result<Pan
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chat_is_told_to_put_work_in_a_task_before_changing_a_repository() {
+        let root = std::env::temp_dir().join(format!("vl-chat-context-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = AppState {
+            slack_bot: Default::default(),
+            config: crate::config::ConfigStore::for_tests(root.join("config.json"), Default::default()),
+            ptys: Default::default(),
+            ticket_types: Default::default(),
+            epic_field_missing: Default::default(),
+            pending_notices: Default::default(),
+            status_cache: Default::default(),
+            prs_settled: Default::default(),
+            prs_seen: Default::default(),
+            news: Default::default(),
+            messages: crate::messages::Messages::for_tests(root.join("messages.json")),
+            notes: crate::notes::Notes::load(&root),
+            browser: Default::default(),
+            loops: Default::default(),
+            runs: crate::runs::Runs::for_tests(root.join("runs.json")),
+        };
+        write_chat_context(&state, &root).unwrap();
+        for file in ["CLAUDE.md", "AGENTS.md"] {
+            let md = std::fs::read_to_string(root.join(file)).unwrap();
+            assert!(md.contains("## Work goes in a task"), "{file}");
+            for tool in ["`create_task`", "`start_work`", "`add_repo`"] {
+                assert!(md.contains(tool), "{file} names {tool}");
+            }
+            assert!(md.contains("Answering questions"), "{file}: a question needs no task");
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn a_long_hand_off_is_left_in_a_file_and_only_a_pointer_is_typed() {

@@ -618,9 +618,16 @@ integrations, the app's tools, the repos and the tasks in flight.
   order again. A pinned Slack chat (CHAT-5) is listed there, not under
   the Slack heading. Pins stay on this Mac. After a day of chats, the few
   you kept going back to were buried among the rest.
+- **CHAT-7** A chat's context MUST tell its agent to put work in a task
+  before it changes a repository, commits, pushes or opens a pull request:
+  a task in flight when it is the same work (`add_repo` for another
+  repository), else `start_work` or `create_task`, and then to work in that
+  task's worktrees, not the original clones. Questions, reading code,
+  drafting tickets and reading logs need no task. The Work tab lists only
+  tasks, so work done from a chat in a clone was missing from it.
 
 Code: `ChatView.tsx`, `ChatList.tsx` (CHAT-5, CHAT-6), `lib/pins.ts` (CHAT-6), `ChatLink.tsx`, `sidebar/SidebarGrip.tsx` (CHAT-4),
-`commands/panes.rs` (`open_chat`, `write_chat_context`), `mcp.rs` (`caller_chat`).
+`commands/panes.rs` (`open_chat`, `write_chat_context`, CHAT-7), `mcp.rs` (`caller_chat`).
 
 Known gaps:
 - The room's "tasks in flight" list is written when the chat opens and at

@@ -276,8 +276,10 @@ body.dragging * {
 .ws:hover {
   background: var(--hover);
 }
+/* The selected task stands a clear step above hover, on the bare list and in an epic card:
+   the signal colour at 16% over whatever the row sits on, in every theme. */
 .ws.active {
-  background: var(--selected);
+  background: color-mix(in srgb, var(--signal) 16%, transparent);
 }
 .ws.deleting {
   opacity: 0.55;
