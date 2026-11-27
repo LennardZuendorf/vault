@@ -1037,7 +1037,8 @@ offers Start work.
   transitions. It leaves the ticket as it is by default, since a deleted
   task is as often abandoned as done, and pre-selects the after-merge
   status when a pull request of the task has merged. The ticket moves only
-  once the task is gone.
+  once the task is gone. An epic is removed from the list instead, its ticket
+  untouched (EPIC-15).
 - **TKT-10** The task header MUST show its ticket's status, from your ticket
   list, so a ticket out of step with the work is seen where the work is.
 - **TKT-11** Every ticket card MUST say how long ago the ticket was created,
@@ -3935,6 +3936,20 @@ paper.
   under it in Jira, the chat said it had no way to see them, and a plan
   drafted without them filed each a second time.
 
+### Removing one
+
+- **EPIC-15** An epic's menu in the task list MUST offer "Remove from
+  list…" where a task's offers "Delete task…". It asks once, in words
+  about the list: the epic leaves it, its ticket is not changed (no
+  transitions are offered, unlike TKT-9), its worktrees go from disk with
+  their branch left alone, its spec is kept (SPEC-3), and its sub-tasks
+  stay as tasks: under the Jira epic's row while their tickets sit under
+  its ticket (EPIC-13), so the epic leaves the list once they go too. It then deletes the epic's task as
+  Delete does, uncommitted changes included only once they are named.
+  Before, the only way out was "Delete task…", which read as deleting the
+  epic and offered to move its ticket, so epics nobody worked on any more
+  stayed in the list.
+
 Code: `spec.rs` (`sub_tasks`: grouping steps into sub-tasks, and each
 one's `tasks.md`), `commands/epics.rs` (what the tab is shown, filing,
 starting, telling, `adopt_sub_tasks` for EPIC-13, `tickets_under` and
@@ -3945,7 +3960,7 @@ starting, telling, `adopt_sub_tasks` for EPIC-13, `tickets_under` and
 (`EpicOpening` for EPIC-13), `epic/` (the Sub-tasks tab, filing, the
 chat column), `lib/epicState.ts` (EPIC-10; `openJiraEpic` for EPIC-13),
 `sidebar/EpicRow.tsx`, `sidebar/EpicsSection.tsx` (EPIC-9,
-EPIC-13), `tickets/StartWorkDialog.tsx` (EPIC-2),
+EPIC-13), `sidebar/DeleteTask.tsx` (EPIC-15), `tickets/StartWorkDialog.tsx` (EPIC-2),
 `tickets/CreateEpicDialog.tsx` (EPIC-3).
 
 Known gaps:
@@ -3961,7 +3976,8 @@ Known gaps:
 - Each sub-task's pull request carries the whole requirements and design,
   as §19's gaps say of a task in several repositories.
 - An epic is not finished by itself once every sub-task is merged: its
-  ticket and its worktrees stay until Finish task (TASK-8).
+  ticket and its worktrees stay until Finish task (TASK-8) or Remove from
+  list (EPIC-15).
 - A project whose required fields have no fixed values cannot file
   sub-tasks from here (TKT-3). Filed by hand and named by key in the
   spec's headings (EPIC-4), they are taken as existing tickets.

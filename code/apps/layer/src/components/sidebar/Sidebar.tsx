@@ -327,7 +327,9 @@ export function Sidebar() {
       });
     }
     items.push({
-      label: "Delete task…",
+      // An epic is taken off the list, its ticket left alone (EPIC-15):
+      // "Delete task…" read as deleting the epic, so nobody removed one.
+      label: task.epic ? "Remove from list…" : "Delete task…",
       danger: true,
       separated: available(task).length === 0 && !landed,
       onSelect: () => askDeleteTask(task),
