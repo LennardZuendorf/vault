@@ -16,10 +16,9 @@ use std::time::Duration;
 /// took several times longer for nothing.
 pub(crate) const AGENT_NICE: i32 = 10;
 
-/// Lower an agent's priority (PANE-20). Its process group too, which a pane
-/// started as a terminal leads and an ACP agent leads with `process_group(0)`:
-/// whatever it started before this ran is lowered with it, and whatever it
-/// starts later inherits it.
+/// Lower an ACP agent's priority (PANE-20), and its process group's, which it
+/// leads with `process_group(0)`: whatever it started before this ran is
+/// lowered with it, and whatever it starts later inherits it.
 pub(crate) fn lower_priority(pid: u32) {
     // SAFETY: setpriority takes plain integers and touches no memory of ours.
     // A failure (the process already gone) changes nothing worth reporting.
@@ -27,6 +26,20 @@ pub(crate) fn lower_priority(pid: u32) {
         libc::setpriority(libc::PRIO_PGRP, pid, AGENT_NICE);
         libc::setpriority(libc::PRIO_PROCESS, pid, AGENT_NICE);
     }
+}
+
+/// The command a pane starts: an agent's through `nice` (PANE-20), which
+/// lowers it before it runs. Lowered just after it started, Claude Code
+/// came back to normal priority: every agent restored in a terminal ran at
+/// 0, while the same call held on anything else, and on Claude Code a moment
+/// later.
+pub(crate) fn command(program: &str, agent: bool) -> portable_pty::CommandBuilder {
+    if !agent {
+        return portable_pty::CommandBuilder::new(program);
+    }
+    let mut cmd = portable_pty::CommandBuilder::new("/usr/bin/nice");
+    cmd.args(["-n", &AGENT_NICE.to_string(), program]);
+    cmd
 }
 
 /// What macOS says about its memory, as `memory_pressure` prints it.

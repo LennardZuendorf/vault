@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
-use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{ChildKiller, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Runtime};
 
@@ -623,7 +623,7 @@ impl PtyManager {
         .map_err(|e| Error::Pty(format!("openpty: {e}")))?;
 
         let id = uuid::Uuid::new_v4().to_string();
-        let mut cmd = CommandBuilder::new(&opts.program);
+        let mut cmd = load::command(&opts.program, opts.kind == PaneKind::Agent);
         for arg in &opts.args {
             cmd.arg(arg);
         }
@@ -645,9 +645,6 @@ impl PtyManager {
         let mut child =
             pair.slave.spawn_command(cmd).map_err(|e| Error::Pty(format!("spawn {}: {e}", opts.program)))?;
         drop(pair.slave);
-        if let (PaneKind::Agent, Some(pid)) = (opts.kind, child.process_id()) {
-            load::lower_priority(pid);
-        }
 
         // Started but not yet anyone's: failing past here must not leave it
         // running with nothing able to see or stop it.
@@ -1998,6 +1995,8 @@ mod tests {
     }
 
     /// An agent's test run took every core, and the window server with them.
+    /// Its priority is read until `nice` has run, which may be a moment after
+    /// the spawn returns.
     #[test]
     fn an_agent_runs_below_everything_else_and_a_shell_does_not() {
         let app = tauri::test::mock_app();
@@ -2006,8 +2005,16 @@ mod tests {
         let nice = |kind| {
             let info = ptys.spawn(&handle, sleeper(kind)).unwrap();
             let pid = ptys.get(&info.id).unwrap().pid.unwrap();
-            // SAFETY: getpriority reads an integer about a process.
-            unsafe { libc::getpriority(libc::PRIO_PROCESS, pid) }
+            let mut seen = 0;
+            for _ in 0..40 {
+                // SAFETY: getpriority reads an integer about a process.
+                seen = unsafe { libc::getpriority(libc::PRIO_PROCESS, pid) };
+                if seen != 0 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            seen
         };
         let (agent, shell) = (nice(PaneKind::Agent), nice(PaneKind::Shell));
         ptys.shutdown(Duration::from_secs(2));

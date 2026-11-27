@@ -515,8 +515,10 @@ Each of them can also run as a conversation the app draws, over ACP (§20).
   the copy is what gets a path; other files are refused, with the reason.
   Before this, a drop on a terminal did nothing.
 - **PANE-20** An agent, and everything it starts, MUST run at a lower
-  priority than the rest of the Mac (nice 10, its whole process group),
-  whether in a terminal or over ACP; a shell does not. When the cores are
+  priority than the rest of the Mac (nice 10), whether in a terminal or
+  over ACP; a shell does not. A terminal's agent is started through `nice`:
+  lowered a moment after it started, Claude Code went back to normal
+  priority. When the cores are
   all busy, the screen, the keyboard and the app's window go first. A
   dozen agents each running its tests froze an 18 GB Mac until it was
   switched off with its button. Not the Mac's background policy, which
