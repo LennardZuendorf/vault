@@ -536,9 +536,15 @@ Each of them can also run as a conversation the app draws, over ACP (§20).
   runners read no worker count from the environment, so the app cannot
   set it for them; and one agent's runner started as many node workers as
   the Mac has cores.
+- **PANE-23** A click on a link an agent prints in a terminal MUST open it
+  in the browser, without asking, when it is a web or mail link. Any other
+  link (`file://`, a custom scheme) is not opened, and the user is told to
+  copy it. xterm's own handler asked "Do you want to navigate to…?" and
+  then opened nothing: its `window.open` does nothing in the app's window.
 
 Code: `pty.rs`, `pty/load.rs` (PANE-20..22), `agents.rs`, `commands/panes.rs` (`restart_pane`),
-`Terminals.tsx`, `Terminal.tsx` (drops through `lib/chatDrop.ts` and
+`Terminals.tsx`, `Terminal.tsx` (links through `lib/terminalLink.ts`,
+PANE-23; drops through `lib/chatDrop.ts` and
 `commands/attachments.rs`, PANE-19), `AgentsView.tsx` (`lib/agentSort.ts`),
 `PaneNotice.tsx`.
 
