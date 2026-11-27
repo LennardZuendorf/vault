@@ -718,6 +718,9 @@ const CEILINGS: Record<string, number> = {
   // its own module (sign_in.rs, session.rs, tabs.rs), its definition here.
   "src-tauri/src/browser/tools.rs": 700,
   "src-tauri/src/commands/panes.rs": 1000,
+  // Restoring under memory pressure (PANE-21) waits and holds panes inside
+  // the restore loop, beside the restore limit's holding: 611.
+  "src-tauri/src/commands/panes_restore.rs": 630,
   "src-tauri/src/integrations/jira.rs": 900,
   "src-tauri/src/agents.rs": 850,
   "src-tauri/src/git.rs": 1150,

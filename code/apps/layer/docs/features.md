@@ -411,7 +411,10 @@ Each of them can also run as a conversation the app draws, over ACP (§20).
   conversation was in the repo's folder. A waiting agent that did not
   record its conversation's id (one not over ACP) resumes the newest
   conversation in its folder, so it stops waiting once an agent of the
-  same CLI is open there: that agent already continues it.
+  same CLI is open there: that agent already continues it. Agents come
+  back one at a time, 1.5 s apart, and while macOS says memory is short
+  (PANE-21) the launch stops: the panes it did not get to wait like those
+  over the limit, and the user is told why.
 - **PANE-8** A terminal MUST keep 256KB of scrollback. One coming back on
   screen gets exactly what it missed, by byte position. One that missed
   more than its scrollback holds is replayed from what it still holds,
@@ -511,8 +514,28 @@ Each of them can also run as a conversation the app draws, over ACP (§20).
   each as an image. The window cannot see where a dropped file lives, so
   the copy is what gets a path; other files are refused, with the reason.
   Before this, a drop on a terminal did nothing.
+- **PANE-20** An agent, and everything it starts, MUST run at a lower
+  priority than the rest of the Mac (nice 10, its whole process group),
+  whether in a terminal or over ACP; a shell does not. When the cores are
+  all busy, the screen, the keyboard and the app's window go first. A
+  dozen agents each running its tests froze an 18 GB Mac until it was
+  switched off with its button. Not the Mac's background policy, which
+  slows an agent's work even when the Mac is idle.
+- **PANE-21** An agent MUST NOT start while macOS says this Mac is critically
+  short of memory: the start is refused with the reason and what to do,
+  and a terminal still opens. A Mac that does not say counts as having
+  memory. At launch, memory merely getting short stops putting agents
+  back (PANE-7).
+- **PANE-22** Every agent MUST be told, in its task's and the chat room's
+  context file, that the Mac is shared: tests and builds with at most two
+  workers (Playwright `--workers=2`, Vitest and Jest `--maxWorkers=2`,
+  pytest `-n 2`, Cargo `-j 2`), only the tests for what changed, one run
+  at a time, and its dev servers and watchers stopped when done. The test
+  runners read no worker count from the environment, so the app cannot
+  set it for them; and one agent's runner started as many node workers as
+  the Mac has cores.
 
-Code: `pty.rs`, `agents.rs`, `commands/panes.rs` (`restart_pane`),
+Code: `pty.rs`, `pty/load.rs` (PANE-20..22), `agents.rs`, `commands/panes.rs` (`restart_pane`),
 `Terminals.tsx`, `Terminal.tsx` (drops through `lib/chatDrop.ts` and
 `commands/attachments.rs`, PANE-19), `AgentsView.tsx` (`lib/agentSort.ts`),
 `PaneNotice.tsx`.

@@ -146,9 +146,10 @@ impl PtyManager {
         opts: SpawnOptions,
         launch: acp::Launch,
     ) -> Result<PaneInfo> {
-        let slot = self.reserve(&opts.cwd)?;
+        let slot = self.reserve(&opts.cwd, opts.kind)?;
         let id = uuid::Uuid::new_v4().to_string();
         let started = acp::start(&opts.program, &opts.args, &opts.cwd, &opts.env, launch, &id)?;
+        super::load::lower_priority(started.pid);
         let (info, pane) = Self::new_pane(&opts, &id, Some(started.pid), Io::Acp(started.conn.clone()));
         self.panes.lock().insert(id.clone(), pane.clone());
         drop(slot);

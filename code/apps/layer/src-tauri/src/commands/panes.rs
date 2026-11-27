@@ -645,6 +645,8 @@ pub(crate) fn write_chat_context(state: &AppState, dir: &Path) -> Result<()> {
         "its password. Never type the user's passwords or other secrets yourself: if none ",
         "is saved, ask the user to sign in in the Chat view's browser.\n\n",
     ));
+    // Chats start test runs too, beside every task's agents (PANE-22).
+    md.push_str(crate::pty::load::SHARED_MAC);
 
     if !cfg.projects.is_empty() {
         md.push_str("## Repositories\n\n| repo | group | path |\n|---|---|---|\n");
@@ -961,6 +963,7 @@ mod tests {
                 assert!(md.contains(tool), "{file} names {tool}");
             }
             assert!(md.contains("Answering questions"), "{file}: a question needs no task");
+            assert!(md.contains("## This Mac is shared"), "{file}: test workers are capped");
         }
         std::fs::remove_dir_all(&root).ok();
     }

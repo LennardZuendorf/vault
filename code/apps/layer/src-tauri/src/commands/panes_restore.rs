@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::agents;
 use crate::config::{AppConfig, SavedPane};
 use crate::error::{Error, Result};
+use crate::pty::load::{self, Pressure};
 use crate::pty::{PaneInfo, PaneKind};
 
 use super::panes::{
@@ -258,11 +259,25 @@ pub fn restore_panes(app: &AppHandle) {
     // transcript, and the other conversation was not resumed at all.
     let mut resumed: HashSet<(String, String)> = Default::default();
 
-    for pane in saved {
+    let mut agents_back = 0;
+    for (i, pane) in saved.iter().enumerate() {
+        // One agent at a time, while macOS says there is memory for it
+        // (PANE-21). Twelve agents at once, each starting its tests, froze
+        // the Mac before any reading could show it.
+        if pane.kind != "shell" {
+            if agents_back > 0 {
+                std::thread::sleep(load::RESTORE_GAP);
+            }
+            if load::pressure() >= Pressure::Warn {
+                hold_the_rest(app, &state, &saved[i..]);
+                break;
+            }
+            agents_back += 1;
+        }
         // Likewise: the spawn recorded it, so recording it again here is what
         // made every restart double the list. A pane that did not come back
         // keeps its entry, to be tried again at the next few launches.
-        match put_back(app, &state, &pane, &mut resumed) {
+        match put_back(app, &state, pane, &mut resumed) {
             Back::Opened(p) => {
                 if let Some(kept) = &pane.on_loop {
                     super::loops::resume_loop(app, &state, &p, kept);
@@ -281,7 +296,7 @@ pub fn restore_panes(app: &AppHandle) {
             Back::Failed(e) => {
                 eprintln!("could not restore a pane: {e}");
                 let _ = state.config.update(|c| restore_failed(c, &pane.id));
-                if super::henchman::is_saved(&pane) {
+                if super::henchman::is_saved(pane) {
                     super::notify(
                         app,
                         "error",
@@ -292,6 +307,32 @@ pub fn restore_panes(app: &AppHandle) {
             }
         }
     }
+}
+
+/// The panes a launch did not get to because memory ran short wait for the
+/// user, as those over the restore limit do (PANE-7, PANE-21).
+fn hold_the_rest(app: &AppHandle, state: &AppState, rest: &[SavedPane]) {
+    let ids: HashSet<String> = rest.iter().map(|p| p.id.clone()).collect();
+    let held = state.config.update(|c| hold(&mut c.saved_panes, &ids)).unwrap_or(0);
+    let text = format!(
+        "{held} {} not reopened: macOS says this Mac is short of memory, and more agents could freeze it. Reopen {} from the Chat view or {} task's Agents tab once there is room.",
+        if held == 1 { "pane was" } else { "panes were" },
+        if held == 1 { "it" } else { "them" },
+        if held == 1 { "its" } else { "their" },
+    );
+    eprintln!("{text}");
+    super::notify(app, "info", text);
+    let _ = app.emit("panes:waiting", ());
+}
+
+/// Mark these panes waiting, and say how many began waiting now.
+fn hold(saved: &mut [SavedPane], ids: &HashSet<String>) -> usize {
+    let mut newly = 0;
+    for p in saved.iter_mut().filter(|p| !p.waiting && ids.contains(&p.id)) {
+        p.waiting = true;
+        newly += 1;
+    }
+    newly
 }
 
 /// A pane that did not come back at launch is kept for another try, a few
@@ -638,6 +679,16 @@ mod tests {
         waiting.waiting = true;
         let back = panes_to_restore(vec![waiting, pane("open", "t1", "shell")], RESTORE_LIMIT, |_| false);
         assert_eq!(back.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["open"]);
+    }
+
+    #[test]
+    fn panes_held_for_memory_wait_and_the_ones_already_back_do_not() {
+        let mut saved = vec![pane("back", "t", "agent"), pane("next", "t", "agent"), pane("shell", "t", "shell")];
+        let rest: HashSet<String> = ["next", "shell"].map(String::from).into();
+        assert_eq!(hold(&mut saved, &rest), 2);
+        let waiting: Vec<&str> = saved.iter().filter(|p| p.waiting).map(|p| p.id.as_str()).collect();
+        assert_eq!(waiting, ["next", "shell"]);
+        assert_eq!(hold(&mut saved, &rest), 0, "already waiting is not news");
     }
 
     #[test]

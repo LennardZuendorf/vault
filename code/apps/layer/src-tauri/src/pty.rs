@@ -23,6 +23,7 @@ use crate::shellenv;
 pub mod acp;
 pub mod feed;
 mod flush;
+pub(crate) mod load;
 mod output;
 mod pids;
 mod screen;
@@ -464,6 +465,8 @@ pub struct PtyManager {
     /// several checking the count at 31 before any of them had inserted all
     /// got through. Counted under the `panes` lock, so the check sees them.
     starting: std::sync::atomic::AtomicUsize,
+    /// What macOS says about its memory, asked before an agent starts.
+    gauge: load::Gauge,
 }
 
 /// A slot under `MAX_PANES`, held from the check until the pane is in the map
@@ -501,8 +504,13 @@ impl PtyManager {
     }
 
     /// A place under the limit for a pane about to start, in a folder that
-    /// exists.
-    fn reserve(&self, cwd: &str) -> Result<Reserved<'_>> {
+    /// exists, and for an agent, on a Mac with the memory for it (PANE-21).
+    fn reserve(&self, cwd: &str, kind: PaneKind) -> Result<Reserved<'_>> {
+        // A terminal still opens: it is how the user stops what is using the
+        // memory.
+        if kind == PaneKind::Agent && (self.gauge.0)() == load::Pressure::Critical {
+            return Err(Error::Pty(load::SHORT_OF_MEMORY.into()));
+        }
         // Checked before anything is allocated, so refusing costs nothing.
         let slot = {
             let panes = self.panes.lock();
@@ -595,7 +603,7 @@ impl PtyManager {
         if let Some(input) = &opts.initial_input {
             too_long_to_type(input)?;
         }
-        let slot = self.reserve(&opts.cwd)?;
+        let slot = self.reserve(&opts.cwd, opts.kind)?;
 
         let system = portable_pty::native_pty_system();
         let size =
@@ -637,6 +645,9 @@ impl PtyManager {
         let mut child =
             pair.slave.spawn_command(cmd).map_err(|e| Error::Pty(format!("spawn {}: {e}", opts.program)))?;
         drop(pair.slave);
+        if let (PaneKind::Agent, Some(pid)) = (opts.kind, child.process_id()) {
+            load::lower_priority(pid);
+        }
 
         // Started but not yet anyone's: failing past here must not leave it
         // running with nothing able to see or stop it.
@@ -1950,5 +1961,57 @@ mod tests {
         assert_eq!(ptys.limit(), MAX_PANES);
         ptys.set_limit(0);
         assert_eq!(ptys.limit(), PANE_LIMIT);
+    }
+
+    fn sleeper(kind: PaneKind) -> SpawnOptions {
+        SpawnOptions {
+            task_id: "t".into(),
+            checkout_id: None,
+            cwd: std::env::temp_dir().to_string_lossy().to_string(),
+            kind,
+            title: "t".into(),
+            program: "/bin/sleep".into(),
+            args: vec!["30".into()],
+            agent_id: None,
+            rows: None,
+            cols: None,
+            initial_input: None,
+            prompted: false,
+            env: Vec::new(),
+            title_activity: None,
+            title_topic: None,
+        }
+    }
+
+    /// Agents started on a Mac out of memory froze it until it was switched
+    /// off with its button. A terminal still opens, to stop what uses it.
+    #[test]
+    fn no_agent_starts_while_the_mac_is_critically_short_of_memory() {
+        let app = tauri::test::mock_app();
+        let handle = app.handle().clone();
+        let ptys = PtyManager { gauge: load::Gauge(|| load::Pressure::Critical), ..Default::default() };
+        let agent = ptys.spawn(&handle, sleeper(PaneKind::Agent));
+        let shell = ptys.spawn(&handle, sleeper(PaneKind::Shell));
+        ptys.shutdown(Duration::from_secs(2));
+        assert!(agent.is_err_and(|e| e.to_string().contains("short of memory")));
+        assert!(shell.is_ok(), "refused: {:?}", shell.err().map(|e| e.to_string()));
+    }
+
+    /// An agent's test run took every core, and the window server with them.
+    #[test]
+    fn an_agent_runs_below_everything_else_and_a_shell_does_not() {
+        let app = tauri::test::mock_app();
+        let handle = app.handle().clone();
+        let ptys = PtyManager::default();
+        let nice = |kind| {
+            let info = ptys.spawn(&handle, sleeper(kind)).unwrap();
+            let pid = ptys.get(&info.id).unwrap().pid.unwrap();
+            // SAFETY: getpriority reads an integer about a process.
+            unsafe { libc::getpriority(libc::PRIO_PROCESS, pid) }
+        };
+        let (agent, shell) = (nice(PaneKind::Agent), nice(PaneKind::Shell));
+        ptys.shutdown(Duration::from_secs(2));
+        assert_eq!(agent, load::AGENT_NICE);
+        assert_eq!(shell, 0);
     }
 }

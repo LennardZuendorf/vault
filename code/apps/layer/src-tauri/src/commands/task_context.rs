@@ -324,8 +324,11 @@ This task reviews pull request {}#{}{}, at commit `{}`: {}.              `{}` is
         "use `browser_sign_in`, which fills an account the user saved without showing you ",
         "its password. Never type the user's passwords or other secrets yourself: if none ",
         "is saved, ask the user to sign in or to save one. An app signed in on one port ",
-        "of this machine is signed in on another with `browser_copy_session`.\n",
+        "of this machine is signed in on another with `browser_copy_session`.\n\n",
     ));
+    // A dozen agents each running its tests with every core froze the Mac (PANE-22).
+    md.push_str(crate::pty::load::SHARED_MAC.trim_end());
+    md.push('\n');
     md
 }
 
@@ -602,6 +605,13 @@ mod tests {
         let md = task_context(&epic, &[], None, None, None);
         assert!(md.contains("## This is an epic\n\nYou orchestrate its sub-tasks; you write no code."));
         assert!(!task_context(&task(), &[], None, None, None).contains("This is an epic"));
+    }
+
+    #[test]
+    fn every_task_tells_its_agents_to_run_tests_with_two_workers() {
+        let md = task_context(&task(), &[], None, None, None);
+        assert!(md.contains("## This Mac is shared"));
+        assert!(md.contains("--workers=2") && md.contains("--maxWorkers=2"));
     }
 
     #[test]
