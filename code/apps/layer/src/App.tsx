@@ -263,7 +263,7 @@ function TaskMain({ task }: { task: TaskView }) {
     <>
       <div className="ws-header">
         <SidebarToggle />
-        <h1>{task.name}</h1>
+        <h1>{task.details?.display_name ?? task.name}</h1>
         <span className="branch">{task.branch}</span>
         <div className="chips">
           {task.checkouts.map((c) => (

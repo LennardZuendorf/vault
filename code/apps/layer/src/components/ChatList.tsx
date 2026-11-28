@@ -7,6 +7,7 @@ import { menuKeys, pressKeys } from "../lib/press";
 import type { PaneInfo, SlackThreadView, WaitingPane } from "../lib/types";
 import { useStore } from "../store";
 import { ChevronIcon } from "./icons";
+import { ItemDetailsIndicators } from "./ItemDetails";
 import { RestartButton } from "./Restart";
 import { WaitingChats } from "./WaitingPanes";
 
@@ -90,6 +91,7 @@ export function ChatItem({
           {p.topic && `${agents.find((a) => a.id === p.agent_id)?.name ?? p.title} · `}
           {restarting ? "restarting…" : p.running ? started(p.started_at) : "ended"}
         </span>
+        <ItemDetailsIndicators details={p.details} />
       </span>
       {canRestart(p, agents) && !restarting && <RestartButton pane={p} onRestart={onRestart} />}
       <span
@@ -130,6 +132,7 @@ interface SlackProps {
   rooms: Map<string, SlackThreadView>;
   active: string | null;
   item: (p: PaneInfo) => ReactNode;
+  onEdit: (pane: WaitingPane, automaticName: string) => void;
 }
 
 /**
@@ -137,7 +140,16 @@ interface SlackProps {
  * (CHAT-5). Each thread the bot was mentioned in keeps a chat, so mixed in
  * with yours they buried the chats you started.
  */
-export function SlackChats({ open, onToggle, panes, pins, rooms, active, item }: SlackProps) {
+export function SlackChats({
+  open,
+  onToggle,
+  panes,
+  pins,
+  rooms,
+  active,
+  item,
+  onEdit,
+}: SlackProps) {
   const keep = (w: WaitingPane) => w.cwd !== null && rooms.has(w.cwd) && !pins.has(w);
   const waiting = useStore((s) => s.waiting).filter(keep);
   const count = panes.length + waiting.length;
@@ -163,6 +175,7 @@ export function SlackChats({ open, onToggle, panes, pins, rooms, active, item }:
       {shown.map(item)}
       {open && (
         <WaitingChats
+          onEdit={onEdit}
           keep={keep}
           pins={pins}
           heading={false}

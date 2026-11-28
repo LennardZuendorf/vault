@@ -106,7 +106,7 @@ export function EpicsSection({
   expanded: Record<string, boolean>;
   onSelect: (taskId: string) => void;
   onToggle: (id: string) => void;
-  onMenu: (x: number, y: number, task: TaskView) => void;
+  onMenu: (x: number, y: number, task: TaskView, automaticName?: string) => void;
 }) {
   const { layerEpics, subsOf, jiraEpics } = sections;
   const opening = useStore((s) => s.opening);

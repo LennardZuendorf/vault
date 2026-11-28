@@ -17,6 +17,7 @@ import type {
   TicketType,
   JiraTransition,
   Message,
+  ItemDetails,
   PaneInfo,
   Project,
   RepoFeedback,
@@ -34,6 +35,9 @@ import type {
 import type { Elsewhere } from "../lib/types-profiles";
 
 export interface World {
+  taskDetails: Record<string, ItemDetails>;
+  chatDetails: Record<string, ItemDetails>;
+  tagCatalog: string[];
   projects: Project[];
   health: RepoHealth[];
   cleanup: CleanupItem[];
@@ -831,6 +835,9 @@ const say = (lines: string[]) => lines.join("\r\n") + "\r\n";
 /** Everything connected and in use: the view most screens are designed for. */
 function busy(): World {
   return {
+    taskDetails: {},
+    chatDetails: {},
+    tagCatalog: [],
     projects,
     health,
     cleanup,
@@ -1252,6 +1259,9 @@ function messages(): Message[] {
 /** First launch: nothing added, nothing connected. */
 function empty(): World {
   return {
+    taskDetails: {},
+    chatDetails: {},
+    tagCatalog: [],
     projects: [],
     health: [],
     cleanup: [],

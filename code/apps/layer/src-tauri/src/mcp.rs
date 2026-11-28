@@ -26,6 +26,8 @@ use tauri::{AppHandle, Manager};
 use crate::commands::{self, AppState};
 use crate::error::Result;
 
+mod details;
+
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// Where the server ended up listening, and the tokens that admit callers.
@@ -233,6 +235,7 @@ async fn dispatch(app: &AppHandle, method: &str, params: Value, caller: Option<&
                     .chain(commands::pr_images_tools())
                     .chain(commands::finish_tools())
                     .chain(commands::base_tools())
+                    .chain(details::tools())
                     .chain(commands::epic_tools())
                     .chain(commands::henchman_tools(app, caller))
                     .chain(commands::routine_tools(app, caller))
@@ -276,6 +279,11 @@ fn to_text(v: &Value) -> String {
         Value::String(s) => s.clone(),
         other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
     }
+}
+
+fn listed_panes(state: &AppState, args: &Value) -> Result<Value> {
+    // Desktop projections include local details; the existing agent payload must not.
+    Ok(serde_json::to_value(state.ptys.list(arg(args, "task_id")))?)
 }
 
 pub(crate) fn arg<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
@@ -761,6 +769,7 @@ async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) ->
         }
 
         "slack_diagnose" => Ok(commands::slack_diagnose(state).await?),
+        n if details::owns(n) => details::call(app, n, args, caller).await,
         n if commands::tracker_owns(n) => commands::tracker_call(app, n, args).await,
         n if commands::grafana_owns(n) => commands::grafana_call(&state, n, args).await,
         n if commands::s3_logs_owns(n) => commands::s3_logs_call(&state, n, args).await,
@@ -822,9 +831,7 @@ async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) ->
             Ok(serde_json::to_value(started)?)
         }
 
-        "list_panes" => {
-            Ok(serde_json::to_value(commands::list_panes(state, arg(&args, "task_id").map(str::to_string)))?)
-        }
+        "list_panes" => listed_panes(&state, &args),
 
         "handoff_prompt" => {
             let pane_id = required(&args, "pane_id")?.to_string();
@@ -980,7 +987,7 @@ mod tests {
 
     /// Every tool `tools/list` answers with, the ones defined beside their
     /// feature included: a danger tool defined there is gated here too.
-    fn served() -> Vec<Value> {
+    pub(super) fn served() -> Vec<Value> {
         let mut all = tools();
         all.extend(spec_tools());
         all.extend(
@@ -991,6 +998,7 @@ mod tests {
                 .chain(commands::pr_images_tools())
                 .chain(commands::finish_tools())
                 .chain(commands::base_tools())
+                .chain(details::tools())
                 .chain(commands::epic_tools())
                 .chain(commands::routine_listed()),
         );

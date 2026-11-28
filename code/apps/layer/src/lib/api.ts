@@ -4,6 +4,8 @@ import { specApi } from "./api-spec";
 import type {
   AcpVersion,
   AcpView,
+  DetailsPatch,
+  ItemDetails,
   AddedRepo,
   AgentStatus,
   AwsSetup,
@@ -122,6 +124,12 @@ export const api = {
 
   // tasks
   listTasks: (focus?: string | null) => invoke<TaskView[]>("list_tasks", { focus: focus ?? null }),
+  setTaskDetails: (taskId: string, patch: DetailsPatch) =>
+    invoke<ItemDetails>("set_task_details", { taskId, patch }),
+  setChatDetails: (room: string, patch: DetailsPatch) =>
+    invoke<ItemDetails>("set_chat_details", { room, patch }),
+  listTags: () => invoke<string[]>("list_tags"),
+  addTag: (tag: string) => invoke<string>("add_tag", { tag }),
   /** The task for one of your pull requests, made on its branch if there is none (REV-7). */
   taskForPr: (repo: string, head: string, base: string, title: string) =>
     invoke<Task>("task_for_pr", { repo, head, base, title }),

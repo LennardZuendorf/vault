@@ -17,6 +17,8 @@ use crate::error::{Error, Result};
 mod browser;
 mod henchman;
 mod integrations;
+pub mod item_details;
+mod item_details_store;
 mod phone;
 mod project;
 pub mod shared;
@@ -239,6 +241,15 @@ pub struct AppConfig {
     pub projects: Vec<Project>,
     #[serde(default)]
     pub tasks: Vec<Task>,
+    /// Desktop-only overrides, keyed by stable task id and saved chat room.
+    /// Old profiles have no overrides.
+    #[serde(default)]
+    pub task_details: HashMap<String, item_details::ItemDetails>,
+    #[serde(default)]
+    pub chat_details: HashMap<String, item_details::ItemDetails>,
+    /// First-saved tag spelling, including tags not assigned to any item.
+    #[serde(default)]
+    pub tag_catalog: Vec<String>,
     #[serde(default)]
     pub checkouts: Vec<Checkout>,
     /// Read-only remnant of v1; drained by `migrate`.

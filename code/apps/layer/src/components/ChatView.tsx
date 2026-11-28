@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
-import { canRestart, CHAT_TASK_ID, showsFolded } from "../lib/derive";
+import { canEditChatDetails, canRestart, CHAT_TASK_ID, paneName, showsFolded } from "../lib/derive";
 import { useFocusedPane } from "../lib/goto";
 import { usePanesOf } from "../lib/panes";
 import { read, write } from "../lib/persist";
 import { pinnedFirst, usePins } from "../lib/pins";
 import { useSlackBot } from "../lib/slackBot";
-import type { PaneInfo } from "../lib/types";
+import type { ItemDetails, PaneInfo, WaitingPane } from "../lib/types";
 import { useStore } from "../store";
 import { PaneView } from "./AcpPane";
 import { BrowserSide, BrowserToggle, useBrowserSide } from "./BrowserSide";
 import { ChatItem, SlackChats, useSlackFold } from "./ChatList";
 import { PlusIcon } from "./icons";
+import { ItemDetailsEditor } from "./ItemDetails";
 import { ContextMenu, type MenuItem } from "./menu";
 import { PaneExited, useRestart } from "./Restart";
 import { SidebarGrip } from "./sidebar/SidebarGrip";
@@ -31,6 +32,7 @@ export function ChatView() {
   const { panes, ids } = usePanesOf(CHAT_TASK_ID);
   const agents = useStore((s) => s.agents);
   const refreshPanes = useStore((s) => s.refreshPanes);
+  const saveChatDetails = useStore((s) => s.saveChatDetails);
   // Starting or closing a chat fails under the list's head, where + is, or
   // under the start buttons while there are no chats (NOTE-6).
   const failure = useFailure();
@@ -57,6 +59,14 @@ export function ChatView() {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [rowMenu, setRowMenu] = useState<{ x: number; y: number; pane: PaneInfo } | null>(null);
   const [closing, setClosing] = useState<string | null>(null);
+  const [editing, setEditing] = useState<{
+    room: string;
+    details?: ItemDetails;
+    automaticName: string;
+  } | null>(null);
+  const editWaiting = (pane: WaitingPane, automaticName: string) => {
+    if (pane.cwd) setEditing({ room: pane.cwd, details: pane.details, automaticName });
+  };
   const addRef = useRef<HTMLButtonElement>(null);
   const installed = agents.filter((a) => a.installed);
   // One browser for every chat, as a task's agents share the task's (BRW-2).
@@ -100,6 +110,8 @@ export function ChatView() {
     if (shown.length < 2) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Tab" || !e.ctrlKey || e.metaKey || e.altKey) return;
+      // This capture listener runs before modal handlers, including waiting-chat editors.
+      if (document.querySelector('[aria-modal="true"]')) return;
       e.preventDefault();
       e.stopPropagation();
       const at = active ? shown.indexOf(active) : -1;
@@ -155,6 +167,19 @@ export function ChatView() {
     : [{ label: "No agent CLIs on your PATH", onSelect: () => {}, disabled: true }];
 
   const rowItems = (p: PaneInfo): MenuItem[] => [
+    ...(canEditChatDetails(p)
+      ? [
+          {
+            label: "Edit details…",
+            onSelect: () =>
+              setEditing({
+                room: p.cwd,
+                details: p.details,
+                automaticName: paneName({ ...p, details: undefined }),
+              }),
+          },
+        ]
+      : []),
     { label: pins.has(p) ? "Unpin" : "Pin", onSelect: () => pins.toggle(p.cwd) },
     ...(canRestart(p, agents)
       ? [
@@ -217,6 +242,7 @@ export function ChatView() {
           {anyPinned && <div className="chat-list-group">Pinned</div>}
           {pinned.map(item)}
           <WaitingChats
+            onEdit={editWaiting}
             keep={pins.has}
             pins={pins}
             heading={false}
@@ -230,8 +256,13 @@ export function ChatView() {
           {anyPinned && mine.length > 0 && <div className="chat-list-group">Open</div>}
           {mine.map(item)}
           {panes.length === 0 && <div className="chat-list-empty">No chats open.</div>}
-          <WaitingChats keep={(w) => !isSlack(w) && !pins.has(w)} pins={pins} />
+          <WaitingChats
+            keep={(w) => !isSlack(w) && !pins.has(w)}
+            pins={pins}
+            onEdit={editWaiting}
+          />
           <SlackChats
+            onEdit={editWaiting}
             open={slackOpen}
             onToggle={toggleSlack}
             panes={bots}
@@ -317,7 +348,8 @@ export function ChatView() {
           confirmLabel="Close"
           body={
             <>
-              <b>{doomed.title}</b> will be stopped and its scrollback discarded.
+              <b>{doomed.details?.display_name ?? doomed.title}</b> will be stopped and its
+              scrollback discarded.
               {doomed.running && " Anything it is part-way through is lost."}
               {" This can't be undone."}
             </>
@@ -328,6 +360,15 @@ export function ChatView() {
           // vanishing while the tab stays put.
           busyLabel="Closing…"
           onConfirm={() => close(doomed.id)}
+        />
+      )}
+      {editing && (
+        <ItemDetailsEditor
+          key={editing.room}
+          details={editing.details}
+          automaticName={editing.automaticName}
+          onSave={(patch) => saveChatDetails(editing.room, patch)}
+          onClose={() => setEditing(null)}
         />
       )}
     </div>

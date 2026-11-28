@@ -44,7 +44,7 @@ export function EpicMain({ epic }: { epic: TaskView }) {
     <>
       <div className="ws-header">
         <SidebarToggle />
-        <h1>{epic.name}</h1>
+        <h1>{epic.details?.display_name ?? epic.name}</h1>
         <div className="chips">
           <span className="ui-chip">epic</span>
           {epic.checkouts.map((c) => (

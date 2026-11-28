@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::agents;
 use crate::config::{AppConfig, SavedPane};
@@ -482,8 +482,8 @@ pub struct WaitingPane {
 /// The panes waiting to be reopened. Off the command thread: each agent's
 /// title is read from its transcript on disk.
 #[tauri::command]
-pub async fn waiting_panes(app: AppHandle) -> Result<Vec<WaitingPane>> {
-    super::blocking(app, |state| Ok(waiting_panes_inner(state))).await
+pub async fn waiting_panes(app: AppHandle) -> Result<Vec<super::desktop_details::DesktopItem<WaitingPane>>> {
+    super::blocking(app, |state| Ok(super::desktop_details::project_waiting(state))).await
 }
 
 pub(crate) fn waiting_panes_inner(state: &AppState) -> Vec<WaitingPane> {
@@ -603,10 +603,14 @@ fn take_waiting(saved: &mut Vec<SavedPane>, id: &str) -> Option<SavedPane> {
 /// Forget a waiting pane: the user does not want it back. Its CLI's
 /// transcript stays where the CLI keeps it.
 #[tauri::command]
-pub fn forget_waiting_pane(app: AppHandle, state: State<AppState>, id: String) -> Result<()> {
-    state.config.update(|c| c.saved_panes.retain(|p| !(p.id == id && p.waiting)))?;
+pub async fn forget_waiting_pane(app: AppHandle, id: String) -> Result<()> {
+    super::blocking(app.clone(), move |state| forget_waiting_pane_inner(state, &id)).await?;
     let _ = app.emit("panes:waiting", ());
     Ok(())
+}
+
+pub(crate) fn forget_waiting_pane_inner(state: &AppState, id: &str) -> Result<()> {
+    state.config.update(|c| super::item_details::forget_saved_pane(c, id, true))
 }
 
 #[cfg(test)]
@@ -807,5 +811,56 @@ mod tests {
         record(&mut saved, chat, Some("named".into()), Some("opened-on".into()));
         assert_eq!(saved_session(&saved, "the-chat").as_deref(), Some("named"), "the one its agent names wins");
         assert_eq!(saved.len(), 1, "recorded once");
+    }
+
+    #[test]
+    fn room_details_survive_waiting_and_replacement_ids_without_changing_conversation_history() {
+        use crate::config::item_details::ItemDetails;
+
+        for slack in [false, true] {
+            let dir = std::env::temp_dir().join(format!("layer-room-details-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let store = crate::config::ConfigStore::for_tests(dir.join("config.json"), AppConfig::default());
+            let room = "/old/_chat/the-room";
+            let old = SavedPane {
+                cwd: Some(room.into()),
+                acp: true,
+                session: Some("conversation".into()),
+                ..pane("old-id", CHAT_TASK_ID, "agent")
+            };
+            store
+                .update(|c| {
+                    c.saved_panes.push(old.clone());
+                    c.chat_details.insert(
+                        room.into(),
+                        ItemDetails { display_name: Some("Alias".into()), tags: vec!["Review".into()], color: None },
+                    );
+                    c.tag_catalog.push("Review".into());
+                    if slack {
+                        c.slack_threads.push(
+                            serde_json::from_value(serde_json::json!({
+                                "room":room, "channel":"C1", "ts":"1.2"
+                            }))
+                            .unwrap(),
+                        );
+                    }
+                    // Waiting and taking a pane for reopening must not clear its room.
+                    wait_for_the_rest(&mut c.saved_panes, &HashSet::new());
+                    let taken = take_waiting(&mut c.saved_panes, "old-id").unwrap();
+                    assert_eq!(taken.session.as_deref(), Some("conversation"));
+                    let replacement = SavedPane { id: "new-id".into(), ..old };
+                    record(&mut c.saved_panes, replacement, None, taken.session);
+                    c.saved_panes.retain(|p| p.id != "old-id");
+                })
+                .unwrap();
+            let loaded: AppConfig = serde_json::from_slice(&std::fs::read(dir.join("config.json")).unwrap()).unwrap();
+            assert_eq!(loaded.chat_details[room].display_name.as_deref(), Some("Alias"));
+            assert_eq!(loaded.chat_details[room].tags, ["Review"]);
+            assert_eq!(loaded.tag_catalog, ["Review"]);
+            assert_eq!(loaded.saved_panes.len(), 1);
+            assert_eq!(loaded.saved_panes[0].id, "new-id");
+            assert_eq!(loaded.saved_panes[0].session.as_deref(), Some("conversation"));
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }

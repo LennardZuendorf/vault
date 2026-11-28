@@ -788,6 +788,7 @@ const architecture = existsSync("docs/architecture.md") ? read("docs/architectur
 // Grafana's with the rest of Grafana, S3's with the rest of S3.
 for (const file of [
   "src-tauri/src/mcp.rs",
+  "src-tauri/src/mcp/details.rs",
   "src-tauri/src/browser/tools.rs",
   "src-tauri/src/commands/grafana.rs",
   "src-tauri/src/commands/s3_logs.rs",

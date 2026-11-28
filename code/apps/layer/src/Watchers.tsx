@@ -7,6 +7,7 @@ import { CHAT_TASK_ID } from "./lib/derive";
 import { goTo } from "./lib/goto";
 import { useLair } from "./lib/henchman-lair";
 import { useOrders } from "./lib/henchman-orders";
+import { useItemDetails } from "./lib/item-details-watcher";
 import { useRoutines } from "./lib/routines";
 import { useSpecs } from "./lib/specs";
 import { useTheme } from "./lib/theme";
@@ -52,6 +53,7 @@ export function Watchers() {
   const setAppActive = useStore((s) => s.setAppActive);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
+  useItemDetails();
 
   // The page's colours, and the terminals', which xterm draws itself (SET-5).
   const theme = useTheme(useStore((s) => s.settings?.ui.theme));

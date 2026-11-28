@@ -9,12 +9,14 @@ import { NotificationSettings } from "./NotificationSettings";
 import { ObservabilitySettings } from "./ObservabilitySettings";
 import { PhoneSettings } from "./PhoneSettings";
 import { SlackSettings } from "./SlackSettings";
+import { TagsSettings } from "./TagsSettings";
 import { TicketsSettings } from "./TicketsSettings";
 import { Modal } from "./ui";
 
 type Section =
   | "appearance"
   | "notifications"
+  | "tags"
   | "agents"
   | "browser"
   | "phone"
@@ -30,6 +32,7 @@ type Section =
 const TABS: [Section, string][] = [
   ["appearance", "Appearance"],
   ["notifications", "Notifications"],
+  ["tags", "Tags"],
   ["agents", "Agents"],
   ["browser", "Browser"],
   ["phone", "Remote access"],
@@ -75,6 +78,7 @@ export function Settings() {
       }
     >
       {section === "appearance" && <AppearanceSettings />}
+      {section === "tags" && <TagsSettings />}
       {section === "notifications" && (
         <NotificationSettings toMessaging={() => setSection("slack")} />
       )}

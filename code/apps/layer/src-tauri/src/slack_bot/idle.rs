@@ -160,7 +160,20 @@ mod tests {
         };
         let config = ConfigStore::for_tests(
             dir.join("config.json"),
-            AppConfig { saved_panes: vec![saved], ..Default::default() },
+            AppConfig {
+                saved_panes: vec![saved],
+                chat_details: [(
+                    pane.cwd.clone(),
+                    crate::config::item_details::ItemDetails {
+                        display_name: Some("Slack alias".into()),
+                        tags: vec!["Review".into()],
+                        color: None,
+                    },
+                )]
+                .into(),
+                tag_catalog: vec!["Review".into()],
+                ..Default::default()
+            },
         );
         let deadline = Instant::now() + Duration::from_secs(10);
         while ptys.info(&pane.id).unwrap().activity != Activity::Done && Instant::now() < deadline {
@@ -178,6 +191,10 @@ mod tests {
         let row = &config.read().saved_panes[0];
         assert!(row.waiting, "it waits to be reopened rather than coming back at launch");
         assert_eq!(row.session.as_deref(), Some("s-1"), "on the conversation it was in");
+        let loaded: AppConfig = serde_json::from_slice(&std::fs::read(dir.join("config.json")).unwrap()).unwrap();
+        assert_eq!(loaded.chat_details[&pane.cwd].display_name.as_deref(), Some("Slack alias"));
+        assert_eq!(loaded.chat_details[&pane.cwd].tags, ["Review"]);
+        assert_eq!(loaded.tag_catalog, ["Review"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

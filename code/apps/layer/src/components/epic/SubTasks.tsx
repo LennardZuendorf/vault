@@ -8,6 +8,7 @@ import { trackerOfKey } from "../../lib/tracker";
 import type { EpicView, SubTaskView, TaskView, Ticket, TicketPage } from "../../lib/types";
 import { useStore } from "../../store";
 import { typeMap } from "../IssueType";
+import { ItemDetailsIndicators } from "../ItemDetails";
 import { StartWorkDialog } from "../tickets/StartWorkDialog";
 import { Confirm, ErrorMessage, Spinner, useFailure } from "../ui";
 import { FileSubTasks } from "./FileSubTasks";
@@ -231,6 +232,7 @@ function NotHereYet({
 
 /** One sub-task: ticket, title, steps, requirements, and state with its action. */
 function SubTaskRow({ sub, all }: { sub: SubTaskView; all: SubTaskView[] }) {
+  const task = useStore((s) => s.tasks.find((t) => t.id === sub.task_id));
   const prs = useStore((s) => s.prs);
   const agents = useTaskAgents(sub.task_id ?? "");
   const waits = openWaits(sub, all, prs);
@@ -261,7 +263,8 @@ function SubTaskRow({ sub, all }: { sub: SubTaskView; all: SubTaskView[] }) {
       <span className="key">{sub.key ?? "new"}</span>
       <span className="title">
         <span className={`dot ${dot}`} />
-        {sub.title}
+        {task?.details?.display_name ?? sub.title}
+        <ItemDetailsIndicators details={task?.details} />
       </span>
       <span
         className="steps"
