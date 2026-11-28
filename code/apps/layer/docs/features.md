@@ -706,7 +706,8 @@ integrations, the app's tools, the repos and the tasks in flight.
 - **DETAIL-2** Chat and Work rows MUST show assigned tags as readable,
   neutral text chips and an optional separate, named color indicator: a
   thin bar down the row's left edge, so the row keeps its lines and the
-  colour is never read as a second status dot.
+  colour is never read as a second status dot. A task under an epic has
+  its bar at its indent, so it never reads as part of the epic's.
   The choices are Lavender, Cyan, Rose, Blue, Amber, Mint and **No color**
   (`data-1` through `data-6`, or no assignment). Color is independent of
   tags, agent activity, checkout and review status: never a status dot

@@ -40,6 +40,12 @@ button.item-details-tag {
   width: 3px;
   border-radius: 0;
 }
+/* A task under an epic is indented (29px). At the row's edge its bar ran on
+   from the epic's own, in another colour, and read as the epic's. At the
+   indent, just before its dot, it is the task's. */
+.sub-row > .item-color-bar {
+  left: 18px;
+}
 .item-details-actions {
   display: flex;
   justify-content: flex-end;
