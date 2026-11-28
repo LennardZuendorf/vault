@@ -8,6 +8,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
 import type { PrImageOffer as Offer } from "../lib/types";
+import { PrShots } from "./PrShots";
 
 export function PrImageOffer({
   taskId,
@@ -78,30 +79,13 @@ export function PrImageOffer({
           {adding ? "Adding…" : "Add to pull request"}
         </button>
       </div>
-      <div className="pr-shots">
-        <div className="pr-shots-list">
-          {offer.images.map((i) => (
-            <figure key={i.path} className="pr-shot">
-              {i.preview && <img src={i.preview} alt={i.caption} />}
-              <figcaption>{i.caption}</figcaption>
-              <button
-                className="pr-shot-remove"
-                title="Leave out"
-                aria-label={`Leave out ${i.caption}`}
-                onClick={() =>
-                  setOffer({ ...offer, images: offer.images.filter((x) => x.path !== i.path) })
-                }
-              >
-                ×
-              </button>
-            </figure>
-          ))}
-        </div>
-        <div className="muted">
-          An agent asked to show these in the pull request. Added, they are stored in the repository
-          for everyone who can read it.
-        </div>
-      </div>
+      <PrShots
+        images={offer.images}
+        onRemove={(path) =>
+          setOffer({ ...offer, images: offer.images.filter((x) => x.path !== path) })
+        }
+        note="An agent asked to show these in the pull request. Added, they are stored in the repository for everyone who can read it."
+      />
     </div>
   );
 }

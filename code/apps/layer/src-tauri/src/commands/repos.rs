@@ -364,7 +364,8 @@ pub(super) mod tests {
                 check: None,
                 check_approved: None,
                 spec_folder: None,
-                specs_in_app: false,
+                spec_toolset: None,
+                spec_commit: Default::default(),
                 remote: None,
                 repository_id: None,
             }],
@@ -376,6 +377,7 @@ pub(super) mod tests {
     pub(crate) fn add_task(cfg: &mut AppConfig, root: &Path, name: &str) {
         let folder = root.join("tasks").join(name);
         cfg.tasks.push(Task {
+            toolset: None,
             id: name.into(),
             name: name.into(),
             root: folder.to_string_lossy().to_string(),

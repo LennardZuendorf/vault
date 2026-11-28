@@ -55,6 +55,7 @@ pub(crate) fn task_for_pr_inner(state: &AppState, repo: &str, head: &str, base: 
             epic_key: None,
             epic: false,
             sub_task: None,
+            toolset: None,
         },
     )
 }
@@ -153,7 +154,8 @@ mod tests {
             check: None,
             check_approved: None,
             spec_folder: None,
-            specs_in_app: false,
+            spec_toolset: None,
+            spec_commit: Default::default(),
             remote: None,
             repository_id: None,
         });

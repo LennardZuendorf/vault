@@ -276,8 +276,10 @@ body.dragging * {
 .ws:hover {
   background: var(--hover);
 }
+/* The selected task stands a clear step above hover, on the bare list and in an epic card:
+   the signal colour at 16% over whatever the row sits on, in every theme. */
 .ws.active {
-  background: var(--selected);
+  background: color-mix(in srgb, var(--signal) 16%, transparent);
 }
 .ws.deleting {
   opacity: 0.55;
@@ -892,6 +894,35 @@ body.dragging * {
   border-radius: var(--radius-md);
   border: 1px solid var(--line);
 }
+.pr-shot-open {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+.pr-shot-open:hover img {
+  border-color: var(--muted);
+}
+/* One screenshot full size (PR-13), over the window and its dialogs. */
+.shot-viewer {
+  z-index: 100;
+  flex-direction: column;
+  gap: 10px;
+  cursor: zoom-out;
+}
+.shot-viewer img {
+  max-width: 100%;
+  max-height: calc(100% - 32px);
+  object-fit: contain;
+  border-radius: var(--radius-md);
+}
+.shot-viewer-caption {
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: var(--type-ui-small-size);
+}
 .pr-shot figcaption {
   color: var(--muted);
 }
@@ -1183,58 +1214,6 @@ body.dragging * {
   flex: 1;
   font-family: var(--font-mono);
   font-size: var(--type-ui-small-size);
-}
-
-.pr-detail {
-  min-width: 0;
-  margin-top: 10px;
-}
-.pr-comments {
-  display: grid;
-  gap: 14px;
-  margin-top: 8px;
-  min-width: 0;
-  cursor: auto;
-}
-.pr-comments section {
-  min-width: 0;
-}
-.pr-comments h4 {
-  margin: 0 0 6px;
-  font-size: var(--type-ui-small-size);
-}
-.pr-comments p.muted {
-  margin: 0;
-}
-.pr-comment-items {
-  max-height: min(45vh, 320px);
-  overflow: auto;
-  border-radius: var(--radius-md);
-  background: var(--panel);
-  padding: 8px 10px;
-  user-select: text;
-}
-.pr-note-heading {
-  flex-wrap: wrap;
-  justify-content: space-between;
-  overflow-wrap: anywhere;
-  font-size: var(--type-ui-small-size);
-}
-.pr-thread + .pr-thread {
-  margin-top: 14px;
-}
-.pr-thread-heading {
-  overflow-wrap: anywhere;
-  font-size: var(--type-ui-small-size);
-}
-.pr-thread-heading .ui-chip {
-  margin-left: 6px;
-}
-summary.pr-thread-heading {
-  cursor: pointer;
-}
-.pr-thread-body {
-  margin-top: 6px;
 }
 
 /* Rows with a checkbox: Update from base's repos. */

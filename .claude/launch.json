@@ -49,6 +49,17 @@
       "port": 1420
     },
     {
+      "name": "layer-server",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": [
+        "run",
+        "--cwd",
+        "code/apps/layer",
+        "dev:server"
+      ],
+      "port": 5176
+    },
+    {
       "name": "glyph-dev",
       "runtimeExecutable": "bun",
       "runtimeArgs": [

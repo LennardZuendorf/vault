@@ -10,6 +10,7 @@ import type {
   SlackBotConfig,
   SlackConfig,
 } from "./types-integrations";
+import type { SpecCommit, SpecSettings } from "./types-spec";
 
 export interface Project {
   id: string;
@@ -28,10 +29,11 @@ export interface Project {
   /** The check as this Mac's user typed or confirmed it. A loop runs
    *  `check` only when it is this, word for word (LOOP-1). */
   check_approved?: string | null;
-  /** Where specs are committed here (SPEC-1). Absent: `specs`. */
+  /** Where specs are committed here (SPEC-28). Absent: `specs`. */
   spec_folder?: string | null;
-  /** Specs are kept by the app instead of committed here (SPEC-3). */
-  specs_in_app?: boolean;
+  /** The toolset Start work offers here, and what Commit spec puts here (`none`: the app keeps it, SPEC-28). */
+  spec_toolset?: string | null;
+  spec_commit?: SpecCommit;
 }
 
 /** How a registered repository is doing (REPO-5). */
@@ -114,6 +116,7 @@ export interface Task {
   epic?: boolean;
   /** The epic this task is a sub-task of, and its title there (EPIC-7). */
   sub_task?: SubTaskOf | null;
+  toolset?: string | null; // the spec toolset it was made with; absent: the app's default
 }
 
 /** The pull request a review task left from 0.5.0 is of. */
@@ -158,7 +161,20 @@ export interface CheckoutView extends Checkout {
   changed: number;
 }
 
+export interface ItemDetails {
+  display_name: string | null;
+  tags: string[];
+  color: "data-1" | "data-2" | "data-3" | "data-4" | "data-5" | "data-6" | null;
+}
+
+export type DetailsPatch = Partial<ItemDetails>;
+export interface DetailsEvent {
+  kind: "task" | "chat" | "catalog";
+  catalog_changed: boolean;
+}
+
 export interface TaskView extends Task {
+  details?: ItemDetails;
   checkouts: CheckoutView[];
   pane_count: number;
 }
@@ -170,6 +186,7 @@ export type PaneKind = "agent" | "shell";
  * once. Kept for the user to reopen or forget; never reopened by itself.
  */
 export interface WaitingPane {
+  details?: ItemDetails;
   /** Its saved id: what Reopen and Forget name. */
   id: string;
   task_id: string;
@@ -181,6 +198,7 @@ export interface WaitingPane {
 }
 
 export interface PaneInfo {
+  details?: ItemDetails;
   id: string;
   task_id: string;
   /** null means the pane is rooted at the task root, seeing every repo. */
@@ -467,7 +485,7 @@ export interface UiPrefs {
   keep_awake: boolean;
 }
 
-export interface Settings {
+export interface Settings extends SpecSettings {
   ui: UiPrefs;
   jira: JiraConfig | null;
   github: GithubConfig | null;

@@ -16,10 +16,10 @@ mod snapshot;
 mod store;
 mod upkeep;
 pub use landed::{all_landed, have_commit, landed_through};
-pub use only::{commit_only, head_commit};
+pub use only::{commit_only, committed_texts, head_commit};
 pub use outgoing::{outgoing_commits, outgoing_from, outgoing_patch};
 pub(crate) use remote::effective_origin_url;
-pub use remote::{clone_by_key, forget_origins, origin_slug, origin_slug_cached};
+pub use remote::{clone_at, clone_by_key, forget_origins, origin_slug, origin_slug_cached};
 pub use snapshot::fingerprint;
 pub use store::{
     adopt_worktree, belongs_to, changed_between, copy_local_config, create_store, default_tip, follow_clone_origin,

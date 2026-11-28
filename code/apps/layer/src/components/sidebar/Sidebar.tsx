@@ -3,7 +3,8 @@ import { Fragment, useCallback, useState, type ReactNode } from "react";
 import { api, errMessage, failureText } from "../../lib/api";
 import { copyAndSay } from "../../lib/clipboard";
 import { taskReview } from "../../lib/derive";
-import { byEpic, groupBy } from "../../lib/grouping";
+import { byEpic, byTag, groupBy, storedWorkItems } from "../../lib/grouping";
+import { GROUPINGS, GROUPING_LABEL, type Grouping } from "../../lib/grouping";
 import { useFleetAgents } from "../../lib/panes";
 import { readOneOf, write } from "../../lib/persist";
 import { pressKeys } from "../../lib/press";
@@ -11,6 +12,7 @@ import { trackerOfKey } from "../../lib/tracker";
 import type { JiraTransition, TaskView } from "../../lib/types";
 import { useStore } from "../../store";
 import { FinishTask } from "../FinishTask";
+import { ItemDetailsEditor } from "../ItemDetails";
 import { ContextMenu, type MenuItem } from "../menu";
 import { RepoPicker } from "../RepoPicker";
 import { BusyOverlay, Confirm, ErrorMessage, Field, Modal, useFailure } from "../ui";
@@ -21,15 +23,6 @@ import { PlanLimitsStrip } from "./PlanLimits";
 import { ProfileMenu } from "./ProfileMenu";
 import { SyncStatus } from "./SyncStatus";
 import { TaskRow } from "./TaskRow";
-
-/** What the task list is grouped by (TASK-17). Stage is the three lists it always had. */
-const GROUPINGS = ["stage", "epic", "repo"] as const;
-type Grouping = (typeof GROUPINGS)[number];
-const GROUPING_LABEL: Record<Grouping, string> = {
-  stage: "Stage",
-  epic: "Epic",
-  repo: "Repository",
-};
 
 /**
  * The overview is a place, not merely what you see before choosing.
@@ -83,7 +76,7 @@ export function Sidebar() {
   // Not remembered: a search left in place would hide work at the next launch.
   const [query, setQuery] = useState("");
   const sections = useEpicSections(everyTask, query);
-  const { tasks, epics } = sections;
+  const { epics } = sections;
   const prs = useStore((s) => s.prs);
   const selected = useStore((s) => s.selectedTask);
   // A Jira epic being opened is on the page, not the fleet (EPIC-13).
@@ -91,6 +84,7 @@ export function Sidebar() {
   const select = useStore((s) => s.select);
   const showIssue = useStore((s) => s.showIssue);
   const refreshTasks = useStore((s) => s.refreshTasks);
+  const saveTaskDetails = useStore((s) => s.saveTaskDetails);
   const refreshPanes = useStore((s) => s.refreshPanes);
   const refreshIssues = useStore((s) => s.refreshIssues);
   const toast = useStore((s) => s.toast);
@@ -105,7 +99,13 @@ export function Sidebar() {
   const [addingRepoTo, setAddingRepoTo] = useState<TaskView | null>(null);
   const [adding, setAdding] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [menu, setMenu] = useState<{ x: number; y: number; task: TaskView } | null>(null);
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    task: TaskView;
+    automaticName?: string;
+  } | null>(null);
+  const [editing, setEditing] = useState<{ task: TaskView; automaticName: string } | null>(null);
   const [confirming, setConfirming] = useState<{
     title: string;
     body: ReactNode;
@@ -124,6 +124,7 @@ export function Sidebar() {
   const [groupMenu, setGroupMenu] = useState<{ x: number; y: number } | null>(null);
   // Without Jira there is no epic to ask for; the choice is kept for when it is back.
   const by: Grouping = grouping === "epic" && !trackerInUse ? "stage" : grouping;
+  const tasks = by === "tag" ? storedWorkItems(sections) : sections.tasks;
 
   function askDeleteTask(task: TaskView) {
     if (deleting) return;
@@ -229,7 +230,11 @@ export function Sidebar() {
 
   // Stable, like every callback a row is handed, or each row redraws
   // whenever the sidebar does.
-  const onMenu = useCallback((x: number, y: number, task: TaskView) => setMenu({ x, y, task }), []);
+  const onMenu = useCallback(
+    (x: number, y: number, task: TaskView, automaticName?: string) =>
+      setMenu({ x, y, task, automaticName }),
+    [],
+  );
   const onToggle = useCallback(
     (id: string) => setExpanded((x) => ({ ...x, [id]: !(x[id] ?? false) })),
     [],
@@ -278,8 +283,14 @@ export function Sidebar() {
     [refreshTasks, refreshPanes, fail],
   );
 
-  function taskMenu(task: TaskView): MenuItem[] {
-    const items: MenuItem[] = [{ label: "Open", onSelect: () => select(task.id) }];
+  function taskMenu(task: TaskView, automaticName?: string): MenuItem[] {
+    const items: MenuItem[] = [
+      { label: "Open", onSelect: () => select(task.id) },
+      {
+        label: "Edit details…",
+        onSelect: () => setEditing({ task, automaticName: automaticName ?? task.name }),
+      },
+    ];
     if (task.issue_url) {
       items.push({
         label: `Open ${task.issue_key} in ${trackerOfKey(task.issue_key ?? "")}`,
@@ -327,7 +338,9 @@ export function Sidebar() {
       });
     }
     items.push({
-      label: "Delete task…",
+      // An epic is taken off the list, its ticket left alone (EPIC-15):
+      // "Delete task…" read as deleting the epic, so nobody removed one.
+      label: task.epic ? "Remove from list…" : "Delete task…",
       danger: true,
       separated: available(task).length === 0 && !landed,
       onSelect: () => askDeleteTask(task),
@@ -353,23 +366,25 @@ export function Sidebar() {
   // Grouped another way, each group keeps that order: what is being written
   // first, what has landed last, and a group with work under way leads.
   const groups =
-    by === "epic"
-      ? byEpic(ordered, (t) => (t.issue_key ? epics[t.issue_key] : null))
-      : by === "repo"
-        ? groupBy(
-            ordered,
-            (t) => {
-              // A task in several repositories is one piece of work: it is listed
-              // once, under all of them, rather than once under each.
-              const names = t.checkouts
-                .map((c) => c.project_name)
-                .sort()
-                .join(", ");
-              return names ? { id: names, label: names } : null;
-            },
-            "No repository",
-          )
-        : null;
+    by === "tag"
+      ? byTag(ordered)
+      : by === "epic"
+        ? byEpic(ordered, (t) => (t.issue_key ? epics[t.issue_key] : null))
+        : by === "repo"
+          ? groupBy(
+              ordered,
+              (t) => {
+                // A task in several repositories is one piece of work: it is listed
+                // once, under all of them, rather than once under each.
+                const names = t.checkouts
+                  .map((c) => c.project_name)
+                  .sort()
+                  .join(", ");
+                return names ? { id: names, label: names } : null;
+              },
+              "No repository",
+            )
+          : null;
 
   const row = (task: TaskView) => (
     <TaskRow
@@ -390,12 +405,21 @@ export function Sidebar() {
 
   return (
     <div className="sidebar">
+      {editing && (
+        <ItemDetailsEditor
+          key={editing.task.id}
+          details={editing.task.details}
+          automaticName={editing.automaticName}
+          onSave={(patch) => saveTaskDetails(editing.task.id, patch)}
+          onClose={() => setEditing(null)}
+        />
+      )}
       {everyTask.length > 0 && (
         <input
           type="search"
           className="ui-field sidebar-search"
           placeholder="Find a task: key, title, epic…"
-          aria-label="Find a task by its ticket's key, title, epic or description"
+          aria-label="Find a task by name, tags, ticket key, title, epic or description"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -406,23 +430,25 @@ export function Sidebar() {
       <div className="sidebar-body" style={{ paddingTop: 6 }}>
         <FleetRow selected={selected === null && !opening} onSelect={() => select(null)} />
 
-        <EpicsSection
-          sections={sections}
-          selected={selected}
-          expanded={expanded}
-          onSelect={select}
-          onToggle={onToggle}
-          onMenu={onMenu}
-        />
+        {by !== "tag" && (
+          <EpicsSection
+            sections={sections}
+            selected={selected}
+            expanded={expanded}
+            onSelect={select}
+            onToggle={onToggle}
+            onMenu={onMenu}
+          />
+        )}
 
         <div className="section-head">
           Tasks
           <span className="count">{working.length}</span>
-          {tasks.length > 0 && (
+          {everyTask.length > 0 && (
             <button
               type="button"
               className="group-by"
-              title="Group tasks by stage, epic or repository"
+              title="Group tasks by stage, epic, repository or tag"
               onClick={(e) => {
                 const r = e.currentTarget.getBoundingClientRect();
                 setGroupMenu({ x: r.left, y: r.bottom + 4 });
@@ -436,7 +462,7 @@ export function Sidebar() {
         {tasks.length === 0 && (
           <NoTasks
             query={query.trim()}
-            epics={sections.layerEpics.length + sections.jiraEpics.length}
+            epics={by === "tag" ? 0 : sections.layerEpics.length + sections.jiraEpics.length}
             repos={projects.length}
           />
         )}
@@ -482,7 +508,7 @@ export function Sidebar() {
           x={menu.x}
           y={menu.y}
           onClose={() => setMenu(null)}
-          items={taskMenu(menu.task)}
+          items={taskMenu(menu.task, menu.automaticName)}
         />
       )}
 

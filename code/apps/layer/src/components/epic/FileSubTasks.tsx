@@ -97,8 +97,8 @@ export function FileSubTasks({
     >
       <div className="muted" style={{ marginBottom: 12, lineHeight: 1.6 }}>
         {project
-          ? `Each becomes a ticket under ${epic.issue_key}, and a task here with its share of the spec, approved. No agent starts and no ticket moves.`
-          : "Each becomes a task here with its share of the spec, approved. No agent starts."}
+          ? `Each becomes a ticket under ${epic.issue_key}, and a task here with its share of the spec. No agent starts and no ticket moves.`
+          : "Each becomes a task here with its share of the spec. No agent starts."}
       </div>
       {project && (
         <>

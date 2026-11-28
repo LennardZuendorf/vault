@@ -13,6 +13,7 @@ import {
   useTheirsLocked,
   Yours,
 } from "./SharedSettings";
+import { SpecSettings } from "./SpecSettings";
 import { ErrorMessage, Field, useFailure } from "./ui";
 
 /**
@@ -174,6 +175,7 @@ export function CodeSettings() {
         />
       )}
       <ErrorMessage>{github.error}</ErrorMessage>
+      <SpecSettings />
     </>
   );
 }

@@ -117,6 +117,78 @@ pub fn clone_by_key(key: &str, into: &Path) -> Result<()> {
     })
 }
 
+/// Clone `url` at `ref` (a tag or a branch) into `into`, which does not exist
+/// yet, with no history: a toolset's pinned code, fetched for its files.
+///
+/// Both arguments come from a manifest, which a team can write, so neither is
+/// trusted: only `https://`, `ssh://` and `git@host:` URLs are taken (not
+/// `file://`, not git's `ext::`, which runs a command), a ref cannot read as
+/// an option, and `--` ends the options before the positionals.
+pub fn clone_at(url: &str, r#ref: &str, into: &Path) -> Result<()> {
+    if !fetchable(url) {
+        return Err(Error::Git(format!("{url} is not an https://, ssh:// or git@host: address, so it is not fetched")));
+    }
+    if !plain_ref(r#ref) {
+        return Err(Error::Git(format!("{:?} is not a tag or branch name a fetch can use", r#ref)));
+    }
+    clone_unchecked(url, r#ref, into)
+}
+
+/// An address to clone from: a scheme git reaches over the network, no
+/// spaces or control characters.
+fn fetchable(url: &str) -> bool {
+    let scp_host = url.strip_prefix("git@").and_then(|rest| rest.split_once(':'));
+    let shaped = url.starts_with("https://") && url.len() > "https://".len()
+        || url.starts_with("ssh://") && url.len() > "ssh://".len()
+        || scp_host.is_some_and(|(host, path)| !host.is_empty() && !path.is_empty());
+    shaped && !url.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+/// A ref that is a name and not an option: it starts with a letter or digit
+/// and has only what refs ordinarily have.
+fn plain_ref(r: &str) -> bool {
+    r.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && !r.contains("..")
+        && !r.ends_with('/')
+        && !r.ends_with(".lock")
+        && r.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/' | '+'))
+}
+
+/// The clone itself, for a URL already checked. A stalled transfer gives up
+/// after half a minute instead of holding the install for ever.
+fn clone_unchecked(url: &str, r#ref: &str, into: &Path) -> Result<()> {
+    if !into.is_absolute() {
+        return Err(Error::Other(format!("{} is not an absolute path", into.display())));
+    }
+    if into.exists() {
+        return Err(Error::Other(format!("{} is there already", into.display())));
+    }
+    let parent = into.parent().ok_or_else(|| Error::Other(format!("{} has no folder around it", into.display())))?;
+    let target = into.to_string_lossy();
+    run(
+        parent,
+        &[
+            "-c",
+            "http.lowSpeedLimit=1000",
+            "-c",
+            "http.lowSpeedTime=30",
+            "-c",
+            "advice.detachedHead=false",
+            "clone",
+            "--quiet",
+            "--depth",
+            "1",
+            "--single-branch",
+            "--branch",
+            r#ref,
+            "--",
+            url,
+            &target,
+        ],
+    )
+    .map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,5 +215,74 @@ mod tests {
         let there = std::env::temp_dir();
         let err = clone_by_key("github.com/acme/billing", &there).unwrap_err();
         assert!(err.to_string().contains("is there already"), "{err}");
+    }
+
+    #[test]
+    fn only_addresses_over_the_network_are_fetched_and_a_ref_is_never_an_option() {
+        let into = std::env::temp_dir().join(format!("vl-clone-{}", uuid::Uuid::new_v4()));
+        for url in [
+            "file:///etc",
+            "/Users/me/repo",
+            "ext::sh -c touch% /tmp/pwned",
+            "--upload-pack=touch /tmp/pwned",
+            "-oProxyCommand=x",
+            "http://example.com/x",
+            "git@",
+            "git@host:",
+            "https://",
+            "https://example.com/a b",
+            "",
+        ] {
+            let err = clone_at(url, "v1.0.0", &into).unwrap_err().to_string();
+            assert!(err.contains("is not an https"), "{url}: {err}");
+        }
+        for r in ["", "-v", "--upload-pack=x", "a..b", ".hidden", "a b", "a;b", "a/", "x.lock", "a\nb"] {
+            let err = clone_at("https://example.com/x.git", r, &into).unwrap_err().to_string();
+            assert!(err.contains("not a tag or branch"), "{r:?}: {err}");
+        }
+        assert!(!into.exists());
+        for url in [
+            "https://github.com/obra/superpowers",
+            "ssh://git@host:2222/a/b.git",
+            "git@github.com:obra/superpowers.git",
+        ] {
+            assert!(fetchable(url), "{url}");
+        }
+        for r in ["v7.0.2", "main", "release/1.2", "v1.0.0+build"] {
+            assert!(plain_ref(r), "{r}");
+        }
+    }
+
+    #[test]
+    fn a_tag_is_cloned_without_history_and_a_folder_in_the_way_is_not_cloned_over() {
+        let root = std::env::temp_dir().join(format!("vl-clone-{}", uuid::Uuid::new_v4()));
+        let origin = root.join("origin");
+        std::fs::create_dir_all(&origin).unwrap();
+        run(&origin, &["init", "-q", "-b", "main"]).unwrap();
+        std::fs::write(origin.join("a.txt"), "one").unwrap();
+        run(&origin, &["add", "-A"]).unwrap();
+        let commit = |msg: &str| {
+            run(
+                &origin,
+                &["-c", "user.email=a@b.c", "-c", "user.name=T", "-c", "commit.gpgsign=false", "commit", "-qm", msg],
+            )
+            .unwrap()
+        };
+        commit("one");
+        run(&origin, &["-c", "tag.gpgsign=false", "tag", "v1.0.0"]).unwrap();
+        std::fs::write(origin.join("a.txt"), "two").unwrap();
+        run(&origin, &["add", "-A"]).unwrap();
+        commit("two");
+
+        let into = root.join("clone");
+        clone_unchecked(origin.to_str().unwrap(), "v1.0.0", &into).unwrap();
+
+        assert_eq!(std::fs::read_to_string(into.join("a.txt")).unwrap(), "one", "the tag, not the branch");
+        assert_eq!(run(&into, &["rev-list", "--count", "HEAD"]).unwrap().trim(), "1");
+        let err = clone_unchecked(origin.to_str().unwrap(), "v1.0.0", &into).unwrap_err().to_string();
+        assert!(err.contains("is there already"), "{err}");
+        let err = clone_unchecked(origin.to_str().unwrap(), "v9", &root.join("other")).unwrap_err().to_string();
+        assert!(err.contains("v9"), "{err}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

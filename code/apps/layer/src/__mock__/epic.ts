@@ -1,6 +1,6 @@
 /**
  * Epics (§26) for the mock harness: ACME-100 Sign-in overhaul, whose
- * approved spec makes four sub-tasks. One merged, one asking you with
+ * spec makes four sub-tasks. One merged, one asking you with
  * changes requested, one waiting for it, and one not filed yet, so both the
  * filing lead and every row's state are on screen. `epics.rs` is the real
  * thing; this answers from a fixed plan.
@@ -33,7 +33,7 @@ const clean = {
   dirty_files: 0,
 };
 
-/** What the epic's approved tasks group their steps into. */
+/** What the epic's tasks group their steps into. */
 const PLAN: Omit<SubTaskView, "task_id">[] = [
   {
     title: "Lock session refresh",

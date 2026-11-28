@@ -36,8 +36,20 @@ pub async fn acp_versions(app: AppHandle) -> Result<Vec<crate::acp::version::Acp
 }
 
 #[tauri::command]
-pub fn list_panes(state: State<AppState>, task_id: Option<String>) -> Vec<PaneInfo> {
-    state.ptys.list(task_id.as_deref())
+pub fn list_panes(
+    state: State<AppState>,
+    task_id: Option<String>,
+) -> Vec<super::desktop_details::DesktopItem<PaneInfo>> {
+    let panes = state.ptys.list(task_id.as_deref());
+    state.config.with(|c| {
+        panes
+            .into_iter()
+            .map(|p| {
+                let details = c.chat_details.get(&p.cwd).cloned();
+                super::desktop_details::project(p, details)
+            })
+            .collect()
+    })
 }
 
 /// Where a pane should start, and what to call it.
@@ -294,7 +306,8 @@ pub(crate) fn start_agent(
     cols: Option<u16>,
     acp: bool,
 ) -> Result<PaneInfo> {
-    let task = state.config.task(&task_id)?;
+    // Before anything the agent could write: see `for_agent_start`.
+    let task = super::spec_work::for_agent_start(state, state.config.task(&task_id)?);
     let def = agents::find(&agent_id).ok_or_else(|| Error::NotFound(format!("agent {agent_id}")))?;
 
     let (mut cwd, scope, checkout_id) = resolve_scope(state, &task, checkout_id.as_deref())?;
@@ -346,6 +359,8 @@ pub(crate) fn start_agent(
     if state.config.with(|c| c.ui.agents_auto_mode) {
         args.extend(agents::auto_mode_args(def).iter().map(|a| a.to_string()));
     }
+    // Last: see `agents::task_folder_args`.
+    args.extend(task_folder_args(def, agent_file_dir(state, &task).as_deref(), &cwd));
 
     let pane = state.ptys.spawn(
         app,
@@ -369,6 +384,17 @@ pub(crate) fn start_agent(
     )?;
     remember_pane(app, state, &pane, None);
     Ok(pane)
+}
+
+/// What shows an agent started in `cwd` the skills a toolset installed in the
+/// task folder `folder`: nothing when it starts in the folder itself, which it
+/// sees, or when the task has none. Every start of a task's agent, a restart
+/// and a restore included, is `start_agent`, so this is the one place.
+fn task_folder_args(def: &agents::AgentDef, folder: Option<&Path>, cwd: &str) -> Vec<String> {
+    match folder {
+        Some(folder) if Path::new(cwd) != folder => agents::task_folder_args(def, folder),
+        _ => Vec::new(),
+    }
 }
 
 /// Plug an agent into the app for this launch: how it says what it is doing,
@@ -438,11 +464,18 @@ pub(crate) fn chat_room(state: &AppState, id: &str) -> Result<PathBuf> {
 }
 
 /// Everything the app itself writes into a task folder.
+///
+/// A spec toolset's install is in it by its record (`INSTALL_RECORD`), which
+/// `remove_generated` reads to take what was installed. `spec/` is not in it,
+/// and must not be: it is where the user and their
+/// agents write the task's spec, not something the app regenerates. Deleting
+/// a task keeps it first (`spec_copy::archive_spec`), and Clean up reports a
+/// folder holding one as holding something the app did not make.
 const GENERATED_FILES: &[&str] = &[
     "CLAUDE.md",
     "AGENTS.md",
     super::task_context::TICKET_FILE,
-    super::spec::LEGACY_FILE,
+    super::spec_old::LEGACY_FILE,
     ".mcp.json",
     "PR_DESCRIPTION.md",
     super::github::FEEDBACK_FILE,
@@ -454,10 +487,11 @@ const GENERATED_FILES: &[&str] = &[
     FIRST_PROMPT,
     crate::loops::CHECKS_FILE,
     super::henchman_tools::MESSAGE_FILE,
+    super::spec_install::INSTALL_RECORD,
 ];
 
 /// An opening prompt too long to type, for a CLI that takes it typed.
-const FIRST_PROMPT: &str = "FIRST_PROMPT.md";
+pub(crate) const FIRST_PROMPT: &str = "FIRST_PROMPT.md";
 
 /// What to type into an agent to give it `text`: the text itself when it
 /// fits (`pty::MAX_TYPED`), or else a pointer to `file` in `dir`, where the
@@ -496,19 +530,24 @@ const LEFT_BY_OTHERS: &[&str] = &[".claude/settings.local.json", ".DS_Store"];
 pub(crate) fn is_generated(rel: &str) -> bool {
     GENERATED_FILES.contains(&rel)
         || LEFT_BY_OTHERS.contains(&rel)
-        || rel.starts_with(&format!("{}/", super::spec::DRAFTS))
+        || [super::spec_old::DRAFTS, super::spec::CHECKS].iter().any(|d| rel.starts_with(&format!("{d}/")))
 }
 
 /// Take those files out of a task folder: when the task is deleted
 /// (DISK-2), and when Clean up finds a folder no task uses. Anything else
 /// in there is the user's, and stays.
 pub(crate) fn remove_generated(dir: &Path) {
+    // First, while the record that lists them is still there.
+    super::spec_install::remove_written(dir);
     for name in GENERATED_FILES.iter().chain(LEFT_BY_OTHERS) {
         let _ = std::fs::remove_file(dir.join(name));
     }
-    // Spec drafts not approved, and what is known of the spec beside them
-    // (SPEC-6): what was approved is in the repository, or the app's folder.
-    let _ = std::fs::remove_dir_all(dir.join(super::spec::DRAFTS));
+    // The drafts and approvals of a spec kept the old way (`spec_old.rs`: the
+    // spec itself was moved to `spec/`, which is kept first), and the last
+    // checks against it: what is known of the spec beside its files.
+    for d in [super::spec_old::DRAFTS, super::spec::CHECKS] {
+        let _ = std::fs::remove_dir_all(dir.join(d));
+    }
     // The folders those sit in, if that emptied them.
     for sub in [".gemini", ".claude"] {
         let _ = std::fs::remove_dir(dir.join(sub));
@@ -591,6 +630,14 @@ pub(crate) fn write_chat_context(state: &AppState, dir: &Path) -> Result<()> {
         "ACME-12 to Done\", \"finish that task\") is their agreement: do it, don't ask again. ",
         "A ticket goes to done by `jira_transition` into a status whose `to_category` is ",
         "`done`.\n\n",
+        "## Work goes in a task\n\n",
+        "The user follows all work in Layer's Work tab, and only tasks are shown there. ",
+        "Before you change a repository, commit, push or open a pull request, put the work ",
+        "in a task: one of the tasks in flight below when it is the same work (`add_repo` ",
+        "when it needs another repository), else `start_work` for a Jira ticket or ",
+        "`create_task` without one. Then work in that task's worktrees, never in the clones ",
+        "under Repositories. Answering questions, reading code, drafting tickets and reading ",
+        "logs need no task.\n\n",
         "## Routines\n\n",
         "A routine is a prompt Layer asks on a schedule, each time as a new chat, shown in ",
         "its Routines tab. When the user wants something asked every morning or every hour, ",
@@ -610,6 +657,8 @@ pub(crate) fn write_chat_context(state: &AppState, dir: &Path) -> Result<()> {
         "its password. Never type the user's passwords or other secrets yourself: if none ",
         "is saved, ask the user to sign in in the Chat view's browser.\n\n",
     ));
+    // Chats start test runs too, beside every task's agents (PANE-22).
+    md.push_str(crate::pty::load::SHARED_MAC);
 
     if !cfg.projects.is_empty() {
         md.push_str("## Repositories\n\n| repo | group | path |\n|---|---|---|\n");
@@ -796,12 +845,13 @@ pub fn pty_detach(state: State<AppState>, pane_id: String) {
 /// still on the thread the window runs on.
 #[tauri::command]
 pub async fn close_pane(app: AppHandle, pane_id: String) -> Result<()> {
-    super::blocking(app, move |state| {
-        // Closing a pane on purpose means not wanting it back.
-        let _ = state.config.update(|c| c.saved_panes.retain(|p| p.id != pane_id));
-        state.ptys.close(&pane_id)
-    })
-    .await
+    super::blocking(app, move |state| close_pane_inner(state, &pane_id)).await
+}
+
+pub(crate) fn close_pane_inner(state: &AppState, pane_id: &str) -> Result<()> {
+    // Closing a pane on purpose means not wanting it back.
+    let _ = state.config.update(|c| super::item_details::forget_saved_pane(c, pane_id, false));
+    state.ptys.close(pane_id)
 }
 
 /// Stop the process but keep the pane and its scrollback on screen.
@@ -898,6 +948,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_chat_is_told_to_put_work_in_a_task_before_changing_a_repository() {
+        let root = std::env::temp_dir().join(format!("vl-chat-context-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = AppState {
+            slack_bot: Default::default(),
+            config: crate::config::ConfigStore::for_tests(root.join("config.json"), Default::default()),
+            ptys: Default::default(),
+            ticket_types: Default::default(),
+            epic_field_missing: Default::default(),
+            pending_notices: Default::default(),
+            status_cache: Default::default(),
+            prs_settled: Default::default(),
+            prs_seen: Default::default(),
+            news: Default::default(),
+            messages: crate::messages::Messages::for_tests(root.join("messages.json")),
+            notes: crate::notes::Notes::load(&root),
+            browser: Default::default(),
+            loops: Default::default(),
+            runs: crate::runs::Runs::for_tests(root.join("runs.json")),
+        };
+        write_chat_context(&state, &root).unwrap();
+        for file in ["CLAUDE.md", "AGENTS.md"] {
+            let md = std::fs::read_to_string(root.join(file)).unwrap();
+            assert!(md.contains("## Work goes in a task"), "{file}");
+            for tool in ["`create_task`", "`start_work`", "`add_repo`"] {
+                assert!(md.contains(tool), "{file} names {tool}");
+            }
+            assert!(md.contains("Answering questions"), "{file}: a question needs no task");
+            assert!(md.contains("## This Mac is shared"), "{file}: test workers are capped");
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn a_long_hand_off_is_left_in_a_file_and_only_a_pointer_is_typed() {
         let dir = std::env::temp_dir().join(format!("vl-handover-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -911,6 +995,18 @@ mod tests {
         assert!(typeable(None, "CONFLICTS.md", &long).is_err(), "nowhere to leave it: refused, not cut");
         assert!(is_generated("CONFLICTS.md"), "deleting the task takes it too (DISK-2)");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn claude_started_in_a_worktree_is_shown_the_task_folder_and_one_started_in_it_is_not() {
+        let claude = agents::find("claude").unwrap();
+        let folder = Path::new("/tasks/T-1");
+        // Every start, a restart and a restore among them, goes through
+        // `start_agent`, which asks this with the folder it starts in.
+        assert_eq!(task_folder_args(claude, Some(folder), "/tasks/T-1/api"), ["--add-dir", "/tasks/T-1"]);
+        assert!(task_folder_args(claude, Some(folder), "/tasks/T-1").is_empty(), "it sees its own folder");
+        assert!(task_folder_args(claude, None, "/tasks/T-1/api").is_empty(), "no folder of its own to show");
+        assert!(task_folder_args(agents::find("gemini").unwrap(), Some(folder), "/tasks/T-1/api").is_empty());
     }
 
     #[test]

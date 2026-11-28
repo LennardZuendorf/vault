@@ -1,0 +1,23 @@
+{
+  "id": "openspec",
+  "name": "OpenSpec",
+  "version": "1.14.3",
+  "files": ["openspec/**/*.md"],
+  "steps": ["openspec/changes/*/tasks.md"],
+  "install": [
+    {
+      "run": [
+        "npx",
+        "-y",
+        "@fission-ai/openspec@{version}",
+        "init",
+        "--tools",
+        "{openspec_tools}",
+        "."
+      ],
+      "cwd": "spec",
+      "timeout_secs": 300
+    }
+  ],
+  "commit_to": "openspec"
+}

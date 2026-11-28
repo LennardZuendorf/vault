@@ -33,6 +33,14 @@ pub struct Settings {
     pub henchman_instructions: String,
     pub worktree_root: String,
     pub worktree_root_is_default: bool,
+    /// Agents are told to write the spec before any code (SPEC-38).
+    pub spec_first: bool,
+    /// The toolset a task gets when nothing else says, none for Kiro (§19).
+    pub default_toolset: Option<String>,
+    /// Every toolset there is to pick from.
+    pub toolsets: Vec<super::spec_settings::ToolsetChoice>,
+    /// The manifests the user added, which Settings → Code shows as JSON.
+    pub custom_toolsets: Vec<crate::spec::toolset::Toolset>,
     pub jira_connected: bool,
     /// Where tickets come from (TKT-15), or None while there is no tracker
     /// or it is not connected here.
@@ -88,6 +96,10 @@ pub fn get_settings(state: State<AppState>) -> Settings {
         browser_sign_ins: c.browser.sign_ins.clone(),
         worktree_root: state.config.worktree_root().to_string_lossy().to_string(),
         worktree_root_is_default: c.worktree_root.is_none(),
+        spec_first: c.spec_first,
+        default_toolset: c.default_toolset.clone(),
+        toolsets: super::spec_settings::choices(&c.toolsets),
+        custom_toolsets: c.toolsets.clone(),
         workspace: c.shared.workspace.as_ref().map(|at| WorkspaceView {
             name: crate::profiles::name().unwrap_or_else(|| "The workspace".into()),
             admin: at.is_admin(),
@@ -195,6 +207,14 @@ pub(crate) fn banner<R: Runtime>(app: &AppHandle<R>, title: String, body: String
         })
         .map_err(|e| Error::Other(format!("notification: {e}")))?;
     Ok(())
+}
+
+/// Spec first (Settings → Code): every agent Layer starts is told to write
+/// or update the task's spec before it changes code. Takes effect for the
+/// context files and opening prompts written from now on.
+#[tauri::command]
+pub fn set_spec_first(state: State<AppState>, on: bool) -> Result<()> {
+    state.config.update(|c| c.spec_first = on)
 }
 
 #[tauri::command]

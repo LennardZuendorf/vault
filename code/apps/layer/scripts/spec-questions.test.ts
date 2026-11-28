@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { approveWarning, questions, sameAnswer, setAnswer } from "../src/lib/questions";
+import { questions, sameAnswer, setAnswer } from "../src/lib/questions";
 
 const DRAFT = `## Requirements
 - R-1: WHEN a sixth reset is asked within an hour THE SYSTEM SHALL refuse it.
@@ -78,19 +78,5 @@ describe("open questions in the requirements (SPEC-1, SPEC-19)", () => {
   test("a picked answer matches its option whatever the spacing or case", () => {
     expect(sameAnswer("Yes, the minutes left", "  yes,  the minutes left ")).toBe(true);
     expect(sameAnswer("No", null)).toBe(false);
-  });
-});
-
-describe("approving with questions still there (SPEC-21)", () => {
-  test("says how many have no answer and how many are not built in", () => {
-    expect(approveWarning([])).toBeNull();
-    const one = approveWarning(
-      questions(DRAFT.replace("  - No\n- Q-2", "  - No\n  Answer: No\n- Q-2")),
-    );
-    expect(one).toContain("1 open question has no answer");
-    expect(one).toContain("1 answer is not built into the requirements yet");
-    const none = approveWarning(questions(DRAFT));
-    expect(none).toContain("2 open questions have no answer");
-    expect(none).not.toContain("not built into");
   });
 });

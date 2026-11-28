@@ -1,5 +1,5 @@
 import type { EpicOf } from "./grouping";
-import type { Task, Ticket } from "./types";
+import type { ItemDetails, Task, Ticket } from "./types";
 
 /**
  * Whether a task is what the sidebar's search asks for (TASK-19): its
@@ -10,7 +10,10 @@ import type { Task, Ticket } from "./types";
  * "Login fails on Safari".
  */
 export function taskMatches(
-  task: Pick<Task, "name" | "branch" | "issue_key">,
+  task: Pick<Task, "name" | "branch" | "issue_key"> & {
+    details?: ItemDetails;
+    sub_task?: { title: string } | null;
+  },
   query: string,
   epic?: EpicOf | null,
   ticket?: Pick<Ticket, "summary" | "description" | "epic_key" | "epic_summary"> | null,
@@ -21,6 +24,9 @@ export function taskMatches(
     task.issue_key,
     task.name,
     task.branch,
+    task.details?.display_name,
+    ...(task.details?.tags ?? []),
+    task.sub_task?.title,
     epic?.key,
     epic?.summary,
     ticket?.summary,

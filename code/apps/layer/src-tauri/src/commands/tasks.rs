@@ -73,8 +73,23 @@ pub(crate) fn issue_project(issue_key: Option<&str>) -> String {
 /// focused task re-runs `git status` in each of its worktrees, which is the
 /// one blocking call in the app that happens whether or not anyone asked.
 #[tauri::command]
-pub async fn list_tasks(app: AppHandle, focus: Option<String>) -> Result<Vec<TaskView>> {
-    super::blocking(app, move |state| Ok(list_tasks_inner(state, focus))).await
+pub async fn list_tasks(
+    app: AppHandle,
+    focus: Option<String>,
+) -> Result<Vec<super::desktop_details::DesktopItem<TaskView>>> {
+    super::blocking(app, move |state| {
+        let tasks = list_tasks_inner(state, focus);
+        Ok(state.config.with(|c| {
+            tasks
+                .into_iter()
+                .map(|t| {
+                    let details = c.task_details.get(&t.task.id).cloned();
+                    super::desktop_details::project(t, details)
+                })
+                .collect()
+        }))
+    })
+    .await
 }
 
 pub(crate) fn list_tasks_inner(state: &AppState, focus: Option<String>) -> Vec<TaskView> {
@@ -394,6 +409,10 @@ pub struct NewTask {
     /// A sub-task filed from an epic (EPIC-7).
     #[serde(default)]
     pub sub_task: Option<SubTaskOf>,
+    /// The spec toolset the task is made with, by id: what Start work picked.
+    /// None: the app's default. A sub-task is made with its epic's.
+    #[serde(default)]
+    pub toolset: Option<String>,
 }
 
 /// Note on a task that a chat's agent created it, so the task can point at
@@ -410,11 +429,30 @@ pub(crate) fn link_chat(state: &AppState, mut task: Task, room: String) -> Resul
     Ok(task)
 }
 
+/// The one toolset an epic is written with (SPEC-39).
+const EPIC_TOOLSET: &str = "kiro";
+
 pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     if req.project_ids.is_empty() {
         return Err(Error::Other("pick at least one repository".into()));
     }
     let projects: Vec<Project> = req.project_ids.iter().map(|id| state.config.project(id)).collect::<Result<_>>()?;
+
+    // An epic's sub-tasks are planned from groups only Kiro's tasks draft
+    // heads (SPEC-39): with another toolset the agent's own headings
+    // (`## 1. Setup`) became sub-tasks.
+    if let Some(id) = req.toolset.as_deref().filter(|id| req.epic && *id != EPIC_TOOLSET) {
+        return Err(Error::Other(format!(
+            "an epic is written with Kiro, so its tasks can be split into sub-tasks; {id:?} cannot do that yet"
+        )));
+    }
+    // Refused before a folder is made: a task cannot be installed with a toolset
+    // nothing here has.
+    if let Some(id) = req.toolset.as_deref() {
+        if state.config.with(|c| crate::spec::toolset::find(id, &c.toolsets)).is_none() {
+            return Err(Error::Other(format!("there is no spec toolset {id:?}")));
+        }
+    }
 
     let branch =
         derive_branch(req.branch.as_deref(), req.issue_key.as_deref(), req.branch_suffix.as_deref(), &req.name);
@@ -424,7 +462,17 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     let root = unique_task_root(&state.config, &branch.replace('/', "-"));
     std::fs::create_dir_all(&root)?;
 
+    // A sub-task is written to the epic's spec, so it is installed with the
+    // epic's toolset, not whatever the app's default has become.
+    let toolset = req
+        .sub_task
+        .as_ref()
+        .and_then(|of| state.config.task(&of.epic).ok())
+        .map(|epic| super::spec_copy::toolset_of(state, &epic).id)
+        .or(req.toolset.clone())
+        .or(req.epic.then(|| EPIC_TOOLSET.to_string()));
     let task = Task {
+        toolset,
         id: uuid::Uuid::new_v4().to_string(),
         name: req.name,
         root: root.to_string_lossy().to_string(),
@@ -480,6 +528,7 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
                 let task_id = task.id.clone();
                 state.config.update(|c| {
                     c.tasks.retain(|t| t.id != task_id);
+                    c.task_details.remove(&task_id);
                     c.checkouts.retain(|ch| ch.task_id != task_id);
                 })?;
                 let _ = std::fs::remove_dir(&root);
@@ -504,6 +553,8 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     // The folder describes itself from the moment it exists, so an agent
     // started by hand in it is no worse off than one the app launched.
     let _ = write_task_context(state, &task);
+    // Its toolset goes in once the worktrees are there, and in the background.
+    super::spec_install_run::start(&task.id);
 
     Ok(task)
 }
@@ -564,6 +615,8 @@ pub(crate) fn add_repo(state: &AppState, task_id: &str, project_id: &str) -> Res
     // The folder gained a sibling, so the description of it is now wrong.
     if let Ok(task) = state.config.task(task_id) {
         let _ = write_task_context(state, &task);
+        // A task that had no folder until now has no install yet.
+        super::spec_install_run::start_unless_installed(state, &task);
     }
 
     let told = tell_agents(
@@ -899,10 +952,13 @@ fn delete_task_inner(state: &AppState, id: String, force: bool, finished: bool) 
         return Ok(results);
     }
 
-    // The app's own files go first, or the folder is never empty and lingers
-    // as an orphan under the worktree root. Anything else in there is the
-    // user's, so remove_dir refuses rather than taking it.
+    // The spec is the user's, not generated: it is kept in the config folder
+    // first, then goes with the folder, or the folder would linger as an
+    // orphan. A spec that could not be kept stays where it is and so does the
+    // task, which a second Delete finishes (the worktrees are already gone).
+    super::spec_copy::archive_spec(state, &task)?;
     if let Some(dir) = agent_file_dir(state, &task) {
+        super::spec_copy::remove_spec(state, &task)?;
         remove_generated(&dir);
     }
     let _ = std::fs::remove_dir(&task.root);
@@ -910,6 +966,7 @@ fn delete_task_inner(state: &AppState, id: String, force: bool, finished: bool) 
     let done = crate::runs::task_done(&state.config.read(), &id, finished, chrono::Utc::now());
     state.config.update(|c| {
         c.tasks.retain(|t| t.id != id);
+        c.task_details.remove(&id);
         c.checkouts.retain(|ch| ch.task_id != id);
     })?;
     if let Some(done) = done {
@@ -924,6 +981,8 @@ fn delete_task_inner(state: &AppState, id: String, force: bool, finished: bool) 
 mod tests {
     use super::*;
     use crate::config::AppConfig;
+
+    mod lifecycle;
 
     fn git(dir: &Path, args: &[&str]) -> String {
         crate::git::run_for_tests(dir, args).unwrap().trim().to_string()
@@ -961,7 +1020,8 @@ mod tests {
             check: None,
             check_approved: None,
             spec_folder: None,
-            specs_in_app: false,
+            spec_toolset: None,
+            spec_commit: Default::default(),
             remote: None,
             repository_id: None,
         }
@@ -1006,9 +1066,69 @@ mod tests {
                 epic_key: None,
                 epic: false,
                 sub_task: None,
+                toolset: None,
             },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn a_task_made_with_a_toolset_keeps_it_and_one_nothing_has_makes_nothing() {
+        let root = std::env::temp_dir().join(format!("vl-tasks-{}", uuid::Uuid::new_v4()));
+        let api = github_and_clone(&root, "api", &["main"]);
+        let state = state(&root, vec![project("api", &api, "main")]);
+        let request = |toolset: &str| NewTask {
+            name: "Pick a toolset".into(),
+            project_ids: vec!["api".into()],
+            branch: Some("ACME-2-toolset".into()),
+            branch_suffix: None,
+            base: Some("main".into()),
+            issue_key: None,
+            issue_url: None,
+            epic_key: None,
+            epic: false,
+            sub_task: None,
+            toolset: Some(toolset.into()),
+        };
+
+        let refused = new_task(&state, request("nothing-here")).unwrap_err().to_string();
+        assert!(refused.contains("no spec toolset"), "{refused}");
+        assert!(state.config.read().tasks.is_empty(), "no task, and no folder for one");
+
+        let task = new_task(&state, request("openspec")).unwrap();
+        assert_eq!(task.toolset.as_deref(), Some("openspec"));
+        assert_eq!(state.config.task(&task.id).unwrap().toolset.as_deref(), Some("openspec"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_epic_is_made_with_kiro_and_refused_with_another_toolset() {
+        let root = std::env::temp_dir().join(format!("vl-tasks-{}", uuid::Uuid::new_v4()));
+        let api = github_and_clone(&root, "api", &["main"]);
+        let state = state(&root, vec![project("api", &api, "main")]);
+        state.config.update(|c| c.default_toolset = Some("openspec".into())).unwrap();
+        let request = |toolset: Option<&str>| NewTask {
+            name: "An epic".into(),
+            project_ids: vec!["api".into()],
+            branch: Some("ACME-3-epic".into()),
+            branch_suffix: None,
+            base: Some("main".into()),
+            issue_key: None,
+            issue_url: None,
+            epic_key: None,
+            epic: true,
+            sub_task: None,
+            toolset: toolset.map(String::from),
+        };
+
+        let said = new_task(&state, request(Some("openspec"))).unwrap_err().to_string();
+        assert!(said.contains("an epic is written with Kiro"), "{said}");
+        assert!(state.config.with(|c| c.tasks.is_empty()));
+
+        // Not the app's default either, which a task without a pick gets.
+        let task = new_task(&state, request(None)).unwrap();
+        assert_eq!(task.toolset.as_deref(), Some("kiro"));
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
@@ -1057,6 +1177,46 @@ mod tests {
         assert!(!root.join(".claude").exists() && !root.join("worktrees/.claude").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn deleting_a_task_keeps_its_spec_in_the_config_folder_and_leaves_no_folder_behind() {
+        let root = std::env::temp_dir().join(format!("vl-tasks-{}", uuid::Uuid::new_v4()));
+        let api = github_and_clone(&root, "api", &["main"]);
+        let state = state(&root, vec![project("api", &api, "main")]);
+        let task = task_on(&state, "api", "main");
+        let spec = Path::new(&task.root).join("spec");
+        std::fs::create_dir_all(spec.join("openspec/changes/x")).unwrap();
+        std::fs::write(spec.join("openspec/changes/x/tasks.md"), "- [ ] one\n").unwrap();
+
+        let rows = delete_task_inner(&state, task.id.clone(), true, false).unwrap();
+
+        assert!(rows.iter().all(|r| r.ok), "{rows:?}");
+        assert!(!Path::new(&task.root).exists(), "the folder went with the task");
+        let kept = root.join("specs/ACME-1-spec/openspec/changes/x/tasks.md");
+        assert_eq!(std::fs::read_to_string(kept).unwrap(), "- [ ] one\n");
+        assert!(state.config.task(&task.id).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_spec_that_cannot_be_kept_stops_the_delete_and_stays_with_its_task() {
+        let root = std::env::temp_dir().join(format!("vl-tasks-{}", uuid::Uuid::new_v4()));
+        let api = github_and_clone(&root, "api", &["main"]);
+        let state = state(&root, vec![project("api", &api, "main")]);
+        let task = task_on(&state, "api", "main");
+        let deep = (0..20).map(|n| format!("d{n}")).collect::<Vec<_>>().join("/");
+        let spec = Path::new(&task.root).join("spec").join(&deep);
+        std::fs::create_dir_all(&spec).unwrap();
+        std::fs::write(spec.join("x.md"), "deep").unwrap();
+
+        let err = delete_task_inner(&state, task.id.clone(), true, false).unwrap_err().to_string();
+
+        assert!(err.contains("nested too deeply"), "{err}");
+        assert!(spec.join("x.md").is_file(), "what could not be copied was not deleted");
+        assert!(state.config.task(&task.id).is_ok(), "the task stays, for a second try");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn based(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs.iter().map(|(b, d)| (b.to_string(), d.to_string())).collect()
     }

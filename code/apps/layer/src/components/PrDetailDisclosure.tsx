@@ -1,5 +1,6 @@
 import { useId, type ReactNode } from "react";
 import { ChevronIcon } from "./icons";
+import "./pr-details.css";
 
 export function PrDetailDisclosure({
   label,

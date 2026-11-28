@@ -263,7 +263,7 @@ function TaskMain({ task }: { task: TaskView }) {
     <>
       <div className="ws-header">
         <SidebarToggle />
-        <h1>{task.name}</h1>
+        <h1>{task.details?.display_name ?? task.name}</h1>
         <span className="branch">{task.branch}</span>
         <div className="chips">
           {task.checkouts.map((c) => (
@@ -349,18 +349,18 @@ function TaskMain({ task }: { task: TaskView }) {
         <button
           className="ui-tab"
           role="tab"
-          aria-selected={tab === "spec"}
-          onClick={() => setTab("spec")}
-        >
-          Spec{specBadge && <span className="ui-tab-count">{specBadge}</span>}
-        </button>
-        <button
-          className="ui-tab"
-          role="tab"
           aria-selected={tab === "terminals"}
           onClick={() => setTab("terminals")}
         >
           Agents<span className="ui-tab-count">{paneCount}</span>
+        </button>
+        <button
+          className="ui-tab"
+          role="tab"
+          aria-selected={tab === "spec"}
+          onClick={() => setTab("spec")}
+        >
+          Spec{specBadge && <span className="ui-tab-count">{specBadge}</span>}
         </button>
         <button
           className="ui-tab"

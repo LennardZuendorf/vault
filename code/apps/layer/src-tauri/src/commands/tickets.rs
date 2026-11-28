@@ -195,6 +195,8 @@ pub async fn start_work_on_ticket(
     branch_suffix: Option<String>,
     base: Option<String>,
     epic: Option<bool>,
+    toolset: Option<String>,
+    write_spec: Option<bool>,
 ) -> Result<Started> {
     let epic = epic.unwrap_or(false);
     // A second task for the same ticket would try to check the same branch out
@@ -225,6 +227,7 @@ pub async fn start_work_on_ticket(
         epic_key: issue.epic_key.clone(),
         epic,
         sub_task: None,
+        toolset,
     };
     // Worktrees on the blocking pool, as in `create_task`.
     let task = super::blocking(app.clone(), move |state| new_task(state, new)).await?;
@@ -238,9 +241,13 @@ pub async fn start_work_on_ticket(
     if let Some(agent_id) = agent_id {
         let repos = task_repos(&state, &task);
         let prompt = ticket_prompt(&issue, &task, &repos, true);
-        let task_id = task.id.clone();
+        let (task_id, started) = (task.id.clone(), task.clone());
         let handle = app.clone();
         super::blocking(app.clone(), move |state| {
+            // The same ending every opening prompt gets: Spec first, if on.
+            let prompt = super::spec_work::with_spec_line(state, &started, prompt);
+            // "Write a spec first" for this launch, when the setting is off.
+            let prompt = super::spec_work::with_spec_first(state, &started, prompt, write_spec == Some(true));
             start_agent(&handle, state, task_id, agent_id, None, Some(prompt), Resume::No, None, None, false)
         })
         .await?;
