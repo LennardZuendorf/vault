@@ -8,7 +8,7 @@ import { menuKeys, pressKeys } from "../../lib/press";
 import type { TaskView } from "../../lib/types";
 import { useStore } from "../../store";
 import { ChevronIcon } from "../icons";
-import { ItemDetailsIndicators } from "../ItemDetails";
+import { ItemColorBar, ItemDetailsIndicators } from "../ItemDetails";
 
 /**
  * An epic in the sidebar's Epics section (EPIC-9): how far its sub-tasks
@@ -83,6 +83,7 @@ export const EpicRow = memo(function EpicRow({
           onMenu(e.clientX, e.clientY, epic, automaticName);
         }}
       >
+        <ItemColorBar details={epic.details} />
         <div className="ws-title">
           <span
             role="button"
@@ -287,6 +288,7 @@ function SubLine({
         onMenu(e.clientX, e.clientY, task, title);
       }}
     >
+      <ItemColorBar details={task.details} />
       <span className={`dot ${dot}`} />
       <span className="label">{task.details?.display_name ?? title}</span>
       <ItemDetailsIndicators details={task.details} />

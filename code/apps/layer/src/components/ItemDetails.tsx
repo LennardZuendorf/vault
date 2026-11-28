@@ -211,24 +211,34 @@ export function ItemDetailsEditor({
 
 /** No wrapper for empty details: unchanged rows keep their original appearance. */
 export function ItemDetailsIndicators({ details }: { details?: ItemDetails }) {
-  if (!details?.tags.length && !details?.color) return null;
-  const color = ITEM_COLORS.find((c) => c.value === details?.color);
+  if (!details?.tags.length) return null;
   return (
     <span className="item-details-indicators">
-      {details?.color && color && (
-        <span
-          className="item-details-color"
-          role="img"
-          aria-label={`Color: ${color.label}`}
-          title={`Color: ${color.label}`}
-          style={{ backgroundColor: `var(--${details.color})` }}
-        />
-      )}
-      {details?.tags.map((tag) => (
+      {details.tags.map((tag) => (
         <span key={tag} className="ui-chip item-details-tag">
           {tag}
         </span>
       ))}
     </span>
+  );
+}
+
+/**
+ * An item's colour, as a thin bar down the row's left edge (DETAIL-2). It is
+ * the row's first child, so `:has` in item-details.css can anchor it. As an
+ * 8px swatch among the row's text it wrapped onto a line of its own under
+ * the name, and in amber it read as a second status dot.
+ */
+export function ItemColorBar({ details }: { details?: ItemDetails }) {
+  const color = ITEM_COLORS.find((c) => c.value !== null && c.value === details?.color);
+  if (!color) return null;
+  return (
+    <span
+      className="item-color-bar"
+      role="img"
+      aria-label={`Color: ${color.label}`}
+      title={`Color: ${color.label}`}
+      style={{ backgroundColor: `var(--${color.value})` }}
+    />
   );
 }

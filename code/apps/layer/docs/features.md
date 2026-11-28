@@ -704,7 +704,9 @@ integrations, the app's tools, the repos and the tasks in flight.
   draft and an inline error on failure. A successful save updates visible
   details without a restart and raises no success toast.
 - **DETAIL-2** Chat and Work rows MUST show assigned tags as readable,
-  neutral text chips and an optional separate, named color indicator.
+  neutral text chips and an optional separate, named color indicator: a
+  thin bar down the row's left edge, so the row keeps its lines and the
+  colour is never read as a second status dot.
   The choices are Lavender, Cyan, Rose, Blue, Amber, Mint and **No color**
   (`data-1` through `data-6`, or no assignment). Color is independent of
   tags, agent activity, checkout and review status: never a status dot

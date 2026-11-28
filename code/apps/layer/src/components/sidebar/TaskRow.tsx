@@ -4,7 +4,7 @@ import { useTaskAgents } from "../../lib/panes";
 import { menuKeys, pressKeys } from "../../lib/press";
 import type { TaskView } from "../../lib/types";
 import { ChevronIcon, CloseIcon } from "../icons";
-import { ItemDetailsIndicators } from "../ItemDetails";
+import { ItemColorBar, ItemDetailsIndicators } from "../ItemDetails";
 import { Spinner } from "../ui";
 
 /** What a task out for review is waiting on, in a word. */
@@ -78,6 +78,7 @@ export const TaskRow = memo(function TaskRow({
           onMenu(e.clientX, e.clientY, task, automaticName);
         }}
       >
+        <ItemColorBar details={task.details} />
         <div className="ws-title">
           {/*
             Every task expands, whatever its repo count. Gating this on

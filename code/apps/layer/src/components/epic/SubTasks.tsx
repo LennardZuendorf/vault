@@ -8,7 +8,7 @@ import { trackerOfKey } from "../../lib/tracker";
 import type { EpicView, SubTaskView, TaskView, Ticket, TicketPage } from "../../lib/types";
 import { useStore } from "../../store";
 import { typeMap } from "../IssueType";
-import { ItemDetailsIndicators } from "../ItemDetails";
+import { ItemColorBar, ItemDetailsIndicators } from "../ItemDetails";
 import { StartWorkDialog } from "../tickets/StartWorkDialog";
 import { Confirm, ErrorMessage, Spinner, useFailure } from "../ui";
 import { FileSubTasks } from "./FileSubTasks";
@@ -260,6 +260,7 @@ function SubTaskRow({ sub, all }: { sub: SubTaskView; all: SubTaskView[] }) {
       className={`epic-row${sub.task_id ? "" : " proposed"}${state === "waits" ? " queued" : ""}`}
       {...opens}
     >
+      <ItemColorBar details={task?.details} />
       <span className="key">{sub.key ?? "new"}</span>
       <span className="title">
         <span className={`dot ${dot}`} />

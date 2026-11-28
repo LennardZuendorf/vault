@@ -28,12 +28,17 @@
 button.item-details-tag {
   cursor: pointer;
 }
-.item-details-color {
-  display: inline-block;
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-sm);
+/* A row with a colour holds its bar (ItemColorBar, DETAIL-2). */
+:is(.chat-item, .ws, .sub-row, .epic-row):has(> .item-color-bar) {
+  position: relative;
+}
+.item-color-bar {
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0;
 }
 .item-details-actions {
   display: flex;

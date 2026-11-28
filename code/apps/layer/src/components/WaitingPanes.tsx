@@ -7,7 +7,7 @@ import type { Pins } from "../lib/pins";
 import { menuKeys, pressKeys } from "../lib/press";
 import type { WaitingPane } from "../lib/types";
 import { useStore } from "../store";
-import { ItemDetailsIndicators } from "./ItemDetails";
+import { ItemColorBar, ItemDetailsIndicators } from "./ItemDetails";
 import { ContextMenu } from "./menu";
 import { Confirm, ErrorMessage, useFailure } from "./ui";
 
@@ -135,6 +135,7 @@ export function WaitingChats({
           }}
           title="Reopen this chat where it left off"
         >
+          <ItemColorBar details={w.details} />
           <span className="dot" />
           <span className="chat-item-text">
             <span className="chat-item-title">{waitingChatName(w, label?.(w))}</span>

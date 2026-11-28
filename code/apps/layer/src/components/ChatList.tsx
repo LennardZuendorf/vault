@@ -7,7 +7,7 @@ import { menuKeys, pressKeys } from "../lib/press";
 import type { PaneInfo, SlackThreadView, WaitingPane } from "../lib/types";
 import { useStore } from "../store";
 import { ChevronIcon } from "./icons";
-import { ItemDetailsIndicators } from "./ItemDetails";
+import { ItemColorBar, ItemDetailsIndicators } from "./ItemDetails";
 import { RestartButton } from "./Restart";
 import { WaitingChats } from "./WaitingPanes";
 
@@ -61,6 +61,7 @@ export function ChatItem({
         onMenu(e.clientX, e.clientY, p);
       }}
     >
+      <ItemColorBar details={p.details} />
       <span className={`dot ${paneState(p).dot}`} title={paneState(p).label} />
       <span className="chat-item-text">
         <span className="chat-item-title" title={paneName(p)}>
