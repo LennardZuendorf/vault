@@ -4,6 +4,7 @@ import { useTaskAgents } from "../../lib/panes";
 import { menuKeys, pressKeys } from "../../lib/press";
 import type { TaskView } from "../../lib/types";
 import { ChevronIcon, CloseIcon } from "../icons";
+import { ItemDetailsIndicators } from "../ItemDetails";
 import { Spinner } from "../ui";
 
 /** What a task out for review is waiting on, in a word. */
@@ -45,7 +46,7 @@ export const TaskRow = memo(function TaskRow({
   /** Some repository is not in the task yet. */
   canAdd: boolean;
   onSelect: (taskId: string) => void;
-  onMenu: (x: number, y: number, task: TaskView) => void;
+  onMenu: (x: number, y: number, task: TaskView, automaticName?: string) => void;
   onToggle: (taskId: string) => void;
   onAddRepo: (task: TaskView) => void;
   onRemoveRepo: (checkoutId: string, repoName: string, dirty: number, last: boolean) => void;
@@ -54,6 +55,7 @@ export const TaskRow = memo(function TaskRow({
   const totals = taskTotals(task);
   const multi = task.checkouts.length > 1;
   const verdict = REVIEW_WORD[review];
+  const automaticName = task.issue_key ? task.name.replace(`${task.issue_key} `, "") : task.name;
   const select = () => {
     if (!vanishing) onSelect(task.id);
   };
@@ -73,7 +75,7 @@ export const TaskRow = memo(function TaskRow({
         onContextMenu={(e) => {
           if (vanishing) return;
           e.preventDefault();
-          onMenu(e.clientX, e.clientY, task);
+          onMenu(e.clientX, e.clientY, task, automaticName);
         }}
       >
         <div className="ws-title">
@@ -114,9 +116,7 @@ export const TaskRow = memo(function TaskRow({
               title={waiting ? "An agent here needs you: it is asking, or it finished" : undefined}
             />
           )}
-          <span className="label">
-            {task.issue_key ? task.name.replace(`${task.issue_key} `, "") : task.name}
-          </span>
+          <span className="label">{task.details?.display_name ?? automaticName}</span>
         </div>
         {/* The ticket key reads here, in the branch the composer starts with it,
             rather than in a box on the title line: there it was hard to read
@@ -137,6 +137,7 @@ export const TaskRow = memo(function TaskRow({
           )}
           {verdict && <span style={{ color: verdict.color }}>{verdict.text}</span>}
         </div>
+        <ItemDetailsIndicators details={task.details} />
       </div>
 
       {open &&

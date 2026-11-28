@@ -36,8 +36,20 @@ pub async fn acp_versions(app: AppHandle) -> Result<Vec<crate::acp::version::Acp
 }
 
 #[tauri::command]
-pub fn list_panes(state: State<AppState>, task_id: Option<String>) -> Vec<PaneInfo> {
-    state.ptys.list(task_id.as_deref())
+pub fn list_panes(
+    state: State<AppState>,
+    task_id: Option<String>,
+) -> Vec<super::desktop_details::DesktopItem<PaneInfo>> {
+    let panes = state.ptys.list(task_id.as_deref());
+    state.config.with(|c| {
+        panes
+            .into_iter()
+            .map(|p| {
+                let details = c.chat_details.get(&p.cwd).cloned();
+                super::desktop_details::project(p, details)
+            })
+            .collect()
+    })
 }
 
 /// Where a pane should start, and what to call it.
@@ -796,12 +808,13 @@ pub fn pty_detach(state: State<AppState>, pane_id: String) {
 /// still on the thread the window runs on.
 #[tauri::command]
 pub async fn close_pane(app: AppHandle, pane_id: String) -> Result<()> {
-    super::blocking(app, move |state| {
-        // Closing a pane on purpose means not wanting it back.
-        let _ = state.config.update(|c| c.saved_panes.retain(|p| p.id != pane_id));
-        state.ptys.close(&pane_id)
-    })
-    .await
+    super::blocking(app, move |state| close_pane_inner(state, &pane_id)).await
+}
+
+pub(crate) fn close_pane_inner(state: &AppState, pane_id: &str) -> Result<()> {
+    // Closing a pane on purpose means not wanting it back.
+    let _ = state.config.update(|c| super::panes_restore::forget_saved_pane(c, pane_id, false));
+    state.ptys.close(pane_id)
 }
 
 /// Stop the process but keep the pane and its scrollback on screen.

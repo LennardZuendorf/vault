@@ -3,6 +3,12 @@ import { create } from "zustand";
 import { api, errMessage, failureText } from "./lib/api";
 import { CHAT_TASK_ID } from "./lib/derive";
 import type { EpicOf } from "./lib/grouping";
+import {
+  detailsVersions,
+  itemDetailsActions,
+  samePane,
+  type ItemDetailsState,
+} from "./lib/item-details-store";
 import { forgetAllBut, read, readOneOf, write } from "./lib/persist";
 import { keep, only, reuse, sameJson } from "./lib/same";
 import { useSpecs } from "./lib/specs";
@@ -75,7 +81,7 @@ export interface ReviewNote {
   code: string;
 }
 
-export interface State {
+export interface State extends ItemDetailsState {
   projects: Project[];
   /**
    * How each repository is doing, by project id (REPO-5). Read at launch,
@@ -333,25 +339,6 @@ function reportTickets(moves: TicketMove[], toast: State["toast"], fail: State["
 }
 
 /**
- * Skip a React storm when a poll returns the same world we already have.
- * Pane by pane: one agent changing state keeps every other pane's object, so
- * a view of another task's panes is left alone (`usePanesOf`).
- */
-function samePane(x: PaneInfo, y: PaneInfo): boolean {
-  return (
-    x.id === y.id &&
-    x.running === y.running &&
-    x.exit_code === y.exit_code &&
-    x.notice === y.notice &&
-    x.activity === y.activity &&
-    x.activity_since === y.activity_since &&
-    x.title === y.title &&
-    x.topic === y.topic &&
-    x.task_id === y.task_id
-  );
-}
-
-/**
  * Consecutive quiet failures of the task/pane polls. One blip is noise; two
  * in a row usually means the backend is unreachable or a token is gone.
  */
@@ -380,6 +367,7 @@ export const useStore = create<State>((set, get) => {
   };
 
   return {
+    ...itemDetailsActions(set, get),
     projects: [],
     repoHealth: {},
     tasks: [],
@@ -467,6 +455,8 @@ export const useStore = create<State>((set, get) => {
       // sit black until it finished. Kick both off together.
       const settingsP = get().refreshSettings();
       const focus = get().selectedTask;
+      const taskVersion = ++detailsVersions.tasks;
+      const paneVersion = ++detailsVersions.panes;
       const coreP = Promise.all([
         api.listProjects(),
         api.listTasks(focus),
@@ -478,11 +468,15 @@ export const useStore = create<State>((set, get) => {
         // and Add repos, and a wholesale swap redrew every task row, pane and
         // agent card even when the operation changed none of them.
         set((s) => {
-          const kept = reuse(s.tasks, tasks, (t) => t.id);
+          const kept =
+            taskVersion === detailsVersions.tasks ? reuse(s.tasks, tasks, (t) => t.id) : s.tasks;
           return {
             projects: reuse(s.projects, projects, (p) => p.id),
             tasks: kept,
-            panes: reuse(s.panes, panes, (p) => p.id, samePane),
+            panes:
+              paneVersion === detailsVersions.panes
+                ? reuse(s.panes, panes, (p) => p.id, samePane)
+                : s.panes,
             agents: reuse(s.agents, agents, (a) => a.id),
             cursorIde,
             selectedTask: stillThere(kept, s.selectedTask),
@@ -522,7 +516,9 @@ export const useStore = create<State>((set, get) => {
         try {
           // Focus the selected task so its worktrees stay fresh; everything else
           // reuses the backend status cache unless it has an agent at work.
+          const version = ++detailsVersions.tasks;
           const fetched = await api.listTasks(get().selectedTask);
+          if (version !== detailsVersions.tasks) return;
           const live = new Set(fetched.map((t) => t.id));
           const before = get().tasks;
           set((s) => {
@@ -562,7 +558,9 @@ export const useStore = create<State>((set, get) => {
     refreshPanes: (opts) =>
       coalesce(panesSlot, opts?.poll ?? false, async () => {
         try {
+          const version = ++detailsVersions.panes;
           const fetched = await api.listPanes();
+          if (version !== detailsVersions.panes) return;
           set((s) => {
             const panes = reuse(s.panes, fetched, (p) => p.id, samePane);
             return panes === s.panes ? s : { panes };
@@ -575,7 +573,9 @@ export const useStore = create<State>((set, get) => {
       }),
 
     refreshWaiting: async () => {
+      const version = ++detailsVersions.waiting;
       const waiting = await api.waitingPanes();
+      if (version !== detailsVersions.waiting) return;
       set((s) => (sameJson(s.waiting, waiting) ? s : { waiting }));
     },
 

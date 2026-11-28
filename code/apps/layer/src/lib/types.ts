@@ -158,7 +158,20 @@ export interface CheckoutView extends Checkout {
   changed: number;
 }
 
+export interface ItemDetails {
+  display_name: string | null;
+  tags: string[];
+  color: "data-1" | "data-2" | "data-3" | "data-4" | "data-5" | "data-6" | null;
+}
+
+export type DetailsPatch = Partial<ItemDetails>;
+export interface DetailsEvent {
+  kind: "task" | "chat" | "catalog";
+  catalog_changed: boolean;
+}
+
 export interface TaskView extends Task {
+  details?: ItemDetails;
   checkouts: CheckoutView[];
   pane_count: number;
 }
@@ -170,6 +183,7 @@ export type PaneKind = "agent" | "shell";
  * once. Kept for the user to reopen or forget; never reopened by itself.
  */
 export interface WaitingPane {
+  details?: ItemDetails;
   /** Its saved id: what Reopen and Forget name. */
   id: string;
   task_id: string;
@@ -181,6 +195,7 @@ export interface WaitingPane {
 }
 
 export interface PaneInfo {
+  details?: ItemDetails;
   id: string;
   task_id: string;
   /** null means the pane is rooted at the task root, seeing every repo. */

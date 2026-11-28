@@ -54,6 +54,7 @@ import type { Process } from "../lib/types-henchman";
 import { acpAnswers, seedAcp, seedHenchman } from "./acp";
 import { epicAnswers, seedEpic } from "./epic";
 import { henchmanAnswers } from "./henchman";
+import { detailsAnswers } from "./item-details";
 import { limitAnswers } from "./limits";
 import { loopAnswers, seedLoop } from "./loop";
 import { profileAnswers } from "./profiles";
@@ -651,11 +652,6 @@ const answer: Record<string, Answer> = {
   },
   cursor_ide_installed: () => false,
   list_projects: () => structuredClone(world.projects),
-  // A copy, as IPC would hand over: the same objects edited in place look
-  // unchanged to the store (`lib/same.ts`), and the UI never sees the edit.
-  list_tasks: () => structuredClone(world.tasks),
-  // A copy too: a pane pushed onto the same array read as no change.
-  list_panes: () => structuredClone(world.panes),
   list_agents: () => world.agents,
   // One of most standings, so Settings → Agents shows them (ACP-17), and
   // each where `list_agents` puts it: OpenCode is not installed.
@@ -774,7 +770,9 @@ const answer: Record<string, Answer> = {
     processes.splice(at, 1);
     return liveProcesses();
   },
-  waiting_panes: () => world.waiting,
+  ...detailsAnswers(world, (event) => {
+    void emit("item-details:changed", event);
+  }),
   reopen_waiting_pane: (a) => {
     const w = world.waiting.find((x) => x.id === a.id);
     if (!w) throw new Error("That pane is no longer waiting to be reopened.");

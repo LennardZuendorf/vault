@@ -10,7 +10,7 @@ import { useOrders } from "./lib/henchman-orders";
 import { useRoutines } from "./lib/routines";
 import { useSpecs } from "./lib/specs";
 import { useTheme } from "./lib/theme";
-import type { SpecPart, Target } from "./lib/types";
+import type { DetailsEvent, SpecPart, Target } from "./lib/types";
 import type { HenchmanLair } from "./lib/types-henchman";
 import type { Routines } from "./lib/types-routines";
 import { startWorkspaceSync, useSession } from "./lib/workspace-sync";
@@ -52,6 +52,15 @@ export function Watchers() {
   const setAppActive = useStore((s) => s.setAppActive);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
+  useEffect(() => {
+    const p = listen<DetailsEvent>("item-details:changed", (e) => {
+      void useStore.getState().detailsChanged(e.payload).catch(fail);
+    });
+    void useStore.getState().refreshTags().catch(fail);
+    return () => {
+      void p.then((unlisten) => unlisten());
+    };
+  }, [fail]);
 
   // The page's colours, and the terminals', which xterm draws itself (SET-5).
   const theme = useTheme(useStore((s) => s.settings?.ui.theme));

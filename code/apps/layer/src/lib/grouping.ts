@@ -1,5 +1,15 @@
 import type { Ticket } from "./types";
 
+/** Persisted Work grouping choices; stage retains the original three lists. */
+export const GROUPINGS = ["stage", "epic", "repo", "tag"] as const;
+export type Grouping = (typeof GROUPINGS)[number];
+export const GROUPING_LABEL: Record<Grouping, string> = {
+  stage: "Stage",
+  epic: "Epic",
+  repo: "Repository",
+  tag: "Tag",
+};
+
 /** The epic a ticket belongs to: its key, and its title when Jira sent one. */
 export interface EpicOf {
   key: string;
@@ -69,6 +79,49 @@ export function byEpic<T>(items: T[], epicOf: (item: T) => EpicOf | null | undef
     },
     "No epic",
   );
+}
+
+/** Tag mode replaces the tree, but never expands beyond its filtered stored records. */
+export function storedWorkItems<T extends { id: string }>(sections: {
+  tasks: T[];
+  layerEpics: T[];
+  subsOf: Record<string, T[]>;
+  jiraEpics: { tasks: T[] }[];
+}): T[] {
+  const items = [
+    ...sections.tasks,
+    ...sections.layerEpics.flatMap((e) => [e, ...(sections.subsOf[e.id] ?? [])]),
+    ...sections.jiraEpics.flatMap((e) => e.tasks),
+  ];
+  return [...new Map(items.map((t) => [t.id, t])).values()];
+}
+
+/** Named headings sort independently; each membership keeps the supplied stage order. */
+export function byTag<T extends { details?: { tags: string[] } }>(items: T[]): Group<T>[] {
+  const groups = new Map<string, Group<T>>();
+  const rest: T[] = [];
+  for (const item of items) {
+    const tags = item.details?.tags ?? [];
+    if (!tags.length) rest.push(item);
+    const seen = new Set<string>();
+    for (const label of tags) {
+      const tag = label.toLowerCase();
+      if (seen.has(tag)) continue;
+      seen.add(tag);
+      const group = groups.get(tag) ?? {
+        id: `tag:${tag}`,
+        label,
+        items: [],
+      };
+      group.items.push(item);
+      groups.set(tag, group);
+    }
+  }
+  const out = [...groups.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([, group]) => group);
+  if (rest.length) out.push({ id: "untagged", label: "No tag", items: rest });
+  return out;
 }
 
 /**

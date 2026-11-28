@@ -73,8 +73,23 @@ pub(crate) fn issue_project(issue_key: Option<&str>) -> String {
 /// focused task re-runs `git status` in each of its worktrees, which is the
 /// one blocking call in the app that happens whether or not anyone asked.
 #[tauri::command]
-pub async fn list_tasks(app: AppHandle, focus: Option<String>) -> Result<Vec<TaskView>> {
-    super::blocking(app, move |state| Ok(list_tasks_inner(state, focus))).await
+pub async fn list_tasks(
+    app: AppHandle,
+    focus: Option<String>,
+) -> Result<Vec<super::desktop_details::DesktopItem<TaskView>>> {
+    super::blocking(app, move |state| {
+        let tasks = list_tasks_inner(state, focus);
+        Ok(state.config.with(|c| {
+            tasks
+                .into_iter()
+                .map(|t| {
+                    let details = c.task_details.get(&t.task.id).cloned();
+                    super::desktop_details::project(t, details)
+                })
+                .collect()
+        }))
+    })
+    .await
 }
 
 pub(crate) fn list_tasks_inner(state: &AppState, focus: Option<String>) -> Vec<TaskView> {
@@ -480,6 +495,7 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
                 let task_id = task.id.clone();
                 state.config.update(|c| {
                     c.tasks.retain(|t| t.id != task_id);
+                    c.task_details.remove(&task_id);
                     c.checkouts.retain(|ch| ch.task_id != task_id);
                 })?;
                 let _ = std::fs::remove_dir(&root);
@@ -910,6 +926,7 @@ fn delete_task_inner(state: &AppState, id: String, force: bool, finished: bool) 
     let done = crate::runs::task_done(&state.config.read(), &id, finished, chrono::Utc::now());
     state.config.update(|c| {
         c.tasks.retain(|t| t.id != id);
+        c.task_details.remove(&id);
         c.checkouts.retain(|ch| ch.task_id != id);
     })?;
     if let Some(done) = done {
@@ -924,6 +941,8 @@ fn delete_task_inner(state: &AppState, id: String, force: bool, finished: bool) 
 mod tests {
     use super::*;
     use crate::config::AppConfig;
+
+    mod lifecycle;
 
     fn git(dir: &Path, args: &[&str]) -> String {
         crate::git::run_for_tests(dir, args).unwrap().trim().to_string()
