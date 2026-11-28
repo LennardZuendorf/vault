@@ -1700,7 +1700,10 @@ Known gaps:
 - **SET-11** Settings MUST end with the app's name and version ("Layer
   0.1.0"), faint and small, under whichever page is open
   (`studio/design/behaviour.md`, "Settings"). Its title says where a crash
-  is written.
+  is written. A build made on this Mac (`bun run release:mac`) MUST say
+  the commit it was built from in place of the version ("Layer c3e5bbe"),
+  with `-dirty` when the tree had uncommitted changes, and its title which
+  release it follows; only a release (`bun run release`) says a number.
 - **SET-12** A connection's form (Jira, GitHub, the Slack bot, Grafana)
   MUST keep one button, since its address and token only work together
   and the app has to try them. It is named by what it does: "Connect"

@@ -1,5 +1,6 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useState } from "react";
+import { versionLine } from "../lib/version";
 import { useStore } from "../store";
 import { AgentSettings } from "./AgentSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
@@ -49,6 +50,7 @@ export function Settings() {
       .then(setVersion)
       .catch(() => {});
   }, []);
+  const line = version ? versionLine(version, import.meta.env.VITE_LAYER_BUILD) : null;
   const toggleSettings = useStore((s) => s.toggleSettings);
   const [section, setSection] = useState<Section>(
     () => (useStore.getState().settingsSection as Section | null) ?? "appearance",
@@ -95,12 +97,9 @@ export function Settings() {
 
       {/* Settings ends with the app's name and version, on every page
           (SET-11, studio/design/behaviour.md). */}
-      {version && (
-        <p
-          className="settings-version"
-          title="Name this in a bug report. A crash is written to ~/Library/Logs/villain-layer/panic.log."
-        >
-          Layer {version}
+      {line && (
+        <p className="settings-version" title={line.title}>
+          {line.text}
         </p>
       )}
     </Modal>
