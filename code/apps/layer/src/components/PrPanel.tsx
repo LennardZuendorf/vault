@@ -129,7 +129,17 @@ function ConnectedPrPanel({ task, onUpdateFromBase }: PrPanelProps) {
     () => snapshot.filter((r) => task.checkouts.some((c) => c.id === r.checkout_id)),
     [snapshot, task.checkouts],
   );
-  const live = useTaskPrCards(rows);
+  const live = useTaskPrCards(rows).map(({ row, identity }) => {
+    const permalink = prPermalinkIdentity(identity.url);
+    // A checkout can be pointed at another repo with the same PR number.
+    const prIdentity = JSON.stringify([
+      task.id,
+      row.checkout_id,
+      identity.number,
+      permalink ?? identity.url,
+    ]);
+    return { row, identity, permalink, prIdentity };
+  });
   const listingErrors = new Set(
     live
       .filter(
@@ -154,7 +164,7 @@ function ConnectedPrPanel({ task, onUpdateFromBase }: PrPanelProps) {
   const [branches, setBranches] = useState<Record<string, string[]>>({});
   /** Whether the "open a pull request" dialog is up. */
   const [creating, setCreating] = useState(false);
-  /** The repo whose PR the feedback dialog opened on, while it is up. */
+  /** The verified PR whose card opened the feedback picker. */
   const [feedback, setFeedback] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
   /** Which PR cards are expanded, when there are enough to be worth folding. */
@@ -168,6 +178,13 @@ function ConnectedPrPanel({ task, onUpdateFromBase }: PrPanelProps) {
   const refreshError = useStore((s) =>
     readFailure?.revision === (s.prReadRevision[task.id] ?? 0) ? readFailure.message : null,
   );
+  const feedbackCard =
+    feedback && !refreshError
+      ? live.find(({ row, prIdentity }) => prIdentity === feedback && row.pr && !row.error)
+      : undefined;
+  // Hiding the picker alone would reopen it with default picks when the PR returns.
+  if (feedback && !feedbackCard) setFeedback(null);
+
   const loadRequest = useRef<symbol | null>(null);
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState(task.name);
@@ -187,6 +204,8 @@ function ConnectedPrPanel({ task, onUpdateFromBase }: PrPanelProps) {
       await refreshTaskPrs(task.id);
     } catch (e) {
       if (loadRequest.current === request) {
+        // A newer successful read can supersede the error before it renders.
+        setFeedback(null);
         setReadFailure({ revision, message: failureText(e) });
       }
     } finally {
@@ -522,7 +541,7 @@ function ConnectedPrPanel({ task, onUpdateFromBase }: PrPanelProps) {
 
       <PrImageOffer taskId={task.id} fail={fail} onAdded={() => void load()} />
 
-      {live.map(({ row, identity }) => {
+      {live.map(({ row, identity, permalink, prIdentity }) => {
         const pr = row.error || refreshError ? null : row.pr;
         const checks = pr ? checkRunsView(row) : UNAVAILABLE_CHECKS;
         // The picker still loads feedback on its own; this is just its badge.
@@ -532,14 +551,6 @@ function ConnectedPrPanel({ task, onUpdateFromBase }: PrPanelProps) {
             checks.runs.filter((c) => c.outcome === "failing").length
           : 0;
         const key = row.checkout_id;
-        const permalink = prPermalinkIdentity(identity.url);
-        // A checkout can be pointed at another repo with the same PR number.
-        const commentsIdentity = JSON.stringify([
-          task.id,
-          key,
-          identity.number,
-          permalink ?? identity.url,
-        ]);
         // Several fold, so the list reads as a list rather than as a wall of
         // check runs. One on its own is always shown — and stays shown if the
         // others go away while it is folded, which would otherwise leave it
@@ -625,7 +636,7 @@ function ConnectedPrPanel({ task, onUpdateFromBase }: PrPanelProps) {
                   }
                   onClick={(e) => {
                     e.stopPropagation();
-                    setFeedback(row.checkout_id);
+                    setFeedback(prIdentity);
                   }}
                 >
                   Feedback → agent
@@ -727,11 +738,11 @@ function ConnectedPrPanel({ task, onUpdateFromBase }: PrPanelProps) {
                   </div>
                 )}
                 <TaskPrComments
-                  key={commentsIdentity}
+                  key={prIdentity}
                   taskId={task.id}
                   checkoutId={row.checkout_id}
                   number={identity.number}
-                  identity={commentsIdentity}
+                  identity={prIdentity}
                   permalink={permalink}
                   refresh={commentsRefresh}
                   onOpen={openPr}
@@ -788,11 +799,18 @@ function ConnectedPrPanel({ task, onUpdateFromBase }: PrPanelProps) {
 
       {loaded && <PrReadErrors rows={rows.filter((r) => !listingErrors.has(r.checkout_id))} />}
 
-      {feedback &&
-        !refreshError &&
-        live.some(({ row }) => row.checkout_id === feedback && row.pr && !row.error) && (
-          <PrFeedback task={task} first={feedback} onClose={() => setFeedback(null)} />
-        )}
+      {feedbackCard && (
+        <PrFeedback
+          key={feedbackCard.prIdentity}
+          task={task}
+          first={{
+            checkoutId: feedbackCard.row.checkout_id,
+            number: feedbackCard.identity.number,
+            permalink: feedbackCard.permalink,
+          }}
+          onClose={() => setFeedback(null)}
+        />
+      )}
       {finishing && review === "merged" && (
         <FinishTask task={task} onClose={() => setFinishing(false)} />
       )}

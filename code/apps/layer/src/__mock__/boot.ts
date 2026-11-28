@@ -950,8 +950,12 @@ const answer: Record<string, Answer> = {
     world.tasks = [...world.tasks, task];
     return task;
   },
-  // Copies as well, for the same reason: a status moved in place was kept.
-  github_all_prs: () => structuredClone(world.prs),
+  github_all_prs: ({ knownTaskIds }) => {
+    if (!Array.isArray(knownTaskIds) || knownTaskIds.some((id: unknown) => typeof id !== "string"))
+      throw new Error("A PR sweep needs the IDs of tasks the window already holds.");
+    // The mock has no settled-task clock. Clone so in-place fixture changes reach the store.
+    return structuredClone(world.prs);
+  },
   github_task_prs: (a) =>
     structuredClone(world.prs.find((p) => p.task_id === a.taskId)?.rows ?? []),
   github_pr_comments: (a) => {

@@ -39,7 +39,7 @@ pub async fn github_pr_comments(
             .ok_or_else(|| Error::Other("That task is no longer available.".into()))?;
         Ok::<_, Error>((checkout, branch))
     })?;
-    let (client, config) = github_client(&state).map_err(safe_connection_error)?;
+    let (client, config) = github_client(&state).await.map_err(safe_connection_error)?;
     read_checkout_comments(&client, &config, checkout, branch, number).await
 }
 

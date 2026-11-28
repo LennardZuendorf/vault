@@ -408,7 +408,7 @@ export const api = {
   githubTaskPrs: (taskId: string) => invoke<CheckoutPr[]>("github_task_prs", { taskId }),
   githubPrComments: (taskId: string, checkoutId: string, number: number) =>
     invoke<CheckoutPrComments>("github_pr_comments", { taskId, checkoutId, number }),
-  githubAllPrs: () => invoke<TaskPrs[]>("github_all_prs"),
+  githubAllPrs: (knownTaskIds: string[]) => invoke<TaskPrs[]>("github_all_prs", { knownTaskIds }),
   setCheckoutBase: (checkoutId: string, base: string) =>
     invoke<void>("set_checkout_base", { checkoutId, base }),
   taskBranchFacts: (taskId: string) => invoke<RepoBranchFacts[]>("task_branch_facts", { taskId }),

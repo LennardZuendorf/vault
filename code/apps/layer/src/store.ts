@@ -182,7 +182,7 @@ export interface State extends ItemDetailsState, TaskPrSnapshots {
   refreshPrs: () => Promise<void>;
   refreshTaskPrs: (taskId: string) => Promise<void>;
   /** `quiet` is a timer tick: no toast, and no spinner if a queue is already shown. */
-  refreshReviewQueue: (opts?: { quiet?: boolean; fresh?: boolean }) => Promise<void>;
+  refreshReviewQueue: (opts?: { quiet?: boolean }) => Promise<void>;
   /** The message center's log (MSG-1), newest first. */
   messages: Message[];
   refreshMessages: () => Promise<void>;
@@ -194,6 +194,7 @@ export interface State extends ItemDetailsState, TaskPrSnapshots {
   refreshSettings: (opts?: {
     githubReconnected?: boolean;
     githubDisconnected?: boolean;
+    githubReviewTeam?: string | null;
   }) => Promise<void>;
   setSpecFirst: (on: boolean) => Promise<void>; // Spec first (SPEC-38), then the settings again
   /** `quiet` is a timer tick: no toast, and no spinner over a list already shown. */
@@ -202,22 +203,6 @@ export interface State extends ItemDetailsState, TaskPrSnapshots {
 
 let toastSeq = 0;
 let noteSeq = 0;
-
-/**
- * Whether a PR sweep is already in the air.
- *
- * A sweep walks every task serially and costs four GitHub round trips per
- * repository that has one, so on a slow link it can outlast the interval that
- * starts the next. Two at once would double the API spend and let the older
- * one land last, taking the store backwards.
- */
-let sweeping = false;
-/**
- * Asked for while one was in the air. A new token is saved mid-sweep, and the
- * sweep began with the old one: skipped, its refusal stayed on screen until
- * the next one (PR-12). So one more runs when it lands.
- */
-let sweepAgain = false;
 
 interface RefreshSlot {
   current: Promise<void> | null;
@@ -258,6 +243,10 @@ const tasksSlot: RefreshSlot = { current: null };
 const panesSlot: RefreshSlot = { current: null };
 const messagesSlot: RefreshSlot = { current: null };
 let reviewsSlot: RefreshSlot = { current: null };
+// A slow sweep can outlast its timer. Allow one successor per connection,
+// but don't make a reconnect wait for an obsolete sweep.
+let sweepSlot = { busy: false, again: false };
+const settingsReads = { started: 0, accepted: 0 };
 
 function sameMessages(a: Message[], b: Message[]): boolean {
   return (
@@ -278,17 +267,21 @@ const BOOT_WAIT = 1500;
 let prReadSequence = 0;
 const latestTaskPrRequest = new Map<string, number>();
 
-function resetGitHubReads(revision: number): Partial<State> {
-  // The next queue must not join or wait behind a request using the old token.
+function resetReviewReads() {
+  // An obsolete search (or its queued successor) cannot publish or block the next one.
   reviewsSlot = { current: null };
+  return { reviewQueueLoading: false, reviewQueueError: null };
+}
+
+function resetGitHubReads(revision: number): Partial<State> {
+  sweepSlot = { busy: false, again: false };
   latestTaskPrRequest.clear();
   return {
+    ...resetReviewReads(),
     githubConnectionRevision: revision + 1,
     prs: {},
     prReadRevision: {},
     reviewQueue: null,
-    reviewQueueLoading: false,
-    reviewQueueError: null,
   };
 }
 
@@ -569,17 +562,18 @@ export const useStore = create<State>((set, get) => {
      * put a toast on screen every couple of minutes.
      */
     refreshPrs: async () => {
-      if (!get().settings?.github_connected) return;
-      if (sweeping) {
-        sweepAgain = true;
+      const { settings, prs } = get();
+      if (!settings?.github_connected) return;
+      const slot = sweepSlot;
+      if (slot.busy) {
+        slot.again = true;
         return;
       }
-      sweeping = true;
+      slot.busy = true;
       const began = ++prReadSequence;
-      const connection = get().githubConnectionRevision;
       try {
-        const all = await api.githubAllPrs();
-        if (get().githubConnectionRevision !== connection) return;
+        const all = await api.githubAllPrs(Object.keys(prs));
+        if (slot !== sweepSlot) return;
         // Merged, not replaced: a task the sweep could not read is left out of
         // its result, and dropping it here would blank a panel that had just
         // fetched those rows for itself. An explicit read can also land while
@@ -597,9 +591,9 @@ export const useStore = create<State>((set, get) => {
       } catch {
         // Left as it was: stale rows beat empty ones.
       } finally {
-        sweeping = false;
-        if (sweepAgain) {
-          sweepAgain = false;
+        slot.busy = false;
+        if (slot === sweepSlot && slot.again) {
+          slot.again = false;
           await get().refreshPrs();
         }
       }
@@ -642,26 +636,37 @@ export const useStore = create<State>((set, get) => {
 
     setSpecFirst: (on) => api.setSpecFirst(on).then(() => get().refreshSettings()),
     refreshSettings: async (opts) => {
-      if (opts?.githubReconnected || opts?.githubDisconnected) {
-        // The settings command has already succeeded. Do not wait for the
-        // settings read to discard rows and errors from the previous login.
+      const read = ++settingsReads.started;
+      const connectionSaved = opts?.githubReconnected || opts?.githubDisconnected;
+      const prior = get().settings;
+      const team = opts?.githubReviewTeam;
+      const teamSaved = team !== undefined && prior?.github && team !== prior.github.review_team;
+      // A confirmed save supersedes earlier settings snapshots even before its reload.
+      if (connectionSaved || teamSaved) settingsReads.accepted = read;
+      if (connectionSaved) {
         set((s) => ({
           ...resetGitHubReads(s.githubConnectionRevision),
           ...(opts.githubDisconnected && s.settings
             ? { settings: { ...s.settings, github_connected: false, github: null } }
             : {}),
         }));
+      } else if (teamSaved && prior?.github) {
+        const github = { ...prior.github, review_team: team };
+        set({ ...resetReviewReads(), settings: { ...prior, github } });
+        void get().refreshReviewQueue({ quiet: true });
       }
-      const revision = get().githubConnectionRevision;
       const settings = await api.getSettings();
-      if (get().githubConnectionRevision !== revision) return;
-      const before = get().settings;
+      if (read < settingsReads.accepted) return;
+      settingsReads.accepted = read;
+      const { settings: before, githubConnectionRevision: revision } = get();
       const connectionChanged =
         Boolean(before?.github_connected) !== settings.github_connected ||
         before?.github?.api_url !== settings.github?.api_url ||
         before?.github?.web_url !== settings.github?.web_url;
+      const teamChanged = before?.github?.review_team !== settings.github?.review_team;
       set({
         ...(!opts?.githubReconnected && connectionChanged ? resetGitHubReads(revision) : {}),
+        ...(teamChanged && !connectionChanged ? resetReviewReads() : {}),
         settings: keep(before, settings),
       });
       // Only until the first list lands: someone with nothing assigned has an
@@ -681,19 +686,15 @@ export const useStore = create<State>((set, get) => {
         });
       }
       // A team change needs a new search, but does not change the connection.
-      const teamChanged = before?.github?.review_team !== settings.github?.review_team;
-      if (
-        settings.github_connected &&
-        (opts?.githubReconnected || teamChanged || get().reviewQueue === null)
-      ) {
-        void get().refreshReviewQueue({ quiet: true, fresh: teamChanged && !connectionChanged });
-      }
+      if (!settings.github_connected) return;
+      if (opts?.githubReconnected || teamChanged || (!teamSaved && get().reviewQueue === null))
+        void get().refreshReviewQueue({ quiet: true });
     },
 
     refreshReviewQueue: (opts) => {
-      const connection = get().githubConnectionRevision;
-      const current = () => connection === get().githubConnectionRevision;
-      return coalesce(reviewsSlot, !!opts?.quiet && !opts.fresh, async () => {
+      const slot = reviewsSlot;
+      const current = () => slot === reviewsSlot;
+      return coalesce(slot, !!opts?.quiet, async () => {
         if (!current() || !get().settings?.github_connected) return;
         // A timer tick should not flash the spinner over a list already on
         // screen. The first load has nothing to keep, so it still shows one.

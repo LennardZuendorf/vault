@@ -967,11 +967,12 @@ send feedback to an agent, and finish a merged task.
   `origin` (REPO-4). A task whose pull requests were all closed or merged
   when last read (every repo's newest PR closed or merged, or none and
   nothing on its branch, and nothing failed) is swept only every 15
-  minutes, and its repositories' git is left alone in between; its PR tab
-  still asks at once when opened, and opening its PRs from the app puts it
-  back in every sweep. The first sweep is silent. After it, a new
-  approval, request for changes, new comment or merge is announced as a
-  toast.
+  minutes while the window already has its rows. A window without those
+  rows reads the task on its next sweep, even if a background read just
+  found it settled. Its PR tab still asks at once when opened, and opening
+  its PRs from the app puts it back in every sweep. The first sweep is
+  silent. After it, a new approval, request for changes, new comment or
+  merge is announced as a toast.
 - **PR-9** A late answer MUST NOT overwrite a newer one. A sweep that
   started before a PR was opened does not put back "no PR".
 - **PR-10** The feedback picker MUST show each item in full, with no
@@ -1012,9 +1013,9 @@ send feedback to an agent, and finish a merged task.
   "Bad credentials" JSON beside each repo, and nothing said what to do.
   While the last read was refused, the chip in Settings says "token
   rejected" in place of "connected", which only ever meant a token was
-  saved. Saving a token sweeps every task's PRs at once, or straight after
-  a sweep already under way, so the refusal does not linger. A 403 that
-  GitHub marks as single sign-on is said once too: the organization
+  saved. Saving a token starts a new sweep at once, without waiting for
+  the old connection's sweep. Old results cannot replace the new rows.
+  A 403 that GitHub marks as single sign-on is said once too: the organization
   requires SSO and the token is not authorized for it, with the way to
   authorize it and a button to GitHub's token settings. There is no button
   to check again: the next sweep reads the repos again on its own, as

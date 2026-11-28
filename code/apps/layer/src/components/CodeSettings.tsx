@@ -71,9 +71,12 @@ export function CodeSettings() {
       const token = ghToken.trim();
       const githubReconnected =
         !connected || !!token || apiUrl !== g?.api_url || webUrl !== g?.web_url;
-      await api.githubConnect(apiUrl, webUrl, token, ghTeam.trim() || null);
+      // Match the native save's normalization: blank and a lone @ mean no team.
+      const rawTeam = ghTeam.trim();
+      const reviewTeam = rawTeam.replace(/^@+/, "").trim() || null;
+      await api.githubConnect(apiUrl, webUrl, token, rawTeam || null);
       setGhToken("");
-      await refreshSettings({ githubReconnected });
+      await refreshSettings({ githubReconnected, githubReviewTeam: reviewTeam });
       fold();
     } catch (e) {
       github.fail(e);

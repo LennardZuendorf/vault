@@ -1,13 +1,13 @@
 //! Read one Reviews card without resolving a task or local repository.
 
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::State;
 
 use crate::error::{Error, Result};
 use crate::integrations::github::{GitHub, PrChecks, PrComments};
 
 use super::pr_comments::{matches_pr_permalink, repo_segment};
-use super::{blocking, github_client};
+use super::{github_client, AppState};
 
 #[derive(Debug, Serialize)]
 pub struct ReviewPrDetails {
@@ -23,12 +23,12 @@ pub struct ReviewPrDetails {
 
 #[tauri::command]
 pub async fn github_review_pr_details(
-    app: AppHandle,
+    state: State<'_, AppState>,
     repo: String,
     number: u64,
     url: String,
 ) -> Result<ReviewPrDetails> {
-    let (client, config) = blocking(app, github_client).await.map_err(review_read_error)?;
+    let (client, config) = github_client(&state).await.map_err(review_read_error)?;
     read_review_pr_details(&client, &config.web_url, &repo, number, &url).await
 }
 
