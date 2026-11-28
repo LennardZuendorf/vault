@@ -31,7 +31,7 @@ pub use integrations::{
 };
 pub use layer_domain::TrackerKind;
 pub use phone::{PhoneConfig, PhoneDevice};
-pub use project::Project;
+pub use project::{Project, SpecCommit};
 pub use shared::Shared;
 pub use ui::UiPrefs;
 
@@ -83,6 +83,11 @@ pub struct Task {
     /// The epic this is a sub-task of (EPIC-7).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sub_task: Option<SubTaskOf>,
+    /// The spec toolset it was made with, by id: fixed when the task is made
+    /// (§19). None: the app's default, which is also what a task from before
+    /// toolsets uses (`commands::spec_copy::toolset_of`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolset: Option<String>,
 }
 
 /// Which epic a sub-task was filed from, and which of its sub-tasks it is:
@@ -299,6 +304,22 @@ pub struct AppConfig {
     /// The Henchman's standing orders and whom it leaves alone (§28).
     #[serde(default)]
     pub henchman: HenchmanConfig,
+    /// The spec toolset a task gets when nothing else says (Settings → Code).
+    /// None: `kiro`, so a config from before toolsets sees no change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_toolset: Option<String>,
+    /// Every agent Layer starts is told to write or update the spec before it
+    /// changes any code (Settings → Code). Off: a spec is written when the
+    /// user asks for one. Instructions only; nothing stops an agent that
+    /// ignores them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub spec_first: bool,
+    /// Toolsets the user added, beside the three Layer ships. Never synced: a
+    /// manifest's install steps run on this Mac, so each Mac holds its own.
+    /// Read leniently (`lenient_list`): one entry no longer readable must not make
+    /// the whole file unreadable and the app start empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::spec::toolset::lenient_list")]
+    pub toolsets: Vec<crate::spec::toolset::Toolset>,
 }
 
 impl AppConfig {
@@ -313,7 +334,10 @@ impl AppConfig {
             return false;
         }
         let from = self.version;
-        let bumped = from != SCHEMA_VERSION;
+        // Done whatever the version: a change queued by an earlier build of
+        // this version still carries the old key.
+        let renamed = self.shared.rename_specs_in_app();
+        let bumped = from != SCHEMA_VERSION || renamed;
         self.version = SCHEMA_VERSION;
         if from < 4 {
             // Each ran in loops before anything asked; it goes on doing so,
@@ -331,6 +355,7 @@ impl AppConfig {
                 continue;
             }
             self.tasks.push(Task {
+                toolset: None,
                 id: w.id.clone(),
                 name: w.name,
                 // The old layout had no task directory; the lone checkout is it.
@@ -753,5 +778,74 @@ mod tests {
         assert_eq!(tasks, 0);
         assert_eq!(store.with(|c| c.worktree_root.clone()), Some("/elsewhere".into()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn specs_in_app_true_reads_as_commit_none() {
+        let old = |flag: &str| -> Project {
+            serde_json::from_str(&format!(r#"{{"id":"p","name":"api","path":"/r/api","default_branch":"main"{flag}}}"#))
+                .unwrap()
+        };
+        assert_eq!(old(r#","specs_in_app":true"#).spec_commit, SpecCommit::None);
+        assert_eq!(old(r#","specs_in_app":false"#).spec_commit, SpecCommit::Whole);
+        assert_eq!(old("").spec_commit, SpecCommit::Whole);
+        assert_eq!(old(r#","spec_commit":"own""#).spec_commit, SpecCommit::Own);
+        // Written back, the old key is gone and the new one says the same.
+        let json = serde_json::to_value(old(r#","specs_in_app":true"#)).unwrap();
+        assert_eq!(json["spec_commit"], "none");
+        assert!(json.get("specs_in_app").is_none());
+    }
+
+    #[test]
+    fn one_unreadable_custom_toolset_does_not_make_the_config_unreadable() {
+        let good = serde_json::json!({ "id": "mine", "name": "Mine", "files": ["docs/**/*.md"] });
+        let two_kinds = serde_json::json!({
+            "id": "bad", "name": "Bad", "files": ["a.md"],
+            "install": [{ "run": ["true"], "fetch": "https://x", "ref": "v1" }]
+        });
+        let no_files = serde_json::json!({ "id": "nofiles", "name": "No files" });
+        let cfg: AppConfig = serde_json::from_value(serde_json::json!({
+            "tasks": [{ "id": "t", "name": "n", "root": "/r", "branch": "b", "created_at": "2026-01-01T00:00:00Z" }],
+            "default_toolset": "mine",
+            "toolsets": [two_kinds, good, no_files, 7]
+        }))
+        .unwrap();
+
+        assert_eq!(cfg.tasks.len(), 1, "every task is still there");
+        assert_eq!(cfg.default_toolset.as_deref(), Some("mine"));
+        let ids: Vec<&str> = cfg.toolsets.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["mine"], "only the one that reads is kept");
+        let all: AppConfig = serde_json::from_str(r#"{"toolsets": "not a list"}"#).unwrap();
+        assert!(all.toolsets.is_empty());
+    }
+
+    #[test]
+    fn a_config_without_toolsets_still_reads() {
+        let cfg: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.default_toolset, None);
+        assert!(cfg.toolsets.is_empty());
+        assert!(!cfg.spec_first, "off until the user turns it on");
+    }
+
+    #[test]
+    fn a_queued_change_with_specs_in_app_is_sent_as_spec_commit() {
+        let mut cfg: AppConfig = serde_json::from_value(serde_json::json!({
+            "shared": { "outbox": [
+                { "action": "update", "model": "Repository", "id": "a", "data": { "specs_in_app": true } },
+                { "action": "update", "model": "Repository", "id": "b", "data": { "specs_in_app": false, "check_command": "x" } },
+                { "action": "create", "model": "Repository", "id": "c",
+                  "data": { "name": "c", "specs_in_app": true, "spec_commit": "own" } },
+                { "action": "delete", "model": "Repository", "id": "d" }
+            ] }
+        }))
+        .unwrap();
+        assert!(cfg.migrate(), "the file is written back");
+
+        let data = |i: usize| cfg.shared.outbox[i]["data"].clone();
+        assert_eq!(data(0), serde_json::json!({ "spec_commit": "none" }));
+        assert_eq!(data(1), serde_json::json!({ "spec_commit": "whole", "check_command": "x" }));
+        assert_eq!(data(2)["spec_commit"], "own", "a key already there wins");
+        assert!(data(2).get("specs_in_app").is_none());
+        assert!(!cfg.migrate(), "the second time there is nothing to do");
     }
 }

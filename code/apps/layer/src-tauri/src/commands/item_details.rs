@@ -162,5 +162,25 @@ fn mutate(
     })
 }
 
+/// Only intentional removal clears details. Internal restarts and restores
+/// replace saved IDs without passing here; Slack can reopen a closed room.
+pub(crate) fn forget_saved_pane(c: &mut AppConfig, id: &str, waiting_only: bool) {
+    let rooms: Vec<String> = c
+        .saved_panes
+        .iter()
+        .filter(|p| p.id == id && (!waiting_only || p.waiting))
+        .filter(|p| p.task_id == super::CHAT_TASK_ID && p.kind == "agent" && p.checkout_id.is_none())
+        .filter_map(|p| p.cwd.clone())
+        .collect();
+    c.saved_panes.retain(|p| !(p.id == id && (!waiting_only || p.waiting)));
+    for room in rooms {
+        if (waiting_only || !c.slack_threads.iter().any(|t| t.room == room))
+            && !c.saved_panes.iter().any(|p| p.cwd.as_ref() == Some(&room))
+        {
+            c.chat_details.remove(&room);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

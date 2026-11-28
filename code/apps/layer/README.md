@@ -39,7 +39,7 @@ Everything runs on your machine. The MCP server agents talk to runs on `127.0.0.
 
 **Verification workflow**—how you verify AI output:
 
-1. **Spec-Builds**: A task can start with spec generation—requirements, design, implementation tasks—drafted from the ticket before any agent writes code. Each spec file is approved individually and committed to the branch. Agents work from the spec.
+1. **Specs**: A task has one spec, plain files in its own folder that you and the agents both edit, laid out by the toolset you pick: Kiro's requirements, design and tasks (drafted from the ticket before any agent writes code, if you like), OpenSpec, or superpowers, each installed into the task folder for the agent CLIs Layer runs, or one your team adds. Commit spec puts the spec into each repository on the task's branch. Agents work from it, tick its steps and can change it.
 
 2. **Agent flexibility**: Run agents as terminal sessions (Claude Code, Copilot CLI, Gemini CLI, OpenCode) or over ACP (Zed Agent Client Protocol) for conversation-style interaction with visible tool calls and permission prompts.
 
@@ -47,7 +47,7 @@ Everything runs on your machine. The MCP server agents talk to runs on `127.0.0.
 
 4. **Built-in browser**: Agents can navigate a Chrome-based browser through MCP tools. They can start dev servers, test pages on localhost, request access to staging sites, and sign in with saved credentials. You watch what they're doing in real time.
 
-5. **Spec checking**: Check the branch against the approved spec, requirement by requirement: met, not met or unclear, with the files and lines that show it.
+5. **Spec checking**: With Kiro's spec, check the branch against its requirements, one repository at a time: met, not met or unclear, with the files and lines that show it.
 
 **No credential sharing**: Agents connect to Jira, GitHub, and Slack through the app's own MCP server. They request actions; the app shows you what they want and executes it only after confirmation. Your tokens never touch the agent's environment.
 

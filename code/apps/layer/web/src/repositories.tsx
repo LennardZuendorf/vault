@@ -1,6 +1,6 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { type Confirmation, ConfirmDialog, NotAddedYet } from "@code-villain/web";
-import type { Note, Repository, UpdateBy } from "@layer/types";
+import type { Note, Repository, SpecCommit, UpdateBy } from "@layer/types";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { type FormEvent, useMemo, useState } from "react";
 import { ago } from "./format";
@@ -298,6 +298,61 @@ export function RepositoryPage() {
 /** Empty is none: what the server keeps as null. */
 const orNull = (value: string) => value.trim() || null;
 
+/** The toolsets every Mac has (`src-tauri/toolsets/`). A team's own are kept as they are. */
+const TOOLSETS = [
+  ["", "Each Mac's default"],
+  ["kiro", "Kiro"],
+  ["openspec", "OpenSpec"],
+  ["superpowers", "superpowers"],
+] as const;
+
+const UPDATES = [
+  ["", "Its history"],
+  ["merge", "Merge"],
+  ["rebase", "Rebase"],
+] as const;
+
+const COMMITS = [
+  ["whole", "The whole spec"],
+  ["own", "Its own part"],
+  ["none", "Nothing"],
+] as const;
+
+/** A segmented control over `choices`, as "Update from base by" is. */
+function Choice<T extends string>({
+  label,
+  hint,
+  value,
+  choices,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  value: T;
+  choices: readonly (readonly [T, string])[];
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-xs font-medium text-muted">{label}</span>
+      <fieldset className="ui-segmented self-start" aria-label={label}>
+        {choices.map(([v, text]) => (
+          <button
+            key={v}
+            type="button"
+            className="ui-segment"
+            aria-pressed={value === v}
+            onClick={() => onChange(v)}
+          >
+            {text}
+          </button>
+        ))}
+      </fieldset>
+      <p className="text-xs text-faint">{hint}</p>
+    </div>
+  );
+}
+
 function RepositorySettings({ repository }: { repository: Repository }) {
   const { sync } = useWorkspace();
   const [name, setName] = useState(repository.name);
@@ -306,7 +361,14 @@ function RepositorySettings({ repository }: { repository: Repository }) {
   const [updateBy, setUpdateBy] = useState<UpdateBy | "">(repository.update_by ?? "");
   const [check, setCheck] = useState(repository.check_command ?? "");
   const [specFolder, setSpecFolder] = useState(repository.spec_folder ?? "");
-  const [specsInApp, setSpecsInApp] = useState(repository.specs_in_app);
+  const [specToolset, setSpecToolset] = useState(repository.spec_toolset ?? "");
+  const [specCommit, setSpecCommit] = useState<SpecCommit>(repository.spec_commit);
+  const toolsets: (readonly [string, string])[] = [...TOOLSETS];
+  if (repository.spec_toolset && !toolsets.some(([id]) => id === repository.spec_toolset)) {
+    toolsets.push([repository.spec_toolset, repository.spec_toolset]);
+  }
+  // Only Kiro's spec goes in a folder; the others lay out their own from the root.
+  const inFolder = specCommit !== "none" && (specToolset === "" || specToolset === "kiro");
   const changed =
     name !== repository.name ||
     branch !== repository.default_branch ||
@@ -314,7 +376,8 @@ function RepositorySettings({ repository }: { repository: Repository }) {
     updateBy !== (repository.update_by ?? "") ||
     check !== (repository.check_command ?? "") ||
     specFolder !== (repository.spec_folder ?? "") ||
-    specsInApp !== repository.specs_in_app;
+    specToolset !== (repository.spec_toolset ?? "") ||
+    specCommit !== repository.spec_commit;
 
   const save = (event: FormEvent) => {
     event.preventDefault();
@@ -325,7 +388,8 @@ function RepositorySettings({ repository }: { repository: Repository }) {
       update_by: updateBy || null,
       check_command: orNull(check),
       spec_folder: orNull(specFolder),
-      specs_in_app: specsInApp,
+      spec_toolset: specToolset || null,
+      spec_commit: specCommit,
     });
   };
 
@@ -347,29 +411,13 @@ function RepositorySettings({ repository }: { repository: Repository }) {
           value={group}
           onChange={(e) => setGroup(e.target.value)}
         />
-        <div className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-muted">Update from base by</span>
-          <fieldset className="ui-segmented self-start" aria-label="Update from base by">
-            {(
-              [
-                ["", "Its history"],
-                ["merge", "Merge"],
-                ["rebase", "Rebase"],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                className="ui-segment"
-                aria-pressed={updateBy === value}
-                onClick={() => setUpdateBy(value)}
-              >
-                {label}
-              </button>
-            ))}
-          </fieldset>
-          <p className="text-xs text-faint">"Its history" picks what the branch has done before.</p>
-        </div>
+        <Choice
+          label="Update from base by"
+          hint={'"Its history" picks what the branch has done before.'}
+          value={updateBy}
+          choices={UPDATES}
+          onChange={setUpdateBy}
+        />
         <TextField
           label="Check"
           placeholder="bun run check"
@@ -378,21 +426,30 @@ function RepositorySettings({ repository }: { repository: Repository }) {
           value={check}
           onChange={(e) => setCheck(e.target.value)}
         />
-        <TextField
-          label="Spec folder"
-          placeholder="specs"
-          className="font-mono"
-          value={specFolder}
-          onChange={(e) => setSpecFolder(e.target.value)}
+        <Choice
+          label="Spec toolset"
+          hint="What Start work offers for this repository. A task keeps the one it began with."
+          value={specToolset}
+          choices={toolsets}
+          onChange={setSpecToolset}
         />
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={specsInApp}
-            onChange={(e) => setSpecsInApp(e.target.checked)}
+        <Choice
+          label="Commit spec puts in it"
+          hint="Its own part is the spec's files about this repository. Nothing keeps the spec on the Mac."
+          value={specCommit}
+          choices={COMMITS}
+          onChange={setSpecCommit}
+        />
+        {inFolder && (
+          <TextField
+            label="Spec folder"
+            placeholder="specs"
+            hint="Where Kiro's spec is committed."
+            className="font-mono"
+            value={specFolder}
+            onChange={(e) => setSpecFolder(e.target.value)}
           />
-          Keep specs in Layer instead of committing them
-        </label>
+        )}
         <div>
           <Button type="submit" disabled={!changed || !name.trim() || !branch.trim()}>
             Save

@@ -61,7 +61,9 @@ fn open(app: &AppHandle, state: &AppState, routine: &Routine, room: &Path, resum
         .ok_or_else(|| Error::NotFound(format!("{id}, an agent that runs as a conversation")))?;
     std::fs::create_dir_all(room)?;
     // Best effort, as for any chat: no context file is no reason not to run.
-    let _ = super::panes::write_chat_context(state, room);
+    if super::panes::write_chat_context(state, room).is_ok() {
+        let _ = say_it_is_a_run(room, routine);
+    }
     let _ = crate::mcp::write_config(room);
     let start = Start {
         task_id: CHAT_TASK_ID.to_string(),
@@ -72,6 +74,49 @@ fn open(app: &AppHandle, state: &AppState, routine: &Routine, room: &Path, resum
         resume,
     };
     acp_panes::start(app, state, def, start)
+}
+
+/// Add to a run's context that it is one (ROUT-4). With only a chat's
+/// context, a run asked to "handle this automatically" offered to make a
+/// routine for it, from inside that routine.
+fn say_it_is_a_run(room: &Path, routine: &Routine) -> Result<()> {
+    let more = run_context(routine);
+    for file in ["CLAUDE.md", "AGENTS.md"] {
+        let path = room.join(file);
+        let mut md = std::fs::read_to_string(&path)?;
+        md.push_str(&more);
+        std::fs::write(&path, md)?;
+    }
+    Ok(())
+}
+
+fn run_context(routine: &Routine) -> String {
+    format!(
+        concat!(
+            "\n## This chat is a routine's run\n\n",
+            "You are a run of the routine **{name}** (id `{id}`), which Layer asks {when}{off}. ",
+            "Its prompt was your first message. The user reads this run on the routine's page ",
+            "and may answer here.\n\n",
+            "Doing something automatically or every time means changing this routine: its ",
+            "prompt, its schedule or its agent, with `update_routine` on id `{id}`, after the ",
+            "user agrees. Don't offer to make a routine for what this one already does.\n",
+        ),
+        name = routine.name,
+        id = routine.id,
+        when = schedule(routine),
+        off = if routine.on { "" } else { " (it is turned off now)" },
+    )
+}
+
+/// When a routine runs, in words.
+fn schedule(r: &Routine) -> String {
+    const DAYS: [&str; 7] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+    match r.every {
+        Every::Hourly => format!("every hour at minute {}", r.at.rsplit(':').next().unwrap_or("00")),
+        Every::Daily => format!("every day at {}", r.at),
+        Every::Weekdays => format!("every weekday at {}", r.at),
+        Every::Weekly => format!("every {} at {}", DAYS.get(r.weekday as usize).unwrap_or(&"Monday"), r.at),
+    }
 }
 
 /// Start a run of routine `id`. One that cannot start is recorded as
@@ -635,6 +680,36 @@ mod tests {
         assert!(apply(&mut r, RoutinePatch { at: Some("8 am".into()), ..Default::default() }, &now).is_err());
         assert!(apply(&mut r, RoutinePatch { name: Some("  ".into()), ..Default::default() }, &now).is_err());
         assert_eq!(r.at, "08:00");
+    }
+
+    #[test]
+    fn a_run_is_told_it_is_its_routines_run_and_to_change_that_routine() {
+        let room = std::env::temp_dir().join(format!("vl-run-context-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&room).unwrap();
+        std::fs::write(room.join("CLAUDE.md"), "# Layer\n").unwrap();
+        std::fs::write(room.join("AGENTS.md"), "# Layer\n").unwrap();
+        let r = Routine {
+            id: "r1".into(),
+            name: "Daily Dependabot check".into(),
+            every: Every::Weekly,
+            weekday: 5,
+            at: "08:07".into(),
+            ..Default::default()
+        };
+        say_it_is_a_run(&room, &r).unwrap();
+        for file in ["CLAUDE.md", "AGENTS.md"] {
+            let md = std::fs::read_to_string(room.join(file)).unwrap();
+            assert!(md.starts_with("# Layer\n"), "the chat's context stays");
+            assert!(md.contains("**Daily Dependabot check** (id `r1`), which Layer asks every Saturday at 08:07."));
+            assert!(md.contains("`update_routine` on id `r1`"));
+        }
+        let _ = std::fs::remove_dir_all(&room);
+    }
+
+    #[test]
+    fn an_hourly_routine_says_its_minute() {
+        let r = Routine { every: Every::Hourly, at: "08:15".into(), ..Default::default() };
+        assert_eq!(schedule(&r), "every hour at minute 15");
     }
 
     #[test]

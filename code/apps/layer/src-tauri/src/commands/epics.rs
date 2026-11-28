@@ -1,4 +1,4 @@
-//! Epics (§26): an epic's spec, approved once, makes its sub-tasks. Each is
+//! Epics (§26): an epic's spec, written once, makes its sub-tasks. Each is
 //! filed in Jira under the epic and made a task of its own with its share of
 //! the spec (EPIC-7), and started from the epic when what it waits for has
 //! merged (EPIC-8).
@@ -13,12 +13,17 @@ use tauri::{AppHandle, Manager};
 use crate::config::{SubTaskOf, Task};
 use crate::error::{Error, Result};
 use crate::pty::PaneInfo;
-use crate::spec::{self, Part, SubTask};
+use crate::spec::owned::{own_part, owned_steps};
+use crate::spec::{self, glob, Requirement, SubTask};
 use crate::tickets::{NewTicket, Ticket, TicketPage, Tracker};
 
 use super::panes::{agent_file_dir, start_agent, Resume};
-use super::spec::{and_list, approve, spec_of, Slot, DRAFTS};
-use super::task_context::{keep_ticket, write_task_context};
+use super::spec_commit::repositories;
+use super::spec_copy::{list_files, not_text, read_file, spec_dir, toolset_of};
+use super::spec_old::DRAFTS;
+use super::spec_view::step_texts;
+use super::spec_work::write_spec;
+use super::task_context::{entry_file, keep_ticket, write_task_context};
 use super::tasks::{new_task, NewTask};
 use super::tickets::{default_ticket_type, tracker};
 use super::AppState;
@@ -30,7 +35,7 @@ const FILED: &str = "sub-tasks.json";
 /// What the Sub-tasks tab shows (EPIC-7, EPIC-8).
 #[derive(Debug, Serialize)]
 pub struct EpicView {
-    /// Some repository's tasks are approved: there is a plan to file.
+    /// The spec has steps: there is a plan to file.
     pub planned: bool,
     pub sub_tasks: Vec<SubTaskView>,
 }
@@ -71,13 +76,38 @@ fn an_epic(state: &AppState, epic_id: &str) -> Result<Task> {
     Ok(epic)
 }
 
-/// The sub-tasks the epic's approved tasks make, and whether there are any
-/// approved tasks to make them from.
+/// The sub-tasks the epic's steps make, and whether it has any steps to make
+/// them from. Each repository's share of the epic's step files (its own
+/// sections and steps, and those that belong to everyone) is read as that
+/// repository's tasks, and a `##` heading shared across repositories is one
+/// sub-task (EPIC-4).
 pub(crate) fn plan(state: &AppState, epic: &Task) -> (bool, Vec<SubTask>) {
-    let spec = spec_of(state, epic);
-    let files: Vec<(String, String)> =
-        spec.homes.iter().filter_map(|h| Some((h.folder.clone(), spec.approved(&Slot::tasks(&h.folder))?))).collect();
+    let folders: Vec<String> = repositories(state, epic).into_iter().map(|r| r.folder).collect();
+    let texts = step_texts(state, epic);
+    let files: Vec<(String, String)> = folders
+        .iter()
+        .filter_map(|folder| {
+            let own: Vec<String> = texts.iter().map(|(_, text)| own_part(text, folder, &folders)).collect();
+            let own = own.join("\n");
+            (!spec::steps(&own).is_empty()).then(|| (folder.clone(), own))
+        })
+        .collect();
     (!files.is_empty(), spec::sub_tasks(&title_of(epic), &files))
+}
+
+/// The requirements the epic's spec names, from its entry file.
+fn requirements_of(state: &AppState, epic: &Task) -> Vec<Requirement> {
+    entry_file(&toolset_of(state, epic), &spec_dir(state, epic))
+        .map(|(_, text)| spec::requirements(&text))
+        .unwrap_or_default()
+}
+
+/// How many steps a task's spec has, and how many are ticked.
+fn counts(state: &AppState, task: &Task) -> (usize, usize) {
+    step_texts(state, task)
+        .iter()
+        .flat_map(|(_, text)| owned_steps(text, &[]))
+        .fold((0, 0), |(n, d), s| (n + 1, d + usize::from(s.done)))
 }
 
 /// The epic's sub-tasks filed so far.
@@ -95,19 +125,12 @@ pub(crate) fn view(state: &AppState, epic: &Task) -> EpicView {
     let (planned, subs) = plan(state, epic);
     let filed = filed_of(state, &epic.id);
     let remembered = remembered(state, epic);
-    let counts = |task: &Task| {
-        let spec = spec_of(state, task);
-        spec.homes
-            .iter()
-            .map(|h| spec.steps(h))
-            .fold((0, 0), |(n, d), s| (n + s.len(), d + s.iter().filter(|s| s.done).count()))
-    };
     let mut out: Vec<SubTaskView> = subs
         .iter()
         .map(|sub| {
             let task = filed.iter().find(|t| is(t, &sub.title));
             let (steps, done) = match task {
-                Some(t) => counts(t),
+                Some(t) => counts(state, t),
                 None => sub
                     .repos
                     .iter()
@@ -131,7 +154,7 @@ pub(crate) fn view(state: &AppState, epic: &Task) -> EpicView {
         .collect();
     // Filed, and no longer in the plan: it stays filed (§26's gaps).
     for task in filed.iter().filter(|t| !subs.iter().any(|s| is(t, &s.title))) {
-        let (steps, done) = counts(task);
+        let (steps, done) = counts(state, task);
         out.push(SubTaskView {
             title: task.sub_task.as_ref().map(|s| s.title.clone()).unwrap_or_default(),
             key: task.issue_key.clone(),
@@ -269,7 +292,7 @@ struct ToFile {
 }
 
 /// File the sub-tasks not filed yet (EPIC-7): a ticket under the epic, a
-/// task, and its share of the spec, approved. No agent starts and no ticket
+/// task, and its share of the spec. No agent starts and no ticket
 /// moves.
 #[tauri::command]
 pub async fn file_sub_tasks(
@@ -283,7 +306,7 @@ pub async fn file_sub_tasks(
     let e = epic.clone();
     let (planned, todo) = super::blocking(app.clone(), move |state| Ok(to_file(state, &e))).await?;
     if !planned {
-        return Err(Error::Other("approve the epic's tasks first: they say what its sub-tasks are".into()));
+        return Err(Error::Other("write the epic's tasks first: they say what its sub-tasks are".into()));
     }
     let tracker = match (&epic.issue_key, tracker(&state)) {
         (_, Ok(tracker)) => Some(tracker),
@@ -310,8 +333,8 @@ pub async fn file_sub_tasks(
 fn to_file(state: &AppState, epic: &Task) -> (bool, Vec<ToFile>) {
     let (planned, subs) = plan(state, epic);
     let filed = filed_of(state, &epic.id);
-    let spec = spec_of(state, epic);
-    let requirements = spec.requirements();
+    let requirements = requirements_of(state, epic);
+    let checkouts = state.config.checkouts_of(&epic.id);
     let remembered = remembered(state, epic);
     let todo = subs
         .into_iter()
@@ -331,8 +354,16 @@ fn to_file(state: &AppState, epic: &Task) -> (bool, Vec<ToFile>) {
                     d.push_str(&format!("- {}. {}\n", s.number, s.text));
                 }
             }
-            let project_ids =
-                sub.repos.iter().filter_map(|r| spec.home(&r.folder).map(|h| h.checkout.project_id.clone())).collect();
+            let project_ids = sub
+                .repos
+                .iter()
+                .filter_map(|r| {
+                    checkouts
+                        .iter()
+                        .find(|c| folder(&c.path).as_deref() == Some(r.folder.as_str()))
+                        .map(|c| c.project_id.clone())
+                })
+                .collect();
             let remembered = remembered.get(&sub.title.to_lowercase()).cloned();
             ToFile { sub, description: d, project_ids, remembered }
         })
@@ -411,25 +442,13 @@ async fn file_one(
         epic_key: epic.issue_key.clone(),
         epic: false,
         sub_task: Some(of),
+        toolset: None,
     };
     let epic = epic.clone();
     let task = super::blocking(app.clone(), move |state| {
         let task = new_task(state, new)?;
-        let from = spec_of(state, &epic);
-        let mut texts: Vec<(Slot, String)> = [Part::Requirements, Part::Design]
-            .into_iter()
-            .filter_map(|p| Some((Slot::shared(p), from.approved(&Slot::shared(p))?)))
-            .collect();
-        texts.extend(sub.repos.iter().map(|r| (Slot::tasks(&r.folder), r.tasks.clone())));
-        let failed = approve(&spec_of(state, &task), &task, &texts, Some(from.kind()))?;
+        seed_sub_task(state, &epic, &task, &sub)?;
         write_task_context(state, &task)?;
-        if !failed.is_empty() {
-            let where_: Vec<String> = failed.iter().map(|f| format!("{} ({})", f.folder, f.error)).collect();
-            return Err(Error::Other(format!(
-                "its task was made, but its spec could not be committed in {}",
-                and_list(&where_.iter().map(String::as_str).collect::<Vec<_>>())
-            )));
-        }
         Ok(task)
     })
     .await?;
@@ -437,6 +456,45 @@ async fn file_one(
         keep_ticket(app.clone(), task, issue).await;
     }
     Ok(())
+}
+
+/// Give a sub-task its share of the epic's spec (EPIC-7): the epic's files
+/// that are not steps (requirements, design), whole, and its steps, in the
+/// epic's first step file, a `# <folder>` section for each repository it works
+/// in. Nothing is committed: that is Commit spec's, when the user wants it.
+fn seed_sub_task(state: &AppState, epic: &Task, task: &Task, sub: &SubTask) -> Result<()> {
+    let (t, dir) = (toolset_of(state, epic), spec_dir(state, epic));
+    let holds = |rel: &str| t.steps.iter().any(|g| glob::matches(g, rel));
+    let files = list_files(&dir, &t)?;
+    for rel in files.iter().filter(|rel| !holds(rel)) {
+        match read_file(&dir, &t, rel) {
+            Ok(text) => write_spec(state, task, rel, &text)?,
+            // Not text: it cannot be written as one, and is not seeded.
+            Err(e) if not_text(&e) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    if let Some(rel) = files.iter().find(|rel| holds(rel)) {
+        let sections: Vec<String> = sub
+            .repos
+            .iter()
+            .map(|r| {
+                // `## Tasks` is the old way of heading the list.
+                let body = r.tasks.trim().strip_prefix("## Tasks").unwrap_or(&r.tasks).trim();
+                format!("# {}\n\n{body}\n", r.folder)
+            })
+            .collect();
+        write_spec(state, task, rel, &sections.join("\n"))?;
+    }
+    Ok(())
+}
+
+fn and_list(words: &[&str]) -> String {
+    match words {
+        [] => String::new(),
+        [one] => one.to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 /// The sub-tasks `task` waits for that have not merged. One not filed, or
@@ -480,7 +538,7 @@ pub struct StartedSubTask {
     pub moved: Option<String>,
 }
 
-/// Start `agent_id` on a sub-task's spec, as Start agent does (SPEC-12),
+/// Start `agent_id` on a sub-task's spec, with the work prompt (SPEC-12),
 /// and move its ticket, and the epic's while that is still to do, as Start
 /// work does (EPIC-8). One that waits is refused unless `anyway`.
 pub(crate) async fn start_sub_task_inner(
@@ -500,9 +558,11 @@ pub(crate) async fn start_sub_task_inner(
             return Err(Error::Other(format!("{} waits for {}, not merged yet", of.title, and_list(&open))));
         }
     }
-    let prompt = super::jira::task_prompt(app.clone(), app.state(), task_id.clone(), None).await?;
-    let work = super::spec_work::spec_work_prompt(app.clone(), task_id.clone(), None).await?;
-    let prompt = [prompt, work].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n");
+    let opening = super::jira::bare_prompt(app.clone(), &app.state(), &task, None).await?;
+    let id = task_id.clone();
+    let work = super::blocking(app.clone(), move |state| super::spec_work::work_prompt(state, &id, None)).await?;
+    // The spec's line goes after the work prompt, not between it and the opening.
+    let prompt = super::jira::with_spec(app.clone(), task.clone(), sub_task_prompt(opening, work)).await?;
     let handle = app.clone();
     let pane = super::blocking(app.clone(), move |state| {
         start_agent(&handle, state, task_id, agent_id, None, Some(prompt), Resume::No, None, None, false)
@@ -519,6 +579,12 @@ pub(crate) async fn start_sub_task_inner(
         }
     }
     Ok(StartedSubTask { pane, moved })
+}
+
+/// A sub-task's opening prompt: the briefing, then the steps to work through
+/// when it has any.
+pub(crate) fn sub_task_prompt(opening: String, work: String) -> String {
+    [opening, work].into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n\n")
 }
 
 #[tauri::command]
@@ -568,5 +634,67 @@ mod tests {
         assert_eq!(tasks[1].sub_task, None);
         assert_eq!(tasks[2].sub_task.as_ref().map(|s| s.epic.as_str()), Some("o"));
         assert_eq!(tasks[3].sub_task, None);
+    }
+
+    use crate::commands::spec_world::{get, put, world};
+
+    const PLAN: &str = "# api\n\n## Session refresh\n- [ ] 1. Add the endpoint (R-1)\n\n## Audit\n- [x] 2. Log it (R-2)\n\n# web\n\n## Session refresh\n- [ ] 1. Call it (R-1; after api 1)\n";
+
+    #[test]
+    fn an_epics_steps_in_its_working_copy_are_planned_into_sub_tasks_per_repository() {
+        let (root, state, epic) = world(&["api", "web"]);
+        assert!(!plan(&state, &epic).0, "nothing to plan from yet");
+        put(&root.join("tasks/T-1/spec/tasks.md"), PLAN);
+
+        let (planned, subs) = plan(&state, &epic);
+
+        assert!(planned);
+        let titles: Vec<&str> = subs.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles, ["Session refresh", "Audit"]);
+        let refresh = &subs[0];
+        let repos: Vec<&str> = refresh.repos.iter().map(|r| r.folder.as_str()).collect();
+        assert_eq!(repos, ["api", "web"], "one sub-task across both");
+        assert_eq!(subs[1].repos.len(), 1);
+        assert_eq!(subs[1].repos[0].folder, "api");
+        assert_eq!(counts(&state, &epic), (3, 1));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_sub_task_gets_the_epics_requirements_and_its_own_steps_in_its_own_spec() {
+        let (root, state, epic) = world(&["api", "web"]);
+        let spec = root.join("tasks/T-1/spec");
+        put(&spec.join("requirements.md"), "## Requirements\n- R-1 [api, web]: x\n");
+        put(&spec.join("design.md"), "## Approach\ny\n");
+        put(&spec.join("tasks.md"), PLAN);
+        std::fs::write(spec.join("bugfix.md"), [0xff, 0xfe]).unwrap();
+        let sub_root = root.join("tasks/T-2");
+        std::fs::create_dir_all(&sub_root).unwrap();
+        let mut task = epic.clone();
+        task.id = "t2".into();
+        task.branch = "T-2".into();
+        task.root = sub_root.to_string_lossy().to_string();
+        task.toolset = Some("kiro".into());
+        state.config.update(|c| c.tasks.push(task.clone())).unwrap();
+        let (_, subs) = plan(&state, &epic);
+
+        seed_sub_task(&state, &epic, &task, &subs[1]).unwrap();
+
+        let mine = sub_root.join("spec");
+        assert_eq!(get(&mine.join("requirements.md")), "## Requirements\n- R-1 [api, web]: x\n");
+        assert_eq!(get(&mine.join("design.md")), "## Approach\ny\n");
+        assert!(!mine.join("bugfix.md").exists(), "a file that is not text is not seeded, and does not fail the rest");
+        let steps = get(&mine.join("tasks.md"));
+        assert!(steps.contains("# api") && steps.contains("[x] 2. Log it") && !steps.contains("Call it"), "{steps}");
+        assert!(!steps.contains("# web"), "{steps}");
+        assert_eq!(counts(&state, &task), (1, 1));
+        assert_eq!(get(&spec.join("tasks.md")), PLAN, "the epic's own is left as it was");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_list_of_titles_reads_as_a_sentence() {
+        assert_eq!(and_list(&["a", "b", "c"]), "a, b and c");
+        assert_eq!(and_list(&["a"]), "a");
     }
 }

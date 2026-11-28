@@ -349,18 +349,18 @@ function TaskMain({ task }: { task: TaskView }) {
         <button
           className="ui-tab"
           role="tab"
-          aria-selected={tab === "spec"}
-          onClick={() => setTab("spec")}
-        >
-          Spec{specBadge && <span className="ui-tab-count">{specBadge}</span>}
-        </button>
-        <button
-          className="ui-tab"
-          role="tab"
           aria-selected={tab === "terminals"}
           onClick={() => setTab("terminals")}
         >
           Agents<span className="ui-tab-count">{paneCount}</span>
+        </button>
+        <button
+          className="ui-tab"
+          role="tab"
+          aria-selected={tab === "spec"}
+          onClick={() => setTab("spec")}
+        >
+          Spec{specBadge && <span className="ui-tab-count">{specBadge}</span>}
         </button>
         <button
           className="ui-tab"

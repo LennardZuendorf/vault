@@ -160,8 +160,9 @@ by `scripts/guard.ts`. Its failure message says what to do, and
 - **Dead code goes.** A removed command is removed from its module, from
   `generate_handler!` in `lib.rs`, from `api.ts`, and from the types on both
   sides, in the same change. **(guard)**
-- **The frontend reaches the backend only through `src/lib/api.ts`.**
-  Argument names are camelCase, since Tauri renames the Rust parameters.
+- **The frontend reaches the backend only through `src/lib/api.ts`**, and
+  the `api-*.ts` modules split from it (`api-spec.ts`), which `api` spreads
+  in. Argument names are camelCase, since Tauri renames the Rust parameters.
   **(guard)** Types returned are mirrored by hand in `src/lib/types.ts`, and
   change with the Rust struct.
 - **Files stop growing at their ceiling** and get split along a seam
@@ -192,7 +193,7 @@ beside the code, with a reason: `// guard: allow <rule> — <why>`.
 | `api-command-exists` | `api.ts` invoking a command that does not exist | Fix the name |
 | `api-args` | `api.ts` sending an argument name the command does not take, or leaving out a required one | camelCase the Rust parameter's name |
 | `dead-wrapper` | an `api.*` wrapper nobody calls | Delete it |
-| `api-only` | `invoke` imported outside `api.ts` | Add a wrapper to `api.ts` |
+| `api-only` | `invoke` imported outside `api.ts` and the `api-*.ts` split from it | Add a wrapper to `api.ts` |
 | `event-sync` | an event emitted that nothing listens for, or listened for that nothing emits | Fix the name, or remove the dead end |
 | `poll` | a new `setInterval` without a reason | Use an event; or poll only while `appActive`, and say why |
 | `panic` | `unwrap`, `expect`, `panic!`, `todo!`, `unreachable!` or `dbg!` outside tests | Return an error |
@@ -274,7 +275,7 @@ build does the same.
 | `src/store.ts` | all frontend state and its refresh actions |
 | `src/lib/derive.ts` | pure helpers over that state (`paneState`, `needsYou`, …) |
 | `src/lib/target.ts`, `goto.ts` | where a click on a banner, toast or message lands (`target.rs` writes them) |
-| `src/lib/api.ts` / `src/lib/types.ts` | the IPC surface, and the Rust types mirrored (GitHub's in `types-github.ts`, re-exported) |
+| `src/lib/api.ts` (`api-spec.ts`) / `src/lib/types.ts` | the IPC surface, and the Rust types mirrored (GitHub's in `types-github.ts`, re-exported) |
 | `src/components/ui.tsx` | `Modal`, `Field`, `Combo`, `Confirm`, `Switch`, … |
 | `src/components/menu.tsx` | `Floating` (what floats over the window at a point) and `ContextMenu` |
 | `src/components/` | one file per view or dialog; `sidebar/`, `tickets/` for those areas |
@@ -282,6 +283,17 @@ build does the same.
 | `scripts/guard.ts` | the guard |
 | `crates/domain`, `crates/sync`, `crates/server`, `migrations/` | Layer's server: the synced records, who may write them, the HTTP and sync routes, the schema ([architecture](docs/architecture.md#layers-server)) |
 | `web/` | the server's web app; `packages/types` holds the records' types, generated |
+
+## Specs and toolsets
+
+A task's spec is plain files in its working copy, `<task>/spec/`, laid out by
+the task's toolset (`docs/features.md` §19). A toolset is a JSON manifest and a
+Markdown paragraph in `src-tauri/toolsets/` (Kiro, OpenSpec, superpowers); a
+team adds its own in Settings → Code. To add one, follow "Add a spec toolset" in
+[`docs/recipes.md`](docs/recipes.md). Every read and write of `spec/` goes
+through `commands/spec_copy.rs`, and nothing writes a spec file into a worktree
+but Commit spec. The design and plan of this work, and any later design that is
+not yet in `docs/features.md`, are in `docs/superpowers/`.
 
 ## One company
 

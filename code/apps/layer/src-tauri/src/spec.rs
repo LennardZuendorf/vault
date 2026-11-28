@@ -8,8 +8,11 @@ use serde::{Deserialize, Serialize};
 mod sub_tasks;
 pub use sub_tasks::{sub_tasks, SubTask};
 
-/// One of a spec's files, in the order they are drafted and approved
-/// (SPEC-4).
+pub mod glob;
+pub mod owned;
+pub mod toolset;
+
+/// One of a Kiro spec's files, in the order they are usually drafted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Part {
@@ -19,8 +22,6 @@ pub enum Part {
 }
 
 impl Part {
-    pub const ALL: [Part; 3] = [Part::Requirements, Part::Design, Part::Tasks];
-
     /// Its file in the spec folder. A bug's requirements are its analysis.
     pub fn file(self, kind: Kind) -> &'static str {
         match (self, kind) {
@@ -39,10 +40,6 @@ impl Part {
             (Part::Design, _) => "design",
             (Part::Tasks, _) => "tasks",
         }
-    }
-
-    pub fn index(self) -> usize {
-        self as usize
     }
 }
 
@@ -84,7 +81,7 @@ pub struct Step {
 }
 
 /// The folder a task's spec is kept in, under the repository's spec folder:
-/// its branch, made one path segment (SPEC-1).
+/// its branch, made one path segment (SPEC-3).
 pub fn folder_name(branch: &str) -> String {
     let name: String = branch
         .chars()
@@ -275,10 +272,10 @@ pub fn tick(tasks: &str, number: u32, done: bool) -> Option<String> {
 }
 
 /// What a step whose requirements are all gone is marked with, for the user
-/// to remove: never removed by itself (SPEC-7).
+/// to remove: never removed by itself (SPEC-5).
 pub const ORPHANED: &str = "— its requirements are gone: remove this step?";
 
-/// A redrafted `tasks.md`, made to keep what was done (SPEC-7): a ticked
+/// A redrafted `tasks.md`, made to keep what was done (SPEC-5): a ticked
 /// step of `old` stays ticked in `new`, or is put back at the end if the
 /// draft left it out, and a step serving only requirements that are no
 /// longer there is marked.
@@ -322,40 +319,6 @@ fn mark(tasks: &str, step: &Step, note: &str) -> String {
         .join("\n")
 }
 
-/// `tasks` with every box unticked: what an agent may change in an approved
-/// `tasks.md` without changing the spec (SPEC-13, SPEC-22).
-pub fn without_ticks(tasks: &str) -> String {
-    let mut out = tasks.trim().to_string();
-    for step in steps(tasks).into_iter().filter(|s| s.done) {
-        out = tick(&out, step.number, false).unwrap_or(out);
-    }
-    out
-}
-
-/// The same text, as far as the spec goes: what was approved and a copy
-/// that differs only in its ticks (for `tasks.md`) or in blank space at
-/// either end are the same.
-pub fn same_text(part: Part, approved: &str, copy: &str) -> bool {
-    match part {
-        Part::Tasks => without_ticks(approved) == without_ticks(copy),
-        _ => approved.trim() == copy.trim(),
-    }
-}
-
-/// `approved` with the steps ticked that are ticked in `copy` under the same
-/// number and text: what Put back writes, so a spec put back keeps the work
-/// done (SPEC-22).
-pub fn keep_ticks(approved: &str, copy: &str) -> String {
-    let fresh = steps(approved);
-    let mut out = approved.to_string();
-    for done in steps(copy).into_iter().filter(|s| s.done) {
-        if fresh.iter().any(|s| s.number == done.number && normal(&s.text) == normal(&done.text)) {
-            out = tick(&out, done.number, true).unwrap_or(out);
-        }
-    }
-    out
-}
-
 fn normal(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
@@ -374,7 +337,7 @@ fn outside_fences(text: &str) -> impl Iterator<Item = (&str, &str)> {
 }
 
 /// The text of a list item, without its bullet or number.
-fn list_item(line: &str) -> Option<&str> {
+pub(super) fn list_item(line: &str) -> Option<&str> {
     let rest = if let Some(rest) = line.strip_prefix(['-', '*', '+']) {
         rest
     } else {
@@ -391,7 +354,7 @@ fn list_item(line: &str) -> Option<&str> {
 }
 
 /// `[x] rest` as (true, "rest").
-fn checkbox(item: &str) -> Option<(bool, &str)> {
+pub(super) fn checkbox(item: &str) -> Option<(bool, &str)> {
     for (b, done) in [("[ ]", false), ("[x]", true), ("[X]", true)] {
         if let Some(rest) = item.strip_prefix(b) {
             return Some((done, rest.trim_start()));
@@ -613,18 +576,5 @@ mod tests {
         assert_eq!(s[0].serves, vec!["R-3"]);
         assert_eq!(s[0].after, vec!["api 2", "api 4"]);
         assert!(s[1].after.is_empty());
-    }
-
-    #[test]
-    fn ticks_are_no_change_to_the_spec_and_survive_being_put_back() {
-        let approved = "## Tasks\n- [ ] 1. Add it (R-1)\n- [ ] 2. Test it (R-1)\n";
-        let ticked = tick(approved, 1, true).unwrap();
-        assert!(same_text(Part::Tasks, approved, &format!("{ticked}\n\n")));
-        let edited = format!("{ticked}\n- [ ] 3. Something nobody approved\n");
-        assert!(!same_text(Part::Tasks, approved, &edited));
-        assert!(!same_text(Part::Requirements, "- R-1: a", "- R-1: b"));
-
-        let put_back = keep_ticks(approved, &edited);
-        assert_eq!(put_back, ticked, "the step done stays done; the step added goes");
     }
 }

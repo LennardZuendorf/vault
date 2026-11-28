@@ -14,7 +14,7 @@ import { Confirm, ErrorMessage, Spinner, useFailure } from "../ui";
 import { FileSubTasks } from "./FileSubTasks";
 
 /**
- * The Sub-tasks tab (EPIC-7, EPIC-8): what the approved spec makes, filed or
+ * The Sub-tasks tab (EPIC-7, EPIC-8): what the spec makes, filed or
  * not, in the order they can start, grouped by the repository each starts
  * in. Filing leads while there is something to file; after that each row's
  * own action does.
@@ -72,8 +72,8 @@ export function SubTasks({ epic, view }: { epic: TaskView; view: EpicView | null
         <div className="empty">
           <h2>No sub-tasks yet</h2>
           <p>
-            The epic's spec says what they are. Approve its tasks on the Spec tab: each group of
-            steps becomes a sub-task, filed under the epic.
+            The epic's spec says what they are. Write its tasks on the Spec tab: each group of steps
+            becomes a sub-task, filed under the epic.
           </p>
           <button className="ui-button ui-button-primary" onClick={() => setTab("spec")}>
             Open the spec
@@ -94,7 +94,7 @@ export function SubTasks({ epic, view }: { epic: TaskView; view: EpicView | null
         <div className="epic-lead">
           <div className="what">
             <b>
-              The approved spec makes {all.length === toFile ? "" : `${toFile} more `}
+              The spec makes {all.length === toFile ? "" : `${toFile} more `}
               {toFile === 1 ? "a sub-task" : `${toFile} sub-tasks`}.
             </b>{" "}
             <span className="muted">

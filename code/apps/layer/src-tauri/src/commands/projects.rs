@@ -236,7 +236,8 @@ pub(super) fn describe_project(path: &str, group: Option<&str>) -> Result<Projec
         check: None,
         check_approved: None,
         spec_folder: None,
-        specs_in_app: false,
+        spec_toolset: None,
+        spec_commit: Default::default(),
         remote: git::origin_url(&root_path).map(|url| git::remote_key(&url)),
         repository_id: None,
     })

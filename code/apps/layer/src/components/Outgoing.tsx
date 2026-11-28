@@ -14,9 +14,8 @@ const KIND_TONE = {
 
 /**
  * What Open pull requests is about to push, looked at first (PR-11): per
- * repo the commits going out and the leftovers in their added lines, notes
- * on the Diff tab not yet sent, and spec files changed outside the app,
- * which a reviewer would read as agreed (SPEC-23). Advice, never a gate:
+ * repo the commits going out and the leftovers in their added lines, and
+ * notes on the Diff tab not yet sent. Advice, never a gate:
  * `onFlags` says how many things deserve a second look, and the dialog's
  * button says "anyway" when there are some.
  */
@@ -26,7 +25,6 @@ export function Outgoing({ taskId, onFlags }: { taskId: string; onFlags: (n: num
   const { clear, fail } = failure;
   const notes = useStore((s) => s.notes[taskId] ?? NO_NOTES);
   const [rows, setRows] = useState<RepoOutgoing[] | null>(null);
-  const [specOutside, setSpecOutside] = useState<string[]>([]);
 
   useEffect(() => {
     let current = true;
@@ -42,13 +40,6 @@ export function Outgoing({ taskId, onFlags }: { taskId: string; onFlags: (n: num
           fail(e);
         }
       });
-    api
-      .readSpec(taskId)
-      .then((s) => {
-        if (current)
-          setSpecOutside(s.parts.flatMap((p) => p.outside.map((o) => `${o.folder}/…/${p.file}`)));
-      })
-      .catch(() => {});
     return () => {
       current = false;
     };
@@ -59,12 +50,12 @@ export function Outgoing({ taskId, onFlags }: { taskId: string; onFlags: (n: num
   const unsent = notes.length;
 
   useEffect(() => {
-    onFlags(leftovers + unsent + specOutside.length);
-  }, [leftovers, unsent, specOutside.length, onFlags]);
+    onFlags(leftovers + unsent);
+  }, [leftovers, unsent, onFlags]);
 
   if (rows === null) return null;
   if (failure.error) return <ErrorMessage>{failure.error}</ErrorMessage>;
-  if (going.length === 0 && specOutside.length === 0) return null;
+  if (going.length === 0) return null;
 
   return (
     <div className="outgoing">
@@ -76,13 +67,6 @@ export function Outgoing({ taskId, onFlags }: { taskId: string; onFlags: (n: num
           </span>
         )}
       </div>
-      {specOutside.length > 0 && (
-        <div className="outgoing-repo del">
-          The spec was changed outside the app, and nobody approved it: {specOutside.join(", ")}.
-          Approve it or put it back on the Spec tab first, or the pull request carries it as if it
-          were agreed.
-        </div>
-      )}
       {going.map((r) => (
         <div key={r.checkout_id} className="outgoing-repo">
           <div className="muted">

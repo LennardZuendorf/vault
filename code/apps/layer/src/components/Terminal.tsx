@@ -1,4 +1,5 @@
 import { Channel } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
@@ -10,6 +11,7 @@ import { afterDrag, isDragging } from "../lib/drag";
 import { optionTypedAt } from "../lib/optionAt";
 import { unframe } from "../lib/paneFeed";
 import { decode, TERMINAL_FONT, terminalTheme } from "../lib/terminal";
+import { openTerminalLink } from "../lib/terminalLink";
 import { currentTheme, type Theme } from "../lib/theme";
 import type { PaneInfo } from "../lib/types";
 import { useStore } from "../store";
@@ -126,6 +128,13 @@ class PaneTerminal {
       // mode, OpenCode, Copilot) a drag is the agent's, and on a Mac xterm
       // offers no other way to select unless ⌥ is allowed to (PANE-15).
       macOptionClickForcesSelection: true,
+      // Links an agent prints (OSC 8) open in the browser (PANE-23).
+      linkHandler: {
+        activate: (event, uri) => {
+          event.preventDefault();
+          openTerminalLink(uri, openUrl, (text) => useStore.getState().fail(text));
+        },
+      },
     });
     this.term.loadAddon(this.fit);
     this.term.attachCustomKeyEventHandler((e) => {
