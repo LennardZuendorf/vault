@@ -302,31 +302,53 @@ export type TaskReview =
  * One outstanding "changes requested" speaks for the whole task, because that
  * is the repo that still needs an answer before any of it lands.
  *
- * `incomplete` is the honest word for a task whose other repos have changes
- * but no PR yet: calling that "in review" would claim review of code nobody
- * has been shown.
+ * `incomplete` also covers a read that found only merged PRs but could not
+ * finish: a later page or another repository can still have open work.
  */
 export function taskReview(rows: CheckoutPr[]): TaskReview {
   // A PR closed without merging is neither review in progress nor work that
   // landed — it is one somebody gave up on. The row keeps it so the panel can
   // say what became of it, but it answers nothing about where the task stands.
-  const live = rows.filter((r) => r.pr && (r.pr.state === "open" || r.pr.merged));
-  if (live.length === 0) return "none";
+  const open = rows.filter(
+    (r) => r.pr?.state === "open" || r.past?.some((p) => p.state === "open"),
+  );
+  if (open.length === 0) {
+    if (taskMerged(rows)) return "merged";
+    return rows.some((r) => r.error || r.pr?.merged || r.past?.some((p) => p.merged))
+      ? "incomplete"
+      : "none";
+  }
 
   // Merged is the last word: a "changes requested" left outstanding on a PR
   // that landed anyway is history, not something still to answer.
-  if (live.every((r) => r.pr!.merged)) return "merged";
   // Verdicts only from the open ones. A merged PR's reviews are not fetched,
   // so its verdict is "none" — and asking every live row to be approved made
   // "approved" unreachable for a task with any repo merged.
-  const open = live.filter((r) => r.pr!.state === "open");
   if (open.some((r) => r.verdict === "changes_requested")) return "changes_requested";
   // For a merged repo, `changed` counts from what it landed, so this is work
   // committed after the merge.
-  if (rows.some((r) => (!r.pr || r.pr.state !== "open") && r.changed > 0)) return "incomplete";
+  if (rows.some((r) => r.error || (!open.includes(r) && (!r.branch_covered || r.changed > 0))))
+    return "incomplete";
   if (open.every((r) => r.verdict === "approved")) return "approved";
   if (open.some((r) => r.verdict === "commented")) return "commented";
   return "open";
+}
+
+export function taskCanFinish(rows: CheckoutPr[]): boolean {
+  return (
+    rows.some((r) => r.covered_merge) &&
+    rows.every(
+      (r) =>
+        !r.error &&
+        !r.detached_unlanded &&
+        r.pr?.state !== "open" &&
+        !r.past?.some((p) => p.state === "open"),
+    )
+  );
+}
+
+export function taskMerged(rows: CheckoutPr[]): boolean {
+  return taskCanFinish(rows) && rows.every((r) => r.branch_covered && r.changed === 0);
 }
 
 /** What the backend says on a 401 (`Error::TokenRejected` in `error.rs`). */

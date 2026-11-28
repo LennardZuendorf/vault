@@ -629,6 +629,13 @@ const prs: TaskPrs[] = [
       {
         checkout_id: "c-login-api",
         repo: "api",
+        action_target: "login-api-pr-42",
+        pin: null,
+        pin_revision: "0",
+        pin_read: false,
+        branch_covered: false,
+        detached_unlanded: false,
+        covered_merge: false,
         pr: pr(42, "api", false),
         checks: [
           {
@@ -650,6 +657,13 @@ const prs: TaskPrs[] = [
       {
         checkout_id: "c-login-web",
         repo: "web",
+        action_target: null,
+        pin: null,
+        pin_revision: "0",
+        pin_read: false,
+        branch_covered: false,
+        detached_unlanded: false,
+        covered_merge: false,
         pr: null,
         checks: [],
         reviews: [],
@@ -669,6 +683,13 @@ const prs: TaskPrs[] = [
       {
         checkout_id: "c-audit-web",
         repo: "web",
+        action_target: null,
+        pin: null,
+        pin_revision: "0",
+        pin_read: false,
+        branch_covered: true,
+        detached_unlanded: false,
+        covered_merge: true,
         pr: pr(7, "web", true),
         checks: [],
         reviews: [],
@@ -1370,4 +1391,32 @@ function reviews(): World {
   return w;
 }
 
-export const SCENARIOS: Record<string, () => World> = { busy, empty, unlinked, tickets, reviews };
+/** One historical pin, one unread pin, and a pin on a primary PR. */
+function pins(): World {
+  const w = busy();
+  const [api, web] = w.prs[0].rows;
+  const audit = w.prs[1].rows[0];
+  const earlier = pr(41, "api", true);
+  api.past = [earlier];
+  api.pin = { repo: "acme/api", number: earlier.number, url: earlier.url };
+  api.pin_revision = "1";
+  api.pin_read = true;
+  web.pin = { repo: "acme/web", number: 81, url: "https://github.com/acme/web/pull/81" };
+  web.pin_revision = "1";
+  web.error = "GitHub could not read pull request #81 (404). Check access to the repository.";
+  if (audit.pr) {
+    audit.pin = { repo: "acme/web", number: audit.pr.number, url: audit.pr.url };
+    audit.pin_revision = "1";
+    audit.pin_read = true;
+  }
+  return w;
+}
+
+export const SCENARIOS: Record<string, () => World> = {
+  busy,
+  empty,
+  unlinked,
+  tickets,
+  reviews,
+  pins,
+};

@@ -10,7 +10,7 @@ import { useOrders } from "./lib/henchman-orders";
 import { useRoutines } from "./lib/routines";
 import { useSpecs } from "./lib/specs";
 import { useTheme } from "./lib/theme";
-import type { SpecPart, Target } from "./lib/types";
+import type { SpecPart, Target, TaskTicketLinked } from "./lib/types";
 import type { HenchmanLair } from "./lib/types-henchman";
 import type { Routines } from "./lib/types-routines";
 import { startWorkspaceSync, useSession } from "./lib/workspace-sync";
@@ -266,6 +266,20 @@ export function Watchers() {
     }, 180_000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    const ticket = listen<TaskTicketLinked>("task:ticket-linked", ({ payload }) => {
+      void useStore.getState().taskTicketLinked(payload).catch(fail);
+    });
+    const pin = listen<string>("task:pr-pin-changed", ({ payload: taskId }) => {
+      const state = useStore.getState();
+      if (state.tasks.some((task) => task.id === taskId))
+        void state.refreshTaskPrs(taskId).catch(fail);
+    });
+    return () => {
+      for (const p of [ticket, pin]) void p.then((un) => un());
+    };
+  }, [fail]);
 
   // An agent exiting is the moment worth telling someone about.
   useEffect(() => {

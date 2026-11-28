@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 use super::off_runtime;
 use super::pr_images::{read_image, DraftImage};
@@ -25,10 +25,26 @@ static OFFERS: Mutex<Option<HashMap<String, Offer>>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Offer {
+    pub id: String,
+    pub number: u64,
+    #[serde(skip)]
+    pub checkout_id: String,
+    #[serde(skip)]
+    pub target: String,
     /// The repository whose open pull request they are for.
     pub repo: String,
     /// The images, in order, each with its preview when read for the window.
     pub images: Vec<DraftImage>,
+}
+
+pub(super) fn approved(task_id: &str, offer_id: &str) -> Result<Offer> {
+    OFFERS
+        .lock()
+        .as_ref()
+        .and_then(|offers| offers.get(task_id))
+        .filter(|offer| offer.id == offer_id)
+        .cloned()
+        .ok_or_else(|| Error::Other("This screenshot offer changed. Review the current offer before adding it.".into()))
 }
 
 /// Hold `images` for `task_id`, in place of what it offered before, as a
@@ -53,16 +69,18 @@ pub async fn pr_image_offer(task_id: String) -> Result<Option<Offer>> {
                 Some(DraftImage { preview: super::pr_images::preview(&read), caption: read.caption, ..i })
             })
             .collect();
-        Some(Offer { repo: held.repo, images })
+        Some(Offer { images, ..held })
     })
     .await
 }
 
 /// Forget what `task_id` has on offer: added, or turned down.
 #[tauri::command]
-pub fn drop_pr_image_offer(task_id: String) {
+pub fn drop_pr_image_offer(task_id: String, offer_id: String) {
     if let Some(offers) = OFFERS.lock().as_mut() {
-        offers.remove(&task_id);
+        if offers.get(&task_id).is_some_and(|offer| offer.id == offer_id) {
+            offers.remove(&task_id);
+        }
     }
 }
 
@@ -85,7 +103,12 @@ mod tests {
         let task = format!("t-{}", uuid::Uuid::new_v4());
         OFFERS.lock().get_or_insert_with(HashMap::new).insert(
             task.clone(),
-            Offer { repo: "web".into(), images: vec![image(&night, "Night"), image(&dir.join("gone.png"), "Day")] },
+            Offer {
+                id: "current".into(),
+                repo: "web".into(),
+                images: vec![image(&night, "Night"), image(&dir.join("gone.png"), "Day")],
+                ..Default::default()
+            },
         );
 
         let read = tauri::async_runtime::block_on(pr_image_offer(task.clone())).unwrap().unwrap();
@@ -93,7 +116,10 @@ mod tests {
         assert_eq!(read.images[0].caption, "Night");
         assert!(read.images[0].preview.starts_with("data:image/png;base64,"));
 
-        drop_pr_image_offer(task.clone());
+        assert!(approved(&task, "old").is_err());
+        drop_pr_image_offer(task.clone(), "old".into());
+        assert!(approved(&task, "current").is_ok());
+        drop_pr_image_offer(task.clone(), "current".into());
         assert!(tauri::async_runtime::block_on(pr_image_offer(task)).unwrap().is_none());
     }
 }

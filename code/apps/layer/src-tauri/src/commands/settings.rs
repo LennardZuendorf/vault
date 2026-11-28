@@ -214,17 +214,14 @@ fn disconnect_inner(state: &AppState, which: &str) -> Result<()> {
     state.news.forget();
     match which {
         "jira" => {
-            secrets::delete(secrets::JIRA)?;
+            state.config.update_jira_credentials(None, |c| c.jira = None)?;
             // What was learned about that site goes with it; reconnecting to
             // another one should not be told the old one's issue types.
             *state.ticket_types.lock() = None;
             *state.epic_field_missing.lock() = None;
-            state.config.update(|c| c.jira = None)
+            Ok(())
         }
-        "github" => {
-            secrets::delete(secrets::GITHUB)?;
-            state.config.update(|c| c.github = None)
-        }
+        "github" => state.config.update_github_credentials(None, None, |c| c.github = None),
         "grafana" => {
             secrets::delete(secrets::GRAFANA)?;
             state.config.update(|c| c.grafana = None)

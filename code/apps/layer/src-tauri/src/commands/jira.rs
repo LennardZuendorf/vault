@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::config::{JiraConfig, Task};
+use crate::config::{JiraConfig, Task, TrackerKind};
 use crate::error::{Error, Result};
 use crate::git;
 use crate::integrations::jira::{self, Jira};
@@ -67,40 +67,48 @@ pub(crate) fn jira_client(state: &AppState) -> Result<(Jira, JiraConfig)> {
 
 #[tauri::command]
 pub async fn jira_connect(
-    state: State<'_, AppState>,
+    app: AppHandle,
     base_url: String,
     email: String,
     token: String,
     project_key: Option<String>,
     jql: Option<String>,
 ) -> Result<String> {
-    let before = state.config.read().jira;
     let base_url = base_url.trim_end_matches('/').to_string();
-    let mut cfg = JiraConfig {
-        // Where tickets go (TKT-8) is kept for the same site: changing the
-        // project key or the JQL reconnects, and cost the choices made.
-        flow: before.as_ref().filter(|b| b.base_url == base_url).map(|b| b.flow.clone()).unwrap_or_default(),
-        base_url,
-        email,
-        project_key,
-        jql,
-        epic_field: None,
-    };
-    // Changing the project key or JQL should not need the token typed again.
-    let was = before.as_ref().map(|j| j.base_url.clone());
-    let token = stored_or(secrets::JIRA, &token, "Jira", was.as_deref(), &cfg.base_url)?;
+    let (mut cfg, token) = super::blocking(app.clone(), move |state| {
+        let _generation = state.config.tracker_credential_generation(TrackerKind::Jira);
+        let before = state.config.with(|c| c.jira.clone());
+        // Changing the project key or JQL should not need the token typed again.
+        let was = before.as_ref().map(|j| j.base_url.as_str());
+        let token = stored_or(secrets::JIRA, &token, "Jira", was, &base_url)?;
+        let cfg = JiraConfig {
+            // Where tickets go (TKT-8) is kept for the same site: changing the
+            // project key or the JQL reconnects, and cost the choices made.
+            flow: before.filter(|b| b.base_url == base_url).map(|b| b.flow).unwrap_or_default(),
+            base_url,
+            email,
+            project_key,
+            jql,
+            epic_field: None,
+        };
+        Ok((cfg, token))
+    })
+    .await?;
     // Verify before persisting, so a typo never looks like a working setup.
     let client = Jira::new(&cfg, &token)?;
     let who = client.myself().await?;
     // Asked once, here, because the id differs on every site.
     cfg.epic_field = client.epic_link_field().await.ok().flatten();
-    secrets::set(secrets::JIRA, &token)?;
-    // Another site, or the same one reconnected: either way what was cached
-    // about the last connection is not to be trusted. The types were kept
-    // until restart, and the epic search was built from the old site's names.
-    *state.ticket_types.lock() = None;
-    *state.epic_field_missing.lock() = None;
-    state.config.update(|c| c.jira = Some(cfg))?;
+    super::blocking(app, move |state| {
+        state.config.update_jira_credentials(Some(&token), |c| c.jira = Some(cfg))?;
+        // Another site, or the same one reconnected: either way what was cached
+        // about the last connection is not to be trusted. The types were kept
+        // until restart, and the epic search was built from the old site's names.
+        *state.ticket_types.lock() = None;
+        *state.epic_field_missing.lock() = None;
+        Ok(())
+    })
+    .await?;
     Ok(who.display_name)
 }
 

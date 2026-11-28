@@ -2,7 +2,7 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Fragment, useCallback, useState, type ReactNode } from "react";
 import { api, errMessage, failureText } from "../../lib/api";
 import { copyAndSay } from "../../lib/clipboard";
-import { taskReview } from "../../lib/derive";
+import { taskCanFinish, taskReview } from "../../lib/derive";
 import { byEpic, groupBy } from "../../lib/grouping";
 import { useFleetAgents } from "../../lib/panes";
 import { readOneOf, write } from "../../lib/persist";
@@ -318,8 +318,8 @@ export function Sidebar() {
         },
       });
     }
-    const landed = taskReview(prs[task.id] ?? []) === "merged";
-    if (landed) {
+    const canFinish = taskCanFinish(prs[task.id] ?? []);
+    if (canFinish) {
       items.push({
         label: "Finish task…",
         separated: available(task).length === 0,
@@ -329,7 +329,7 @@ export function Sidebar() {
     items.push({
       label: "Delete task…",
       danger: true,
-      separated: available(task).length === 0 && !landed,
+      separated: available(task).length === 0 && !canFinish,
       onSelect: () => askDeleteTask(task),
     });
     return items;

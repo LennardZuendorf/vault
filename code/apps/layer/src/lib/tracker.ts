@@ -27,6 +27,44 @@ export function ticketLink(settings: Settings | null, key: string): string | nul
   return base ? `${base}/browse/${key}` : null;
 }
 
+/** UI identity only; writes use the backend's credential generation as well. */
+export function ticketConnectionScope(settings: Settings | null): string | null {
+  switch (settings?.tracker) {
+    case "jira":
+      return JSON.stringify(["jira", settings.jira?.base_url, settings.jira?.email]);
+    case "github":
+      return JSON.stringify(["github", settings.github?.api_url, settings.github?.web_url]);
+    default:
+      return null;
+  }
+}
+
+/** Normalize the authority without conflating paths, queries, or non-default ports. */
+export function ticketUrlIdentity(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if ((url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password)
+      return `${url.origin}${url.pathname}${url.search}`;
+  } catch {
+    // An invalid or non-web URL cannot match the active tracker.
+  }
+  return null;
+}
+
+export function sameTicketUrl(a: string | null | undefined, b: string | null | undefined): boolean {
+  const identity = ticketUrlIdentity(a);
+  return identity !== null && identity === ticketUrlIdentity(b);
+}
+
+/** A key may exist on two sites. Keep the original link, but only read status from its site. */
+export function readsTicket(settings: Settings | null, key: string, url: string): boolean {
+  return (
+    settings?.tracker === (key.includes("#") ? "github" : "jira") &&
+    sameTicketUrl(ticketLink(settings, key), url)
+  );
+}
+
 /**
  * The tracker a key belongs to, whatever the workspace uses now: a task
  * keeps its ticket when the choice changes (TKT-16), and its link should

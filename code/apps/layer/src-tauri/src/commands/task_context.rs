@@ -12,12 +12,16 @@
 //! (MEM-4), with how likely each note is to be out of date, and the
 //! requirements of the spec the user agreed for the work (SPEC-10).
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Weak};
 
+use parking_lot::Mutex;
 use tauri::AppHandle;
 
+use crate::agents::replace_file;
 use crate::config::Task;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::tickets::Ticket;
 
 use super::jira::task_repos;
@@ -56,6 +60,27 @@ struct FolderNotes {
     notes: Vec<RepoNote>,
 }
 
+type ContextLock = Mutex<()>;
+type ContextLocks = HashMap<(PathBuf, String), Weak<ContextLock>>;
+static CONTEXT_LOCKS: LazyLock<Mutex<ContextLocks>> = LazyLock::new(Mutex::default);
+
+fn with_task_context(state: &AppState, id: &str, f: impl FnOnce(&Task) -> Result<()>) -> Result<()> {
+    let lock = {
+        let mut locks = CONTEXT_LOCKS.lock();
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        let entry = locks.entry((state.config.folder().to_path_buf(), id.to_string())).or_default();
+        entry.upgrade().unwrap_or_else(|| {
+            let lock = Arc::new(Mutex::new(()));
+            *entry = Arc::downgrade(&lock);
+            lock
+        })
+    };
+    let _held = lock.lock();
+    // An agent can have loaded the task before the link was saved. Read it
+    // again here, and don't let a render from old context finish after a link.
+    f(&state.config.task(id)?)
+}
+
 /// The layout of a task, written into its folder for the agent standing in it.
 ///
 /// The opening prompt says all of this too, but a prompt is said once: it
@@ -66,19 +91,35 @@ struct FolderNotes {
 /// Never written into a worktree — a generated file there is an untracked
 /// change that turns up in review.
 pub(crate) fn write_task_context(state: &AppState, task: &Task) -> Result<()> {
-    let Some(dir) = agent_file_dir(state, task) else {
-        return Ok(());
-    };
+    with_task_context(state, &task.id, |task| {
+        let Some(dir) = agent_file_dir(state, task) else {
+            return Ok(());
+        };
+        write_task_context_in(state, task, &dir)
+    })
+}
+
+fn write_task_context_in(state: &AppState, task: &Task, dir: &Path) -> Result<()> {
     let ticket = std::fs::read_to_string(dir.join(TICKET_FILE)).ok();
     let spec = super::spec_work::approved_requirements(state, task).map(|(text, dirs)| SpecRequirements { dirs, text });
     let mut md = task_context(task, &task_repos(state, task), ticket.as_deref(), spec.as_ref());
     md.push_str(&checks_section(&task_checks(state, task)));
     md.push_str(&notes_section(&task_notes(state, task), chrono::Utc::now().timestamp_millis()));
 
-    std::fs::write(dir.join("CLAUDE.md"), &md)?;
+    // Replace generated files rather than following a link into a checkout.
+    replace_file(&dir.join("CLAUDE.md"), md.as_bytes(), None)?;
     // Agents that look for AGENTS.md instead should see the same thing.
-    std::fs::write(dir.join("AGENTS.md"), &md)?;
+    replace_file(&dir.join("AGENTS.md"), md.as_bytes(), None)?;
     Ok(())
+}
+
+pub(crate) fn write_ticket_context(state: &AppState, task: &Task, issue: &Ticket) -> Result<()> {
+    with_task_context(state, &task.id, |task| {
+        let dir = agent_file_dir(state, task)
+            .ok_or_else(|| Error::Other("This task has no folder for agent context outside its worktrees.".into()))?;
+        replace_file(&dir.join(TICKET_FILE), ticket_markdown(issue).as_bytes(), None)?;
+        write_task_context_in(state, task, &dir)
+    })
 }
 
 /// Keep `issue` as `task`'s ticket, and rewrite the context file with it.
@@ -86,14 +127,7 @@ pub(crate) fn write_task_context(state: &AppState, task: &Task) -> Result<()> {
 /// Best effort: a ticket that cannot be saved is not a reason to fail
 /// whatever fetched it.
 pub(crate) async fn keep_ticket(app: AppHandle, task: Task, issue: Ticket) {
-    let _ = super::blocking(app, move |state| {
-        if let Some(dir) = agent_file_dir(state, &task) {
-            std::fs::write(dir.join(TICKET_FILE), ticket_markdown(&issue))?;
-            write_task_context(state, &task)?;
-        }
-        Ok(())
-    })
-    .await;
+    let _ = super::blocking(app, move |state| write_ticket_context(state, &task, &issue)).await;
 }
 
 /// The notes of each repository checked out in `task`. Runs git.
@@ -267,6 +301,21 @@ This task reviews pull request {}#{}{}, at commit `{}`: {}.              `{}` is
     }
     if task.epic {
         md.push_str(EPIC);
+    } else if task.review.is_none() && task.sub_task.is_none() {
+        md.push_str(&format!(
+            "## Link existing work\n\n\
+             On `villain-layer`, use `list_tasks` to verify this task's ID (`{}`) and folder. \
+             Link to this task. Do not create another task.\n\n\
+             - `task_link_ticket`: pass this `task_id` and the existing tracker ticket key as `key`. \
+             No checkout ID is needed. This is for a task without a ticket.\n\
+             - `task_link_pr`: call `task_prs` with this `task_id` to find the target repository's \
+             `checkout_id`. Pass both IDs and the existing GitHub or GitHub Enterprise browser \
+             link as `pr_url`. Layer verifies it before saving. A different PR replaces the \
+             checkout's previous pin.\n\n\
+             Call either link tool with `confirm: true` only after the user agrees to that \
+             link or replacement. The read tools do not need confirmation.\n\n",
+            task.id
+        ));
     }
     if let Some(spec) = spec {
         md.push_str(&spec_section(&task.id, spec));
@@ -513,6 +562,53 @@ mod tests {
         let md = task_context(&epic, &[], None, None);
         assert!(md.contains("## This is an epic\n\nYou orchestrate its sub-tasks; you write no code."));
         assert!(!task_context(&task(), &[], None, None).contains("This is an epic"));
+    }
+
+    #[test]
+    fn both_generated_task_files_guide_agents_to_link_existing_work_after_agreement() {
+        use super::super::repos::tests::{add_task, setup, state};
+
+        let (root, mut cfg) = setup();
+        for id in ["here", "another", "epic", "review", "sub-task"] {
+            add_task(&mut cfg, &root, id);
+        }
+        cfg.tasks[2].epic = true;
+        cfg.tasks[3].review = Some(crate::config::ReviewOf {
+            repo: "acme/api".into(),
+            number: 61,
+            url: "https://github.com/acme/api/pull/61".into(),
+            author: "ana".into(),
+            head_sha: "abc123".into(),
+        });
+        cfg.tasks[4].sub_task = Some(crate::config::SubTaskOf { epic: "epic".into(), title: "One sub-task".into() });
+        let tasks = cfg.tasks.clone();
+        let state = state(&root, cfg);
+        let actual: Vec<_> = tasks
+            .iter()
+            .map(|task| {
+                let dir = Path::new(&task.root);
+                std::fs::create_dir_all(dir).unwrap();
+                write_task_context(&state, task).unwrap();
+                ["AGENTS.md", "CLAUDE.md"].map(|file| std::fs::read_to_string(dir.join(file)).unwrap())
+            })
+            .collect();
+        std::fs::remove_dir_all(root).unwrap();
+
+        for (id, files) in ["here", "another"].into_iter().zip(&actual) {
+            assert_eq!(files[0], files[1]);
+            let (_, guidance) = files[0].split_once("## Link existing work").unwrap();
+            let guidance = guidance.split("\n## ").next().unwrap();
+            assert!(guidance.contains(&format!("`{id}`")) && guidance.contains("`list_tasks`"));
+            assert!(guidance.contains("Do not create another task"));
+            assert!(guidance.contains("only after the user agrees") && guidance.contains("`confirm: true`"));
+            assert!(guidance.contains("`task_link_ticket`") && guidance.contains("ticket key"));
+            assert!(guidance.contains("No checkout ID is needed"));
+            assert!(guidance.contains("`task_prs`") && guidance.contains("`checkout_id`"));
+            assert!(guidance.contains("`task_link_pr`") && guidance.contains("`pr_url`"));
+        }
+        for files in &actual[2..] {
+            assert!(files.iter().all(|file| !file.contains("task_link_ticket") && !file.contains("task_link_pr")));
+        }
     }
 
     #[test]

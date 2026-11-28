@@ -174,8 +174,8 @@ Known gaps:
 
 A task has a name, a branch (the same in every repo), a folder, and one
 checkout per repo. The sidebar lists tasks as working, in review (has an
-open PR) or done (every PR merged). Each row shows state dots, the name,
-and under it the branch, which carries the ticket key, with the repo
+open PR) or done (its PRs have merged and the reads are complete). Each
+row shows state dots, the name, and under it the branch, with the repo
 count, running agents, uncommitted changes and the review verdict.
 
 - **TASK-1** A task MUST have a folder, `<worktree root>/<branch, / → ->`.
@@ -185,8 +185,9 @@ count, running agents, uncommitted changes and the review verdict.
   folder or makes a dot-folder in it (REPO-9). Agents start in the
   task folder, where every repo is a sibling, unless started for one repo.
   A folder that exists or belongs to another task gets `-2`, `-3`, ….
-- **TASK-2** The branch MUST be: the explicit name if given; else the
-  ticket key, plus `-<suffix>` if given; else `villain/<slug of the name>`.
+- **TASK-2** When a task starts, its branch MUST be: the explicit name if
+  given; else the ticket key, plus `-<suffix>` if given; else
+  `villain/<slug of the name>`.
 - **TASK-3** A checkout MUST be cut, in the app's copy of the repo
   (REPO-4), from the freshly fetched `origin/<base>`, not the local base branch, which may be stale. The commit
   it was cut from is recorded as the branch point
@@ -217,18 +218,22 @@ count, running agents, uncommitted changes and the review verdict.
   stopping any agent. It refuses without force: a refusal must not cost the
   conversations. If any worktree cannot be removed, the task is kept with
   just those checkouts, never left as a folder the app cannot see.
-- **TASK-8** Finish task (offered once every PR has merged) MUST go in
+- **TASK-8** Finish task is offered with complete PR evidence, a verified
+  merge and no open associated PRs. It can keep later commits on named
+  branches without classifying them as merged. Finish task MUST go in
   order: stop agents, remove worktrees, delete each local branch **only if**
   the merged PR's head or `origin/<base>` contains it, or the head has the
   change of every commit on it the base lacks (a branch rebased here after
   it was pushed), then move the ticket to the chosen done-category status.
   Each step only runs if the one before succeeded. Remote branches are
-  never touched.
+  never touched. Incomplete PR evidence (PR-16) MUST block Finish task
+  before it stops agents or removes anything.
 - **TASK-9** The finish dialog MUST offer only transitions into the `done`
   category. It pre-selects the one into the project's after-merge status
   (TKT-8), or else one only when there is exactly one; otherwise it defaults
   to leaving the ticket as it is. (Done and Cancelled are both done: with no
-  status chosen, a finished ticket was left In Progress.)
+  status chosen, a finished ticket was left In Progress.) The choices
+  and the move belong to the task's saved Jira site and current connection.
 - **TASK-10** Status (ahead, behind, changes, conflicts) comes from
   `git status` per checkout. Only the selected task and tasks with an agent
   working, or done working in the last 75 seconds, are asked every poll. The
@@ -308,13 +313,13 @@ count, running agents, uncommitted changes and the review verdict.
 - **TASK-18** An agent MUST be able to finish a task as Finish task does
   (TASK-8), when the user asks it to: `finish_task`, with `confirm`. It
   refuses, changing nothing, while one of the task's pull requests is
-  open, when the agent runs in that task (it would be stopped first and
-  never hear back), or when the transition it names is not into the
-  `done` category. Branches are deleted only where a merged PR covers
-  them, as in the dialog. Without a transition named, the ticket goes as
-  TASK-9 would pre-select; when that would be a guess it stays, and the
-  reply lists the ways to close it. A ticket already done stays. A
-  chat's room context says that the user asking for a move or a finish
+  open, when PR evidence is incomplete (PR-16), when the agent runs in
+  that task (it would be stopped first and never hear back), or when the
+  transition it names is not into the `done` category. The same branch
+  coverage checks apply as in the dialog. Without a transition named, the
+  ticket goes as TASK-9 would pre-select; when that would be a guess it
+  stays, and the reply lists the ways to close it. A ticket already done
+  stays. A chat's room context says that the user asking for a move or a finish
   is the agreement `confirm` stands for. (A chat could move a ticket,
   but the task stayed in the sidebar with its worktrees until someone
   opened the dialog.)
@@ -329,7 +334,18 @@ count, running agents, uncommitted changes and the review verdict.
   Escape clears it, and it is not remembered across launches, so no task
   is hidden at the next start. With twenty tasks under six epics, the one
   being worked on could only be found by reading every row.
-Code: `commands/tasks.rs`, `commands/worktree_status.rs` (TASK-10), `sidebar/`, `FinishTask.tsx`, `commands/finish_tool.rs` (TASK-18), `lib/drag.ts` (TASK-16), `lib/grouping.ts`, `lib/epics.ts` (TASK-17), `lib/task-search.ts` (TASK-19).
+- **TASK-20** In Work, the header of a regular task with no ticket MUST
+  offer a quiet **Link ticket…** action when a tracker is connected. It
+  searches existing tickets, including ones outside Mine, with the
+  Tickets search set to Anyone and Include done. The picker shows the
+  key and title before linking. The result cannot link a ticket after its
+  tracker connection changes. A failure stays inline. An agent
+  can link by task ID and ticket key with `task_link_ticket`, after the
+  user agrees. Both paths keep the same task, with its name, branch,
+  worktrees, spec and running agents unchanged (TKT-22). Work does not
+  offer to file a ticket, or replace or remove a link.
+
+Code: `commands/tasks.rs`, `commands/worktree_status.rs` (TASK-10), `sidebar/`, `FinishTask.tsx`, `commands/finish_tool.rs` (TASK-18), `lib/drag.ts` (TASK-16), `lib/grouping.ts`, `lib/epics.ts` (TASK-17), `lib/task-search.ts` (TASK-19), `App.tsx`, `components/tickets/`, `commands/tickets.rs` (TASK-20).
 
 Known gaps:
 - A folder cut off before its last commit was recorded, or whose last
@@ -453,12 +469,16 @@ Each of them can also run as a conversation the app draws, over ACP (§20).
   until the CLI compacts it. An agent started with a prompt of its own,
   or brought back at launch, had only the link, and spent its first calls
   fetching what the app already had. The ticket is saved as `TICKET.md`
-  in the task folder whenever the app fetches it for the task (Start
-  work, the launch dialog's opening
-  prompt), and the context file is built from that. The description is
+  in the task folder when the app fetches it to start work, writes the
+  launch dialog's opening prompt, or links it in Work (TKT-22). The
+  context file is built from that. The description is
   quoted line by line and introduced as written by whoever filed it: the
   context file is read as instructions, and a ticket's text is someone
-  else's. A description past 8 KB is cut, and says so.
+  else's. A description past 8 KB is cut, and says so. A regular task's
+  context MUST name `list_tasks` to find the task ID and `task_prs` to find
+  the checkout ID. It explains how to use `task_link_ticket` and
+  `task_link_pr` with the user's confirmation. It tells the agent to link
+  to the existing task, not create another one.
 - **PANE-14** An agent pane MUST restart in place on its own
   conversation, for a CLI that can resume (Claude Code): Restart, on its
   tab and its entry in the chat list, stops it as closing does (PANE-5,
@@ -750,24 +770,32 @@ Known gaps:
 
 ## 8. Pull requests
 
-The Pull requests tab shows, per repo, the open PR, or an earlier one if
-none is open. It shows checks, the latest review per reviewer, the verdict,
-and how far behind the base it is. From here: push everything, open PRs,
+The Pull requests tab shows, per repo, an open PR first, or a past PR if
+none is open. Other PRs stay on the row. It shows checks, the latest
+review per reviewer, the verdict, and how far behind the base it is.
+From here: push everything, open PRs,
 mark a PR ready for review or back to draft, retarget a PR onto the
 checkout's base or take the PR's base for the
 checkout (GitHub moves a PR itself when its base is merged and deleted),
 send feedback to an agent, and finish a merged task.
 
-- **PR-1** Opening PRs MUST push each repo that has commits, open one PR per
-  repo against that checkout's base (draft by default), and reuse a PR that
-  is already open. A repo with only uncommitted changes is refused: the app
-  never commits for you here. A merged PR first moves the branch point up
-  to what it landed (UPD-6), so a repo with nothing since is skipped, not
-  opened again. Counted from where the branch was cut, a repo merged while
-  another was still in review got a second PR for the same work.
+- **PR-1** Opening PRs MUST check for an associated open PR before opening
+  one per repo against the checkout's base (draft by default). It pushes
+  the task branch where there are commits to publish and reuses an open
+  PR from that branch in the same repository. An associated open PR from
+  another branch or a fork is reported with its link: Layer opens no
+  duplicate for that checkout and does not push to the PR's head. A repo
+  with only uncommitted changes is refused: the app never commits for
+  you here. A merged PR advances the branch point only when the existing
+  landed-commit check proves what it landed (UPD-6), so a repo with
+  nothing since is skipped, not opened again. Counted from where the
+  branch was cut, a repo merged while another was still in review got a
+  second PR for the same work.
   In the dialog, every repo that would get a new PR has a tick, all on to
-  start with; one ticked off is neither pushed nor opened. A repo whose PR
-  is already open has no tick: it is pushed and listed with the rest.
+  start with; one ticked off is neither pushed nor opened. An already-open
+  PR has no tick. A PR from the task branch in the same repository is
+  pushed to and listed with the rest. For an alternate-head PR, the row
+  links to it rather than offering to open another.
 - **PR-2** PRs this call opened MUST be linked on the Jira ticket as a
   comment, and posted to Slack if that is on. When the call opens a PR and
   the task has more than one open, every one of them MUST list the others
@@ -775,7 +803,9 @@ send feedback to an agent, and finish a merged task.
   the description is left as written. A failed link is reported, not
   swallowed.
 - **PR-3** Push MUST go through `git::push`, with the lease when there is
-  one (UPD-4). Never `--force`. Pushes run in every repo at once.
+  one (UPD-4). Never `--force`. Push all runs in every repo at once and
+  targets the task branch, not the head of a discovered or pinned PR.
+  Agents are told to commit, push and open PRs from the task branch.
 - **PR-4** The description can be drafted. A one-shot model run gets the
   commits, the stat and the diff (lockfiles left out, 60k characters at
   most), the spec's requirements with their check (SPEC-16), and each
@@ -810,9 +840,10 @@ send feedback to an agent, and finish a merged task.
   a way to leave it out, and says that Open stores them in the
   repository. A file that is not an image, or a list that does not read,
   is said in the dialog rather than dropped. Once Open PRs has opened the
-  pull requests, it adds the screenshots still there to each one's
-  repository's PR as PR-13 does (a row per repository, not to a PR that
-  failed to open). Pressing Open with them shown is the user's agreement.
+  pull requests, it adds the screenshots still there to the exact PR opened
+  or reused in each repository, as PR-13 does. It does not upload to a
+  failed or skipped PR, or silently switch to a different one. Pressing Open
+  with them shown is the user's agreement.
   With no agent running, the one-shot model is told it cannot take
   screenshots: it ticks the visible-change box and writes "Screenshots to
   follow." where they go, and the dialog says no agent was running to
@@ -845,16 +876,16 @@ send feedback to an agent, and finish a merged task.
   each of those, and in ordinary use never fired.) Which GitHub
   repository a worktree's origin names is asked of git at most every 10
   minutes, and again at once when the app moves a copy to its clone's
-  `origin` (REPO-4). A task whose pull requests were all closed or merged
-  when last read (every repo's newest PR closed or merged, or none and
-  nothing on its branch, and nothing failed) is swept only every 15
-  minutes, and its repositories' git is left alone in between; its PR tab
-  still asks at once when opened, and opening its PRs from the app puts it
-  back in every sweep. The first sweep is silent. After it, a new
-  approval, request for changes, new comment or merge is announced as a
-  toast.
+  `origin` (REPO-4). A task whose last complete read found no open pull
+  requests (each repo had only closed or merged PRs, or no PR and nothing
+  on its branch) is swept only every 15 minutes, and its repositories'
+  git is left alone in between; its PR tab still asks at once when
+  opened. Opening its PRs from the app, pinning or unpinning puts it back
+  in every sweep. The first sweep is silent. After it, a new approval,
+  request for changes, new comment or merge is announced as a toast.
 - **PR-9** A late answer MUST NOT overwrite a newer one. A sweep that
-  started before a PR was opened does not put back "no PR".
+  started before a PR was opened does not put back "no PR". It does not
+  overwrite the refreshed rows after a pin or unpin either.
 - **PR-10** The feedback picker MUST show each item in full, with no
   click to expand it: every comment of a thread, and a check's report and
   log. Markdown is shown as GitHub shows it (headings, emphasis, code,
@@ -926,24 +957,55 @@ send feedback to an agent, and finish a merged task.
   `browser_screenshot` with `save` writes the tab's image to a file for
   this. A repository with no open pull request is refused: images are
   added to a PR, never the reason one is opened.
-- **PR-14** A repository's pull requests are those from the task's branch
-  and, when its folder is on another branch, from that branch too: the PR
-  tab, the sweep (PR-8), feedback (PR-6), retargeting and `pr_images`
-  (PR-13) all look in both. The folder's own base and the repository's
-  default branch don't count as another branch. Open pull requests (PR-1)
-  still pushes and opens from the task's branch, and agents are told to
-  commit, push and open pull requests there. Before, an agent that
-  put a repository on a branch of its own and opened its PR from there
-  left the task saying "no PR" while the PR waited on GitHub. A PR from a
-  branch the folder has since left is still not found.
+- **PR-14** Layer MUST look for pull requests from the task branch and the
+  checkout's current topic branch. Its base and the repository's default
+  branch do not count as topic branches. Layer also looks for PRs from
+  recently departed topic branches, using only that checkout's own history
+  since the task began. A historical match needs the exact branch and head
+  commit recorded just before the switch. Detached labels, another task's
+  branch in that repo, and tips with no evidence of work past the branch
+  point do not count as history evidence. Layer does not match by ticket
+  text, title or author, or scan the whole repository. If the remote head
+  has moved past the recorded tip, an agent can pin the PR instead (PR-17).
 - **PR-15** An open pull request's card MUST move it between draft and
   ready for review: a draft has a Ready for review button beside its draft
   chip, and a ready one a quiet Back to draft link under its title. GitHub
   does it, through GraphQL (its REST API ignores `draft` on an existing
   PR), and the card shows the new state once read again; a refusal, such as
   a token that may read the PR but not change it, is shown on the tab.
+  The action MUST verify the PR shown on the card before changing it.
   Before, Open PRs opened drafts (PR-1) and only GitHub could take one out
   of draft.
+- **PR-16** The PR tab, the sweep (PR-8), `task_prs` and PR actions MUST
+  use the same PR results, without duplicates. Feedback, retargeting
+  and image offers use the open PR selected for that checkout. When
+  a read fails or reaches its remote page cap without finishing, Layer
+  keeps the usable PRs visible and identifies the affected repository
+  and the reason. An incomplete read MUST NOT count as "no PR", prove
+  that the task has merged, or let Finish task or `finish_task` proceed.
+  If the GitHub credential cannot be read, the sweep replaces even settled
+  rows with incomplete rows without trusted links.
+- **PR-17** With the user's agreement, an agent can use `task_link_pr`
+  to pin one GitHub or GitHub Enterprise PR to a checkout in the task.
+  Layer MUST verify the PR and target repo through the checkout's
+  configured connection. It refuses an invalid URL, a PR targeting
+  another repo, or a PR pinned to another checkout. The same PR on the
+  same checkout does not make a second pin. Pinning or replacing a pin
+  changes only the local association: it does not push, open, edit,
+  comment on or close a PR.
+
+  Layer MUST read a pin by number across branch changes and restarts.
+  An open PR comes first. Within open PRs, or within past PRs if none is
+  open, the pin comes first, then the highest PR number. The PR tab marks
+  the pinned item, even when it is not first, and offers a quiet **Unpin**
+  action. If the pin cannot be read, its identity, reason and **Unpin**
+  stay on the repo row, with a link only when Layer can validate it for
+  that checkout and connection and GitHub has not contradicted the pin's
+  identity. When the connection changes, the PR tab hides old links until
+  it reads the new connection. Unpin is local, removes only the pin the
+  user saw, and does not remove a PR that Layer still finds automatically.
+  A pin proves nothing about what landed and does
+  not bypass the branch coverage or finish checks (TASK-8, PR-16).
 
 Code: `commands/github.rs`, `commands/pr_branches.rs`, `commands/pr_draft.rs`, `integrations/github/ready.rs`, `commands/open_prs.rs`, `commands/pr_images.rs`, `commands/pr_image_offers.rs`, `PrImageOffer.tsx`, `commands/outgoing.rs`, `git/outgoing.rs`, `Outgoing.tsx`, `commands/landed.rs`, `git/landed.rs`, `integrations/github.rs`, `integrations/github/images.rs`, `PrPanel.tsx`, `PrReadErrors.tsx`,
 `PrFeedback.tsx`, `Markdown.tsx`, `lib/markdown.ts`; its connection in `CodeSettings.tsx`.
@@ -1019,7 +1081,8 @@ offers Start work.
   task (`Task.ticket_stage`), so a ticket moved by hand afterwards stays
   where it was put; a review never takes a ticket out of done. A workflow
   with no transition to the chosen status is said once, not retried. It
-  runs with the PR sweep (PR-8). Before this, tickets sat In Progress with
+  runs with the PR sweep (PR-8). Ticket moves and PR comments MUST only
+  go to the Jira site in the task's saved link. Before this, tickets sat In Progress with
   their pull requests merged weeks before.
 - **TKT-9** Deleting a task MUST show its ticket's status and offer its
   transitions. It leaves the ticket as it is by default, since a deleted
@@ -1027,7 +1090,8 @@ offers Start work.
   status when a pull request of the task has merged. The ticket moves only
   once the task is gone.
 - **TKT-10** The task header MUST show its ticket's status, from your ticket
-  list, so a ticket out of step with the work is seen where the work is.
+  list or from a ticket linked in Work (TKT-22), so a ticket out of
+  step with the work is seen where the work is.
 - **TKT-11** Every ticket card MUST say how long ago the ticket was created,
   in its largest whole unit ("5m", "3h", "2d", "1w", "4mo", "2y"), with the
   full date on hover.
@@ -1087,9 +1151,11 @@ offers Start work.
   guessed from a name. Without them an epic is only known once it has a
   sub-issue: one just filed looks like any other issue.
 - **TKT-18** A GitHub issue or a Forge ticket MUST follow the work the way
-  its own tracker moves it, not by the app moving it. The task's branch
-  carries its key, and each of its pull requests says "Fixes `<key>`" in
-  its body. GitHub closes the issue when one merges into the repository's
+  its own tracker moves it, not by the app moving it. When work starts
+  from the ticket, the branch is named as TASK-2 and TKT-21 say. A PR
+  opened by Layer for the linked task says "Fixes `<key>`" in its body.
+  Linking after work starts does not rewrite a branch or an existing PR
+  (TKT-22). GitHub closes the issue when one merges into the repository's
   default branch, and only then. A task based on another branch (TASK-3)
   closes nothing that way, so once every pull request of such a task has
   merged, with nothing left unmerged or uncommitted, the app closes the
@@ -1119,17 +1185,31 @@ offers Start work.
   the same thing, and fit none of them. The tools that already work on
   "the task's ticket" (`start_work`, `finish_task`, `subtask_start`) work
   on the workspace's tracker, whichever it is.
-- **TKT-21** With GitHub Issues, a task's branch MUST be the issue's
-  number and the slug of its title (`12-fix-the-login`), as GitHub's own
+- **TKT-21** When work starts from a GitHub issue, its branch MUST be the
+  issue's number and the slug of its title (`12-fix-the-login`), as GitHub's own
   "Create a branch" names it, in place of the key TASK-2 gives:
   `owner/repo#12` is no branch name. Since the number alone names no
   repository, where the app reads a pull request's ticket from its branch
   or title (REV-7, REV-11) it asks GitHub which issues the pull request
   closes instead.
+- **TKT-22** Linking an existing ticket in Work (TASK-20) MUST save the
+  connected tracker's canonical key and URL. The same task shows the
+  ticket, even outside Mine, and its ticket action names the tracker and
+  goes to that ticket. If the tracker cannot resolve the ticket, the task
+  already has a ticket, or the ticket belongs to another local task,
+  Layer refuses the link with the reason and changes neither association.
+
+  A successful link refreshes `TICKET.md` and the agent context in the
+  task folder (PANE-13). A write failure there is a warning, not a failed
+  link. Layer does not repeat Start work, assign or move the ticket on
+  linking, post a backfill comment, or edit existing PRs. The ticket
+  follows the existing configured workflow on later PR sweeps (TKT-8,
+  TKT-18).
 
 Code: `tickets.rs` (the tracker: `Tracker`; Jira's side in
 `tickets/jira.rs`, GitHub's in `tickets/github.rs`), `commands/tickets.rs`
-(`set_tracker`), `commands/jira.rs`, `commands/ticket_flow.rs`,
+(`set_tracker`, `link_task_ticket`), `commands/task_context.rs` (TKT-22),
+`commands/jira.rs`, `commands/ticket_flow.rs`,
 `integrations/jira.rs`, `integrations/jira/flow.rs`,
 `integrations/github/issues.rs`, `components/tickets/`, `TicketsSettings.tsx`,
 `TrackerChoice.tsx` (TKT-15, TKT-16), `lib/tracker.ts`, `TicketFlow.tsx`,
@@ -1174,8 +1254,8 @@ Known gaps:
 - Tickets follow the work only while the app runs with its window in
   front, since that is when the PR sweep runs. A PR merged overnight moves
   its ticket the next morning.
-- The task header shows a ticket's status only when it is in your ticket
-  list (assigned to you, not done).
+- Except for tickets linked in Work (TKT-22), the task header shows a
+  ticket's status only when it is in Mine (assigned to you, not done).
 - A move that needs two transitions (a workflow with no direct way from
   In Progress to the after-merge status) is reported, not made.
 - Sorting by priority takes the order Jira's priority search lists them
@@ -1374,11 +1454,13 @@ never hold credentials themselves.
 | `handoff_prompt` | a pane's handoff briefing (needs "Let agents read terminal output") | |
 | `list_panes` | panes and their states | |
 | `pane_output` | a pane's recent output (needs "Let agents read terminal output") | |
-| `task_prs` | a task's PRs, checks and reviews | |
+| `task_prs` | a task's discovered and pinned PRs, checks, reviews and per-repo read errors (PR-16, PR-17) | |
+| `task_link_pr` | verify and pin a GitHub PR URL to a checkout in an existing task (PR-17) | yes |
 | `add_repo` | add a repo to a task, telling its agents | |
 | `set_base` | change the branch a task's repo is measured against and opens its next PR into (TASK-6) | |
 | `forget_repo` | unregister a repo (never deletes files) | yes |
 | `create_task` | a task with no ticket | |
+| `task_link_ticket` | link an existing ticket to a Work task by ID and ticket key (TASK-20, TKT-22) | yes |
 | `open_prs` | push and open PRs for a task | yes |
 | `finish_task` | finish a landed task: agents, worktrees, covered branches, ticket to done (TASK-18) | yes |
 | `pr_images` | offer image files for a repo's open PR, shown there in a section the app owns once the user adds them (PR-13) | |

@@ -41,19 +41,19 @@ export function PrImageOffer({
 
   const dismiss = () => {
     setOffer(null);
-    void api.dropPrImageOffer(taskId).catch(fail);
+    void api.dropPrImageOffer(taskId, offer.id).catch(fail);
   };
   const add = async () => {
     setAdding(true);
     try {
-      const rows = await api.showPrImages(taskId, offer.images);
+      const rows = await api.showPrImages(taskId, offer.images, offer.id);
       const failed = rows.filter((r) => !r.ok);
       if (failed.length > 0) {
         fail(failed.map((r) => `${r.repo}: ${r.detail}`).join("\n"));
         return;
       }
-      await api.dropPrImageOffer(taskId);
-      setOffer(null);
+      await api.dropPrImageOffer(taskId, offer.id);
+      setOffer((current) => (current?.id === offer.id ? null : current));
       onAdded();
     } catch (e) {
       fail(e);
@@ -65,7 +65,9 @@ export function PrImageOffer({
   return (
     <div className="card">
       <div className="row">
-        <h3 style={{ margin: 0 }}>Screenshots for {offer.repo}'s pull request</h3>
+        <h3 style={{ margin: 0 }}>
+          Screenshots for {offer.repo} #{offer.number}
+        </h3>
         <div className="spacer" />
         <button className="ui-button" onClick={dismiss} disabled={adding}>
           Dismiss

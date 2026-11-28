@@ -78,7 +78,7 @@ harness is already served. Don't start a second server.
 
 | Parameter | Values | Default |
 |---|---|---|
-| `scenario` | `busy` (everything connected, agents in every state), `empty` (first launch), `unlinked` (a task whose worktrees lost their repository), `tickets` (the PR sweep moved one ticket and wants a status chosen for another), `reviews` (a task with feedback on two PRs) | `busy` |
+| `scenario` | `busy` (everything connected, agents in every state), `empty` (first launch), `unlinked` (a task whose worktrees lost their repository), `tickets` (the PR sweep moved one ticket and wants a status chosen for another), `reviews` (a task with feedback on two PRs), `pins` (historical and unread pins in the login task; a pinned primary PR in the audit task) | `busy` |
 | `view` | `work`, `tickets`, `reviews`, `chat`, `runs` (Usage), `repos` | `work` |
 | `task` | a task id from `src/__mock__/world.ts` (`t-login`, `t-audit`) | none, which is the All agents overview |
 | `tab` | `spec`, `terminals`, `diff`, `pr` | `terminals` |

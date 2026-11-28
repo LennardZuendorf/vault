@@ -582,6 +582,8 @@ mod tests {
                 push_lease: None,
                 point_before_update: None,
                 last_head: None,
+                pr_pin: None,
+                pr_pin_revision: 0,
             },
             project: Project {
                 id: format!("p-{folder}"),

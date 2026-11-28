@@ -1,7 +1,8 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
-import { reviewComments, taskReview, type TaskReview } from "../lib/derive";
+import { reviewComments, taskCanFinish, taskReview, type TaskReview } from "../lib/derive";
+import { prConnectionScope } from "../lib/pr-connection";
 import { pressKeys } from "../lib/press";
 import { reportRepoResults } from "../lib/report";
 import type { CheckoutPr, CheckRun, Review, TaskView } from "../lib/types";
@@ -13,6 +14,7 @@ import { Outgoing } from "./Outgoing";
 import { PrDescriptionField, usePrDescription } from "./PrDescription";
 import { PrFeedback } from "./PrFeedback";
 import { PrImageOffer } from "./PrImageOffer";
+import { PrPin } from "./PrPin";
 import { PrReadErrors } from "./PrReadErrors";
 import { BusyLabel, Combo, ErrorMessage, Field, Modal, useFailure } from "./ui";
 
@@ -129,11 +131,14 @@ export function PrPanel({
   task: TaskView;
   onUpdateFromBase: () => void;
 }) {
-  const settings = useStore((s) => s.settings);
+  const connected = useStore((s) => s.settings?.github_connected);
+  const prScope = useStore((s) => prConnectionScope(s.settings));
   const toggleSettings = useStore((s) => s.toggleSettings);
   // The panel's own actions fail under its buttons, the dialog's above its
   // footer (NOTE-6).
   const panel = useFailure();
+  const { error: readError, fail: failRead, clear: clearRead } = useFailure();
+  const pinConflict = useFailure();
   const dialog = useFailure();
   const description = usePrDescription(task, dialog);
   const fail = panel.fail;
@@ -142,13 +147,10 @@ export function PrPanel({
   /**
    * The rows, held in the store rather than here.
    *
-   * The background watch writes them for every task on a timer and this panel
-   * fetches them for one on demand. Two copies meant every action had to
-   * refresh both and one of them always forgot; with a single copy, whoever
-   * fetched last is simply what everyone sees.
+   * The background watch and on-demand reads share one ordered copy.
    */
   const rows = useStore((s) => s.prs[task.id]) ?? NO_ROWS;
-  const setTaskPrs = useStore((s) => s.setTaskPrs);
+  const refreshTaskPrs = useStore((s) => s.refreshTaskPrs);
   /**
    * Whether GitHub has answered yet.
    *
@@ -157,11 +159,9 @@ export function PrPanel({
    * An answer that arrives a moment later is not a reason to show the wrong
    * one in the meantime.
    */
-  const [askedFor, setAskedFor] = useState<string | null>(null);
-  // Per task rather than a plain flag. The panel is remounted per task now
-  // (TaskMain is keyed by it), but before that a flag left true from the last
-  // task showed this one's empty state while its own rows were in flight.
-  const loaded = askedFor === task.id || rows.length > 0;
+  const [answeredScope, setAnsweredScope] = useState<string | null>(null);
+  const loaded = answeredScope === prScope || rows.length > 0;
+  const loadOrder = useRef(0);
   const [branches, setBranches] = useState<Record<string, string[]>>({});
   /** Whether the "open a pull request" dialog is up. */
   const [creating, setCreating] = useState(false);
@@ -170,7 +170,7 @@ export function PrPanel({
   const [finishing, setFinishing] = useState(false);
   /** Which PR cards are expanded, when there are enough to be worth folding. */
   const [cards, setCards] = useState<Record<string, boolean>>({});
-  const [showPast, setShowPast] = useState(false);
+  const [showPast, setShowPast] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState(task.name);
@@ -181,20 +181,21 @@ export function PrPanel({
   const [flags, setFlags] = useState(0);
 
   const load = useCallback(async () => {
-    if (!settings?.github_connected) return;
+    if (prScope === undefined) return;
+    const at = ++loadOrder.current;
     setLoading(true);
     clear();
     try {
-      setTaskPrs(task.id, await api.githubTaskPrs(task.id));
+      if ((await refreshTaskPrs(task.id)) && at === loadOrder.current) {
+        clearRead();
+        setAnsweredScope(prScope);
+      }
     } catch (e) {
-      fail(e);
+      if (at === loadOrder.current) failRead(e);
     } finally {
-      // An error is an answer too: never setting this would hide the form for
-      // good and offer nothing in its place.
-      setAskedFor(task.id);
-      setLoading(false);
+      if (at === loadOrder.current) setLoading(false);
     }
-  }, [task.id, settings?.github_connected, fail, clear, setTaskPrs]);
+  }, [task.id, prScope, failRead, clearRead, clear, refreshTaskPrs]);
 
   useEffect(() => {
     void load();
@@ -231,6 +232,11 @@ export function PrPanel({
     void openUrl(url).catch(() => fail("Couldn't open the browser. Try again."));
   }
 
+  function onPinConflict(error?: unknown) {
+    if (error === undefined) pinConflict.clear();
+    else pinConflict.fail(error);
+  }
+
   /** Where this repo's next PR goes. Changing it leaves an open PR alone. */
   async function setBase(row: CheckoutPr, base: string) {
     if (base.trim() === row.base || !base.trim()) return;
@@ -252,9 +258,10 @@ export function PrPanel({
   }
 
   async function retarget(row: CheckoutPr) {
+    if (!row.action_target) return;
     try {
       // The row shows the new base once it is read again (NOTE-7).
-      await api.githubRetargetPr(row.checkout_id);
+      await api.githubRetargetPr(row.checkout_id, row.action_target);
       await load();
     } catch (e) {
       fail(e);
@@ -263,8 +270,9 @@ export function PrPanel({
 
   /** Draft to ready for review and back (PR-15); the card shows it once read again. */
   async function markDraft(row: CheckoutPr, draft: boolean) {
+    if (!row.action_target) return;
     try {
-      await api.githubSetPrDraft(row.checkout_id, row.pr!.number, draft);
+      await api.githubSetPrDraft(row.checkout_id, row.action_target, draft);
       await load();
     } catch (e) {
       fail(e);
@@ -295,8 +303,7 @@ export function PrPanel({
         draft,
         leftOut,
       );
-      const skipped = rows.filter((r) => leftOut.includes(r.checkout_id)).map((r) => r.repo);
-      const results = [...opened, ...(await description.addImages(task.id, opened, skipped))];
+      const results = [...opened, ...(await description.addImages(opened))];
       reportRepoResults(dialog.fail, results);
       // A repository that refused keeps the dialog open, its reason in it.
       if (results.length > 0 && results.every((r) => r.ok)) setCreating(false);
@@ -308,7 +315,7 @@ export function PrPanel({
     }
   }
 
-  if (!settings?.github_connected) {
+  if (!connected) {
     return (
       <div className="empty">
         <h2>GitHub not connected</h2>
@@ -316,6 +323,21 @@ export function PrPanel({
         <button className="ui-button ui-button-primary" onClick={() => toggleSettings(true)}>
           Connect GitHub
         </button>
+        <ErrorMessage>{panel.error}</ErrorMessage>
+        <ErrorMessage>{readError}</ErrorMessage>
+        <ErrorMessage>{pinConflict.error}</ErrorMessage>
+        {rows
+          .filter((row) => row.pin)
+          .map((row) => (
+            <PrPin
+              key={row.checkout_id}
+              taskId={task.id}
+              row={row}
+              onStale={onPinConflict}
+              unavailable
+              showLink={false}
+            />
+          ))}
       </div>
     );
   }
@@ -323,7 +345,7 @@ export function PrPanel({
   // A PR that has merged or closed no longer covers the repo: work committed
   // after it landed still needs one, and the row keeps the old PR only so the
   // panel can show what became of it.
-  const pending = rows.filter((r) => (!r.pr || r.pr.state !== "open") && r.changed > 0);
+  const pending = rows.filter((r) => !r.error && (!r.pr || r.pr.state !== "open") && r.changed > 0);
   const picked = pending.filter((r) => !leftOut.includes(r.checkout_id));
   const review = taskReview(rows);
   const said = reviewComments(rows);
@@ -340,6 +362,8 @@ export function PrPanel({
     ...(r.pr && r.pr.state !== "open" ? [{ row: r, pr: r.pr }] : []),
     ...r.past.map((pr) => ({ row: r, pr })),
   ]);
+  const earlierOpen =
+    showPast ?? earlier.some(({ row, pr }) => row.pin_read && row.pin?.number === pr.number);
   const entries = live.length + earlier.length;
   // What there is to hand an agent, per PR: counts from the sweep, so the
   // button can say so before anything is fetched.
@@ -466,17 +490,16 @@ export function PrPanel({
         )}
       </div>
       <ErrorMessage>{panel.error}</ErrorMessage>
+      <ErrorMessage>{readError}</ErrorMessage>
+      <ErrorMessage>{pinConflict.error}</ErrorMessage>
 
-      {review === "merged" && (
+      {taskCanFinish(rows) && (
         <div className="card row">
           <span className="dot" style={{ background: "var(--status-ok-ink)" }} />
           <span className="muted" style={{ flex: 1, lineHeight: 1.5 }}>
-            Every pull request has merged
-            {pending.length > 0
-              ? `, but ${pending.map((r) => r.repo).join(", ")} ${
-                  pending.length === 1 ? "has" : "have"
-                } work since. Finishing keeps ${pending.length === 1 ? "that branch" : "those branches"}.`
-              : "."}
+            {review === "merged"
+              ? "The work has merged."
+              : "A merge is verified and no associated pull requests are open. Finishing keeps branches with work that has not landed."}
           </span>
           <button className="ui-button ui-button-primary" onClick={() => setFinishing(true)}>
             Finish task…
@@ -484,13 +507,21 @@ export function PrPanel({
         </div>
       )}
 
-      {loaded && entries === 0 && (
+      {loaded && !readError && entries === 0 && (
         <div className="card">
           <div className="muted" style={{ lineHeight: 1.6, marginBottom: 12 }}>
-            Nothing has been opened from <code>{task.branch}</code> yet.
+            {rows.some((r) => r.error) ? (
+              "Layer could not check all repositories for pull requests."
+            ) : (
+              <>
+                Nothing has been opened from <code>{task.branch}</code> yet.
+              </>
+            )}
             {pending.length > 0
               ? ` ${pending.length} repositor${pending.length === 1 ? "y has" : "ies have"} changes ready.`
-              : " No repository has changes to open one with."}
+              : rows.some((r) => r.error)
+                ? ""
+                : " No repository has changes to open one with."}
           </div>
           <button
             className={`ui-button${pending.length > 0 ? " ui-button-primary" : ""}`}
@@ -543,7 +574,7 @@ export function PrPanel({
               <div className="spacer" />
               {pr.draft && <span className="ui-chip">draft</span>}
               {/* The action a draft waits for; going back is the quiet link under the title. */}
-              {pr.draft && (
+              {pr.draft && row.action_target && (
                 <button
                   className="ui-button"
                   title="Mark it ready for review on GitHub"
@@ -612,6 +643,10 @@ export function PrPanel({
               <CopyButton text={pr.url} label="Copy link" />
             </div>
 
+            {row.pin_read && row.pin?.number === pr.number && (
+              <PrPin key={pr.number} taskId={task.id} row={row} onStale={onPinConflict} />
+            )}
+
             {shown && (
               <>
                 <div className="muted" style={{ marginTop: 6 }}>
@@ -623,7 +658,7 @@ export function PrPanel({
                       {pr.comments + pr.review_comments === 1 ? "" : "s"}
                     </>
                   )}
-                  {!pr.draft && (
+                  {!pr.draft && row.action_target && (
                     <>
                       {" · "}
                       <button
@@ -640,9 +675,11 @@ export function PrPanel({
                 {pr.base !== row.base && (
                   <div className="row" style={{ marginTop: 10 }}>
                     <span className="ui-status ui-status-warn">targets {pr.base}</span>
-                    <button className="ui-button" onClick={() => void retarget(row)}>
-                      Move onto {row.base}
-                    </button>
+                    {row.action_target && (
+                      <button className="ui-button" onClick={() => void retarget(row)}>
+                        Move onto {row.base}
+                      </button>
+                    )}
                     {/*
                       The other way round. GitHub moves a PR itself when its
                       base is merged and deleted, and then the only offer
@@ -712,11 +749,11 @@ export function PrPanel({
           <div
             role="button"
             tabIndex={0}
-            aria-expanded={showPast}
+            aria-expanded={earlierOpen}
             className="row"
             style={{ cursor: "pointer" }}
-            onClick={() => setShowPast((v) => !v)}
-            onKeyDown={pressKeys(() => setShowPast((v) => !v))}
+            onClick={() => setShowPast(!earlierOpen)}
+            onKeyDown={pressKeys(() => setShowPast(!earlierOpen))}
           >
             <span className={`chev${showPast ? " open" : ""}`}>
               <ChevronIcon />
@@ -724,34 +761,39 @@ export function PrPanel({
             <h3 style={{ margin: 0 }}>Earlier pull requests</h3>
             <span className="muted">{earlier.length}</span>
           </div>
-          {showPast &&
+          {earlierOpen &&
             earlier.map(({ row, pr }) => (
-              <div key={`${row.checkout_id}:${pr.number}`} className="check">
-                <span className="dot" style={{ background: "var(--muted)" }} />
-                <span className="name">
-                  {row.repo} #{pr.number}
-                </span>
-                <span className="muted">
-                  {pr.merged
-                    ? `merged into ${pr.base}`
-                    : pr.state === "open"
-                      ? `still open against ${pr.base}`
-                      : "closed without merging"}
-                </span>
-                <button
-                  className="ui-button ui-icon-button"
-                  title="Open on GitHub"
-                  onClick={() => openPr(pr.url)}
-                >
-                  <ExternalIcon />
-                </button>
-                <CopyButton text={pr.url} label="Copy link" />
+              <div key={`${row.checkout_id}:${pr.number}`}>
+                <div className="check">
+                  <span className="dot" style={{ background: "var(--muted)" }} />
+                  <span className="name">
+                    {row.repo} #{pr.number}
+                  </span>
+                  <span className="muted">
+                    {pr.merged
+                      ? `merged into ${pr.base}`
+                      : pr.state === "open"
+                        ? `still open against ${pr.base}`
+                        : "closed without merging"}
+                  </span>
+                  <button
+                    className="ui-button ui-icon-button"
+                    title="Open on GitHub"
+                    onClick={() => openPr(pr.url)}
+                  >
+                    <ExternalIcon />
+                  </button>
+                  <CopyButton text={pr.url} label="Copy link" />
+                </div>
+                {row.pin_read && row.pin?.number === pr.number && (
+                  <PrPin taskId={task.id} row={row} onStale={onPinConflict} />
+                )}
               </div>
             ))}
         </div>
       )}
 
-      {loaded && <PrReadErrors rows={rows} />}
+      {loaded && <PrReadErrors taskId={task.id} rows={rows} onStale={onPinConflict} />}
 
       {feedback && <PrFeedback task={task} first={feedback} onClose={() => setFeedback(null)} />}
       {finishing && <FinishTask task={task} onClose={() => setFinishing(false)} />}

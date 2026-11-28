@@ -401,6 +401,8 @@ pub(super) mod tests {
             push_lease: None,
             point_before_update: None,
             last_head: None,
+            pr_pin: None,
+            pr_pin_revision: 0,
         });
     }
 
@@ -419,6 +421,7 @@ pub(super) mod tests {
             status_cache: Default::default(),
             prs_settled: Default::default(),
             prs_seen: Default::default(),
+            prs_read_at: Default::default(),
             news: Default::default(),
             messages: crate::messages::Messages::for_tests(root.join("messages.json")),
             notes: crate::notes::Notes::load(root),

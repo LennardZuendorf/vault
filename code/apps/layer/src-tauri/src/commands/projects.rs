@@ -281,6 +281,7 @@ pub(crate) fn remove_project_inner(state: &AppState, id: &str) -> Result<()> {
             .map(|t| t.id.clone())
             .collect();
         c.tasks.retain(|t| !dropped.contains(&t.id));
+        c.finish_receipts.retain(|task, _| !dropped.contains(task));
         (gone, dropped)
     })?;
     state.status_cache.lock().retain(|cid, _| !gone.contains(cid));

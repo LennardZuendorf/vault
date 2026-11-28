@@ -132,13 +132,6 @@ impl Tracker {
         }
     }
 
-    pub fn kind(&self) -> TrackerKind {
-        match self {
-            Self::Jira(..) => TrackerKind::Jira,
-            Self::Github(..) => TrackerKind::Github,
-        }
-    }
-
     pub async fn ticket(&self, key: &str) -> Result<Ticket> {
         match self {
             Self::Jira(client, _) => client.issue(key).await,
@@ -240,13 +233,6 @@ impl Tracker {
         match self {
             Self::Jira(..) => Ok(()),
             Self::Github(client, _) => github::take(client, ticket).await,
-        }
-    }
-
-    pub async fn comment(&self, key: &str, text: &str) -> Result<()> {
-        match self {
-            Self::Jira(client, _) => client.comment(key, text).await,
-            Self::Github(client, _) => client.comment_issue(&github::issue(key)?, text).await,
         }
     }
 }

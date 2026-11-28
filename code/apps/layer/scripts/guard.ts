@@ -778,6 +778,7 @@ for (const file of [
   "src-tauri/src/commands/finish_tool.rs",
   "src-tauri/src/commands/epic_tools.rs",
   "src-tauri/src/commands/henchman_tools.rs",
+  "src-tauri/src/commands/pr_pins.rs",
   "src-tauri/src/commands/tracker_tools.rs",
 ]) {
   const mcp = rust.get(file);

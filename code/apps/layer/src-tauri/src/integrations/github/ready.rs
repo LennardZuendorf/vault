@@ -6,22 +6,21 @@
 
 use serde_json::{json, Value};
 
-use super::GitHub;
+use super::{GitHub, PullRequest};
 use crate::error::{Error, Result};
 
 impl GitHub {
-    /// Make pull request `number` a draft, or ready for review. Returns
-    /// whether it is a draft now.
-    pub async fn set_pull_draft(&self, owner: &str, repo: &str, number: u64, draft: bool) -> Result<bool> {
-        const ID: &str = "query($owner: String!, $name: String!, $number: Int!) {
-          repository(owner: $owner, name: $name) { pullRequest(number: $number) { id } }
-        }";
-        let v = self.graphql(ID, json!({ "owner": owner, "name": repo, "number": number })).await?;
-        let id = answer(&v, "/data/repository/pullRequest/id")?
-            .as_str()
-            .ok_or_else(|| Error::Other(format!("GitHub has no pull request #{number} in {owner}/{repo}")))?
-            .to_string();
-        let v = self.graphql(mutation(draft), json!({ "id": id })).await?;
+    /// REST returns the GraphQL node ID alongside the verified database ID.
+    /// Do not look up the number again in a separate, unchecked query.
+    pub(crate) async fn pull_edit_node(&self, owner: &str, repo: &str, pr: &PullRequest) -> Result<String> {
+        let v = self.read_edit_target(owner, repo, pr).await?;
+        v.get("node_id").and_then(Value::as_str).filter(|id| !id.is_empty()).map(str::to_owned).ok_or_else(|| {
+            Error::Other("GitHub did not identify the selected pull request. Nothing was edited.".into())
+        })
+    }
+
+    pub(crate) async fn set_pull_draft(&self, node: &str, draft: bool) -> Result<bool> {
+        let v = self.graphql(mutation(draft), json!({ "id": node })).await?;
         let field = if draft { "convertPullRequestToDraft" } else { "markPullRequestReadyForReview" };
         Ok(answer(&v, &format!("/data/{field}/pullRequest/isDraft"))?.as_bool().unwrap_or(draft))
     }

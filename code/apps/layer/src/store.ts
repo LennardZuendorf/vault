@@ -4,8 +4,11 @@ import { api, errMessage, failureText } from "./lib/api";
 import { CHAT_TASK_ID } from "./lib/derive";
 import type { EpicOf } from "./lib/grouping";
 import { forgetAllBut, read, readOneOf, write } from "./lib/persist";
+import { invalidatePrRows, prConnectionScope } from "./lib/pr-connection";
+import { issueRefresher } from "./lib/refresh-tickets";
 import { keep, only, reuse, sameJson } from "./lib/same";
 import { useSpecs } from "./lib/specs";
+import { sameTicketUrl } from "./lib/tracker";
 import type {
   AgentStatus,
   CheckoutPr,
@@ -19,6 +22,7 @@ import type {
   ReviewQueue,
   Settings,
   Target,
+  TaskTicketLinked,
   TaskView,
   TicketMove,
   WaitingPane,
@@ -95,6 +99,8 @@ export interface State {
   reviewQueueError: string | null;
   settings: Settings | null;
   issues: Ticket[];
+  /** Status and any context warning for a newly linked ticket, separate from Mine. */
+  linkedTickets: Record<string, TaskTicketLinked>;
   issueTypes: TicketType[];
   /** The site's priorities, highest first, for sorting by them (TKT-13). */
   priorities: string[];
@@ -171,6 +177,7 @@ export interface State {
    * changed, and the call already in flight was asked before it did.
    */
   refreshTasks: (opts?: { poll?: boolean }) => Promise<void>;
+  taskTicketLinked: (link: TaskTicketLinked) => Promise<void>;
   refreshPanes: (opts?: { poll?: boolean }) => Promise<void>;
   refreshWaiting: () => Promise<void>;
   refreshPrs: () => Promise<void>;
@@ -179,8 +186,8 @@ export interface State {
   /** The message center's log (MSG-1), newest first. */
   messages: Message[];
   refreshMessages: () => Promise<void>;
-  /** Replace one task's PR rows, for a panel that fetched them itself. */
-  setTaskPrs: (taskId: string, rows: CheckoutPr[]) => void;
+  /** Refresh one task without putting older rows back over a newer read. */
+  refreshTaskPrs: (taskId: string) => Promise<boolean>;
   /** Notes on the Diff tab, by task id (DIFF-6). */
   notes: Record<string, ReviewNote[]>;
   addNote: (taskId: string, note: Omit<ReviewNote, "id">) => void;
@@ -307,8 +314,9 @@ function sameMessages(a: Message[], b: Message[]): boolean {
  */
 /** How long the splash waits for the first lists before the window opens anyway. */
 const BOOT_WAIT = 1500;
-
 const prsFetchedAt = new Map<string, number>();
+let prReadSequence = 0;
+let prConnectionChangedAt = 0;
 /** "ACME:review": a project and stage already told to choose a status, this run. */
 const askedFlow = new Set<string>();
 
@@ -393,6 +401,7 @@ export const useStore = create<State>((set, get) => {
     agents: [],
     settings: null,
     issues: [],
+    linkedTickets: {},
     issueTypes: [],
     priorities: [],
     issuesLoading: false,
@@ -466,28 +475,23 @@ export const useStore = create<State>((set, get) => {
       // of every worktree: that is the slow part of boot, and Tickets used to
       // sit black until it finished. Kick both off together.
       const settingsP = get().refreshSettings();
-      const focus = get().selectedTask;
       const coreP = Promise.all([
         api.listProjects(),
-        api.listTasks(focus),
         api.listPanes(),
         api.listAgents(),
         api.cursorIdeInstalled().catch(() => false),
-      ]).then(([projects, tasks, panes, agents, cursorIde]) => {
+        // Share the task refresh slot so this snapshot cannot land after a post-link read.
+        get().refreshTasks(),
+      ]).then(([projects, panes, agents, cursorIde]) => {
         // Through `reuse`, as the polls do: it runs after every Sync, Clean up
         // and Add repos, and a wholesale swap redrew every task row, pane and
         // agent card even when the operation changed none of them.
-        set((s) => {
-          const kept = reuse(s.tasks, tasks, (t) => t.id);
-          return {
-            projects: reuse(s.projects, projects, (p) => p.id),
-            tasks: kept,
-            panes: reuse(s.panes, panes, (p) => p.id, samePane),
-            agents: reuse(s.agents, agents, (a) => a.id),
-            cursorIde,
-            selectedTask: stillThere(kept, s.selectedTask),
-          };
-        });
+        set((s) => ({
+          projects: reuse(s.projects, projects, (p) => p.id),
+          panes: reuse(s.panes, panes, (p) => p.id, samePane),
+          agents: reuse(s.agents, agents, (a) => a.id),
+          cursorIde,
+        }));
         watchOk();
       });
       // The splash waits for both, but no longer than BOOT_WAIT: a slow git
@@ -541,6 +545,7 @@ export const useStore = create<State>((set, get) => {
               // Its Diff notes likewise, kept for as long as the app ran.
               prs: only(s.prs, live),
               notes: only(s.notes, live),
+              linkedTickets: only(s.linkedTickets, live),
             };
           });
           for (const id of prsFetchedAt.keys()) if (!live.has(id)) prsFetchedAt.delete(id);
@@ -559,6 +564,24 @@ export const useStore = create<State>((set, get) => {
           throw e;
         }
       }),
+    taskTicketLinked: async (link) => {
+      // An older poll may not know the task exists. Install the cache only
+      // after the queued read confirms the saved link, not before it prunes.
+      await get().refreshTasks();
+      set((s) => {
+        const task = s.tasks.find((t) => t.id === link.task_id);
+        if (task?.issue_key !== link.key || !sameTicketUrl(task.issue_url, link.url)) return s;
+        const prior = s.linkedTickets[link.task_id];
+        const saved =
+          prior?.key === link.key && sameTicketUrl(prior.url, link.url)
+            ? {
+                ...prior,
+                context_warning: link.context_warning ?? prior.context_warning,
+              }
+            : link;
+        return { linkedTickets: { ...s.linkedTickets, [link.task_id]: saved } };
+      });
+    },
     refreshPanes: (opts) =>
       coalesce(panesSlot, opts?.poll ?? false, async () => {
         try {
@@ -593,13 +616,17 @@ export const useStore = create<State>((set, get) => {
         return;
       }
       sweeping = true;
-      const began = Date.now();
+      const began = ++prReadSequence;
       try {
         const all = await api.githubAllPrs();
-        // Merged, not replaced: a task the sweep could not read is left out of
-        // its result, and dropping it here would blank a panel that had just
-        // fetched those rows for itself. Nor over rows fetched after it began.
-        const fresh = all.filter((t) => (prsFetchedAt.get(t.task_id) ?? 0) < began);
+        // Replace rows the sweep returned, including incomplete credential reads.
+        // Tasks not due and rows fetched after it began keep their current data.
+        const fresh = all.filter(
+          (t) =>
+            prConnectionChangedAt < began &&
+            (prsFetchedAt.get(t.task_id) ?? 0) < began &&
+            get().tasks.some((task) => task.id === t.task_id),
+        );
         for (const t of fresh) prsFetchedAt.set(t.task_id, began);
         set((s) => {
           const changed = fresh.filter((t) => !sameJson(s.prs[t.task_id], t.rows));
@@ -608,9 +635,9 @@ export const useStore = create<State>((set, get) => {
             prs: { ...s.prs, ...Object.fromEntries(changed.map((t) => [t.task_id, t.rows])) },
           };
         });
-        const moves = all.map((t) => t.ticket).filter((m): m is TicketMove => m !== null);
+        const moves = fresh.map((t) => t.ticket).filter((m): m is TicketMove => m !== null);
         reportTickets(moves, get().toast, get().fail);
-        if (moves.some((m) => m.moved_to)) void get().refreshIssues({ quiet: true });
+        if (all.some((t) => t.ticket?.moved_to)) void get().refreshIssues({ quiet: true });
       } catch {
         // Left as it was: stale rows beat empty ones.
       } finally {
@@ -639,17 +666,35 @@ export const useStore = create<State>((set, get) => {
         },
       })),
 
-    setTaskPrs: (taskId, rows) => {
-      prsFetchedAt.set(taskId, Date.now());
-      set((s) => (sameJson(s.prs[taskId], rows) ? s : { prs: { ...s.prs, [taskId]: rows } }));
+    refreshTaskPrs: async (taskId) => {
+      const began = ++prReadSequence;
+      prsFetchedAt.set(taskId, began);
+      const current = () =>
+        prConnectionChangedAt < began &&
+        prsFetchedAt.get(taskId) === began &&
+        get().tasks.some((task) => task.id === taskId);
+      try {
+        const rows = await api.githubTaskPrs(taskId);
+        if (current()) {
+          set((s) => (sameJson(s.prs[taskId], rows) ? s : { prs: { ...s.prs, [taskId]: rows } }));
+          return true;
+        }
+      } catch (error) {
+        if (current()) throw error;
+      }
+      return false;
     },
 
     refreshSettings: async () => {
-      const before = get().settings;
-      // Kept when unchanged: this runs after every preference toggle, and a new
-      // object redrew every view that reads the settings, about a dozen.
       const settings = await api.getSettings();
-      set((s) => ({ settings: keep(s.settings, settings) }));
+      const before = get().settings;
+      const scopeChanged = prConnectionScope(before) !== prConnectionScope(settings);
+      if (scopeChanged) prConnectionChangedAt = ++prReadSequence;
+      set((s) =>
+        scopeChanged
+          ? { settings, prs: invalidatePrRows(s.prs) }
+          : { settings: keep(s.settings, settings) },
+      );
       // Only until the first list lands: someone with nothing assigned has an
       // empty list for good, and every settings change re-fetched 500 issues.
       if (settings.tracker != null && !get().issuesLoaded && !get().issuesLoading) {
@@ -666,12 +711,8 @@ export const useStore = create<State>((set, get) => {
           issuesLoaded: false,
         });
       }
-      // Only when GitHub itself changed. Every slider moved and every update
-      // from base refreshed settings, and each ran a search — which GitHub
-      // allows thirty of a minute.
       const githubChanged =
-        before?.github_connected !== settings.github_connected ||
-        JSON.stringify(before?.github) !== JSON.stringify(settings.github);
+        scopeChanged || before?.github?.review_team !== settings.github?.review_team;
       if (settings.github_connected) {
         if (githubChanged || get().reviewQueue === null)
           void get().refreshReviewQueue({ quiet: true });
@@ -709,36 +750,7 @@ export const useStore = create<State>((set, get) => {
         if (!sameMessages(get().messages, messages)) set({ messages });
       }),
 
-    refreshIssues: async (opts) => {
-      if (get().settings?.tracker == null) return;
-      // A timer tick should not flash the spinner over a list already on screen.
-      const spin = !opts?.quiet || !get().issuesLoaded;
-      if (spin) set({ issuesLoading: true });
-      try {
-        const [page, issueTypes, priorities] = await Promise.all([
-          api.ticketsMine(),
-          // Types rarely change and are cached in the backend; a failure here
-          // must not stop the issues themselves from showing.
-          api.ticketTypes().catch(() => get().issueTypes),
-          // Asked once per connection, as rarely changed. Without them a sort
-          // by priority keeps the order it had.
-          get().priorities.length > 0 ? get().priorities : api.ticketPriorities().catch(() => []),
-        ]);
-        // As for reviews: an answer from a site disconnected meanwhile is not kept.
-        if (get().settings?.tracker == null) return;
-        set((s) => ({
-          issues: reuse(s.issues, page.issues, (i) => i.key),
-          issuesTruncated: page.more,
-          issueTypes: keep(s.issueTypes, issueTypes),
-          priorities: keep(s.priorities, priorities),
-          issuesLoaded: true,
-        }));
-      } catch (e) {
-        if (!opts?.quiet) get().fail(e);
-      } finally {
-        if (spin) set({ issuesLoading: false });
-      }
-    },
+    refreshIssues: issueRefresher(set, get),
   };
 });
 

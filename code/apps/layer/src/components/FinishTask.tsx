@@ -16,7 +16,7 @@ import { ErrorMessage, Field, Modal, useFailure } from "./ui";
  */
 export function FinishTask({ task, onClose }: { task: TaskView; onClose: () => void }) {
   // Only Jira has transitions to offer; a GitHub issue closes with its pull request (TKT-18).
-  const jiraConnected = useStore((s) => s.settings?.tracker === "jira");
+  const jira = useStore((s) => (s.settings?.tracker === "jira" ? s.settings.jira : null));
   const paneCount = useStore((s) => s.panes.filter((p) => p.task_id === task.id).length);
   const rows = useStore((s) => s.prs[task.id]);
   const selected = useStore((s) => s.selectedTask);
@@ -29,23 +29,27 @@ export function FinishTask({ task, onClose }: { task: TaskView; onClose: () => v
   const fail = useStore((s) => s.fail);
   const failure = useFailure();
 
-  const key = jiraConnected ? task.issue_key : null;
+  const key = jira ? task.issue_key : null;
   const [done, setDone] = useState<JiraTransition[] | null>(key ? null : []);
   const [ticketError, setTicketError] = useState<string | null>(null);
   const [transition, setTransition] = useState("");
+  const [transitionScope, setTransitionScope] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    setDone(key ? null : []);
+    setTicketError(null);
+    setTransition("");
+    setTransitionScope(null);
     if (!key) return;
     let stop = false;
     api
-      .jiraTransitions(key)
-      .then((all) => {
+      .finishTaskTransitions(task.id)
+      .then((choice) => {
         if (stop) return;
-        // By category, never by name: "Done", "Closed" and "Erledigt" are all
-        // the same place on some board.
-        const to = all.filter((t) => t.to_category === "done");
+        const to = choice?.transitions ?? [];
         setDone(to);
+        setTransitionScope(choice?.scope ?? null);
         // Picked for you only when it is known: the status chosen for merged
         // work in its project (TKT-8), or the only done one. Won't Do,
         // Duplicate and Cancelled are done too, and first in the list closed
@@ -60,17 +64,12 @@ export function FinishTask({ task, onClose }: { task: TaskView; onClose: () => v
     return () => {
       stop = true;
     };
-  }, [key]);
+  }, [jira, key, task.id, task.issue_url]);
 
   // Work the merged PRs do not cover: committed after one landed, or in a
   // repo that never had one. Its branch is kept, and it is worth saying so
   // before rather than after.
-  const uncovered = (rows ?? []).filter((r) => r.changed > 0);
-  const landed = Object.fromEntries(
-    (rows ?? [])
-      .filter((r) => r.pr?.merged && r.pr.head_sha)
-      .map((r) => [r.checkout_id, r.pr!.head_sha]),
-  );
+  const uncovered = (rows ?? []).filter((r) => !r.branch_covered || r.changed > 0);
   const totals = taskTotals(task);
   const edited = totals.dirty + totals.staged;
   const repos = task.checkouts.map((c) => c.project_name);
@@ -79,7 +78,7 @@ export function FinishTask({ task, onClose }: { task: TaskView; onClose: () => v
     setBusy(true);
     failure.clear();
     try {
-      const out = await api.finishTask(task.id, transition || null, landed);
+      const out = await api.finishTask(task.id, transition || null, transitionScope);
       await Promise.all([refreshTasks(), refreshPanes()]);
       const stuck = out.repos.filter((r) => !r.ok);
       // The task is kept, so the dialog is too: the reason stays in it, and
@@ -132,7 +131,8 @@ export function FinishTask({ task, onClose }: { task: TaskView; onClose: () => v
         className="muted"
         style={{ marginTop: 0, lineHeight: 1.55, fontSize: "var(--type-ui-small-size)" }}
       >
-        Every pull request for <code>{task.branch}</code> has merged. This puts the task away:
+        A merge is verified for <code>{task.branch}</code> and no associated pull requests are open.
+        This puts the task away:
       </p>
       <ul className="finish-list">
         {paneCount > 0 && (
@@ -145,8 +145,8 @@ export function FinishTask({ task, onClose }: { task: TaskView; onClose: () => v
           folder.
         </li>
         <li>
-          Deletes the local branch <code>{task.branch}</code> in each repository. The pull requests
-          and what they landed stay on GitHub.
+          Deletes the local branch <code>{task.branch}</code> only where its work has landed. The
+          pull requests and what they landed stay on GitHub.
         </li>
       </ul>
 
@@ -172,7 +172,7 @@ export function FinishTask({ task, onClose }: { task: TaskView; onClose: () => v
             ticketError
               ? failureText(`Couldn't ask Jira where ${key} can go: ${ticketError}`)
               : done && done.length === 0
-                ? `Jira offers no move from here to a done status, so ${key} stays as it is.`
+                ? `${key} stays as it is. No done status is available on its linked Jira connection.`
                 : done && done.length > 1 && !transition
                   ? `Jira has ${done.length} ways to close ${key} — pick the one that says it landed.`
                   : "Moved only once the worktrees are gone."

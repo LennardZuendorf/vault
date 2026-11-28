@@ -6,7 +6,52 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{AppConfig, TrackerKind};
+use super::{AppConfig, ConfigStore, TrackerKind};
+use crate::{
+    error::{Error, Result},
+    secrets,
+};
+
+impl ConfigStore {
+    pub(crate) fn tracker_credential_generation(&self, kind: TrackerKind) -> parking_lot::MutexGuard<'_, u64> {
+        self.tracker_credentials[match kind {
+            TrackerKind::Jira => 0,
+            TrackerKind::Github => 1,
+        }]
+        .lock()
+    }
+
+    pub(crate) fn update_jira_credentials(
+        &self,
+        token: Option<&str>,
+        change: impl FnOnce(&mut AppConfig),
+    ) -> Result<()> {
+        let mut generation = self.tracker_credential_generation(TrackerKind::Jira);
+        match token {
+            Some(value) => secrets::set(secrets::JIRA, value)?,
+            None => secrets::delete(secrets::JIRA)?,
+        }
+        // The old client is stale even if saving config fails after changing
+        // the keychain.
+        *generation = generation.wrapping_add(1);
+        self.update(change)
+    }
+
+    pub(crate) fn update_github_credentials(
+        &self,
+        expected_generation: Option<u64>,
+        credential: Option<(&str, &str)>,
+        change: impl FnOnce(&mut AppConfig),
+    ) -> Result<()> {
+        let mut generation = self.tracker_credential_generation(TrackerKind::Github);
+        if expected_generation.is_some_and(|expected| expected != *generation) {
+            return Err(Error::Other("The GitHub connection changed during verification. Try again.".into()));
+        }
+        secrets::set_github_credential(credential)?;
+        *generation = generation.wrapping_add(1);
+        self.update(change)
+    }
+}
 
 impl AppConfig {
     /// Where this Mac's tickets come from: the workspace's choice, or Jira

@@ -10,7 +10,7 @@ import { emit } from "@tauri-apps/api/event";
  *
  * URL parameters set the scene before the app boots:
  *
- *   ?scenario=busy|empty|unlinked|tickets|reviews   which world (default busy)
+ *   ?scenario=busy|empty|unlinked|tickets|reviews|pins   which world (default busy)
  *   &view=work|tickets|reviews|chat|runs|repos
  *   &task=t-login          the selected task (none: the All agents overview)
  *   &tab=spec|terminals|diff|pr
@@ -38,8 +38,10 @@ import { sortTickets, type TicketSort } from "../lib/ticket-sort";
 import type {
   BrowserView,
   Catchup,
+  CheckoutPr,
   Cleaned,
   FlowStatus,
+  LinkedTaskTicket,
   LogSource,
   Message,
   PaneInfo,
@@ -48,8 +50,10 @@ import type {
   RepoUpdate,
   StartTo,
   Synced,
+  TaskTicketLinked,
   TaskView,
 } from "../lib/types";
+import { PR_PIN_REVISION_CHANGED } from "../lib/types-github";
 import type { Process } from "../lib/types-henchman";
 import { acpAnswers, seedAcp, seedHenchman } from "./acp";
 import { epicAnswers, seedEpic } from "./epic";
@@ -74,6 +78,18 @@ const world = (scenarios.get(params.get("scenario") ?? "busy") ?? SCENARIOS.busy
 const calls: { cmd: string; args: Args }[] = [];
 /** Tasks whose offered screenshots were added or dismissed (PR-13). */
 const droppedOffers = new Set<string>();
+
+function offeredPr(taskId: string) {
+  const row = world.prs
+    .find((entry) => entry.task_id === taskId)
+    ?.rows.find((row) => row.pr?.state === "open" && row.action_target);
+  if (!row?.pr || !row.action_target) return null;
+  return {
+    id: `fixture-offer:${taskId}:${row.action_target}`,
+    number: row.pr.number,
+    repo: row.repo,
+  };
+}
 const theme = params.get("theme");
 if (theme) world.settings.ui.theme = theme as typeof world.settings.ui.theme;
 if (params.get("role") === "member" && world.settings.workspace)
@@ -104,6 +120,15 @@ for (const p of world.panes) {
 const overrides = new Map<string, Answer>();
 /** A site's own names, highest first, as Jira lists them. */
 const PRIORITIES = ["Highest", "High", "Medium", "Low", "Lowest"];
+
+function mockTicketScope(): string {
+  const s = world.settings;
+  return JSON.stringify(
+    s.tracker === "github"
+      ? [s.tracker, s.github?.api_url, s.github?.web_url]
+      : [s.tracker, s.jira?.base_url, s.jira?.email],
+  );
+}
 
 /** Base64 of the UTF-8 bytes, as the backend sends it, and how many bytes that was. */
 /** A repository not on this Mac becomes one here, as the workspace has it. */
@@ -916,37 +941,86 @@ const answer: Record<string, Answer> = {
   },
   // Copies as well, for the same reason: a status moved in place was kept.
   github_all_prs: () => structuredClone(world.prs),
-  github_task_prs: (a) =>
-    structuredClone(world.prs.find((p) => p.task_id === a.taskId)?.rows ?? []),
+  github_task_prs: (a): CheckoutPr[] => {
+    const rows = structuredClone(world.prs.find((p) => p.task_id === a.taskId)?.rows ?? []);
+    if (world.settings.github_connected) return rows;
+    return rows.map(({ checkout_id, repo, base, pin, pin_revision }) => ({
+      checkout_id,
+      repo,
+      base,
+      pin: pin && { ...pin, url: "" },
+      pin_revision,
+      pin_read: false,
+      pr: null,
+      past: [],
+      checks: [],
+      reviews: [],
+      verdict: "none",
+      changed: 0,
+      to_reply: 0,
+      error: "GitHub is not connected. Connect it to read pull requests.",
+      branch_covered: false,
+      detached_unlanded: false,
+      covered_merge: false,
+      action_target: null,
+    }));
+  },
+  unpin_task_pr: (a) => {
+    const row = world.prs
+      .find((p) => p.task_id === a.taskId)
+      ?.rows.find((r) => r.checkout_id === a.checkoutId);
+    if (!row) throw new Error("The checkout is not in this task.");
+    if (row.pin_revision !== a.pinRevision) throw PR_PIN_REVISION_CHANGED;
+    if (row.pin) {
+      row.pin = null;
+      row.pin_revision = (BigInt(row.pin_revision) + 1n).toString();
+      if (!row.pin_read) row.error = null;
+      row.pin_read = false;
+      void emit("task:pr-pin-changed", a.taskId);
+    }
+    return null;
+  },
   github_set_pr_draft: (a) => {
-    for (const r of world.prs.flatMap((p) => p.rows))
-      if (r.pr && r.checkout_id === a.checkoutId && r.pr.number === a.number)
-        r.pr.draft = Boolean(a.draft);
+    const row = world.prs.flatMap((p) => p.rows).find((r) => r.checkout_id === a.checkoutId);
+    if (row?.pr?.state !== "open" || !row.action_target || row.action_target !== a.target)
+      throw new Error("The selected pull request changed. Refresh and review the action again.");
+    row.pr.draft = Boolean(a.draft);
     return Boolean(a.draft);
   },
-  // Every task's agent has offered two screenshots until one is added or dismissed (PR-13).
+  github_retarget_pr: (a) => {
+    const row = world.prs.flatMap((p) => p.rows).find((r) => r.checkout_id === a.checkoutId);
+    if (!row?.pr || !row.action_target || row.action_target !== a.target)
+      throw new Error("The selected pull request changed. Refresh and review the action again.");
+    row.pr.base = row.base;
+    return `#${row.pr.number} now targets ${row.base}`;
+  },
+  // The agent's screenshots belong to the open PR in its offer (PR-13).
   pr_image_offer: (a) => {
-    if (droppedOffers.has(String(a.taskId))) return null;
+    const offer = offeredPr(String(a.taskId));
+    if (!offer || droppedOffers.has(offer.id)) return null;
     const shot = (fill: string, text: string) =>
       `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200"><rect width="320" height="200" fill="${fill}"/><text x="20" y="40" font-family="sans-serif" font-size="20" fill="#888">${text}</text></svg>`)}`;
     return {
-      repo: "api",
+      ...offer,
       images: [
         {
           path: "/tmp/night.png",
           caption: "Night",
-          repo: "api",
+          repo: offer.repo,
           preview: shot("#15171c", "Night"),
         },
-        { path: "/tmp/day.png", caption: "Day", repo: "api", preview: shot("#f4f1ea", "Day") },
+        { path: "/tmp/day.png", caption: "Day", repo: offer.repo, preview: shot("#f4f1ea", "Day") },
       ],
     };
   },
-  show_pr_images: () => [
-    { checkout_id: "c1", repo: "api", ok: true, detail: "2 screenshots added" },
-  ],
+  show_pr_images: (a) => {
+    const offer = offeredPr(String(a.taskId));
+    if (a.offerId != null && (!offer || a.offerId !== offer.id || droppedOffers.has(offer.id)))
+      throw new Error("This screenshot offer changed.");
+    return [{ checkout_id: "c1", repo: "api", ok: true, detail: "2 screenshots added" }];
+  },
   drop_pr_image_offer: (a) => {
-    droppedOffers.add(String(a.taskId));
+    if (typeof a.offerId === "string") droppedOffers.add(a.offerId);
     return null;
   },
   github_review_queue: () => structuredClone(world.reviews),
@@ -955,8 +1029,11 @@ const answer: Record<string, Answer> = {
   set_checkout_base: (a) => {
     const c = world.tasks.flatMap((t) => t.checkouts).find((x) => x.id === a.checkoutId);
     if (c) c.base = String(a.base);
-    for (const r of world.prs.flatMap((p) => p.rows))
-      if (r.checkout_id === a.checkoutId) r.base = String(a.base);
+    for (const r of world.prs.flatMap((p) => p.rows)) {
+      if (r.checkout_id !== a.checkoutId) continue;
+      r.base = String(a.base);
+      if (r.action_target) r.action_target += `:${r.base}`;
+    }
     return null;
   },
 
@@ -994,6 +1071,16 @@ const answer: Record<string, Answer> = {
     return structuredClone(made);
   },
   jira_transitions: () => world.transitions,
+  finish_task_transitions: (a) => {
+    const task = world.tasks.find((t) => t.id === a.taskId);
+    const jira = world.settings.tracker === "jira" ? world.settings.jira : null;
+    if (!jira || !task?.issue_key || task.issue_url !== `${jira.base_url}/browse/${task.issue_key}`)
+      return null;
+    return {
+      scope: `fixture-finish-ticket:${task.id}:${task.issue_url}`,
+      transitions: world.transitions.filter((t) => t.to_category === "done"),
+    };
+  },
   jira_transition: (a) => {
     const t = world.transitions.find((x) => x.id === a.transitionId);
     const i = world.issues.find((x) => x.key === a.key);
@@ -1028,11 +1115,51 @@ const answer: Record<string, Answer> = {
     return [];
   },
   ticket_required_fields: () => world.requiredFields,
-  // Jira orders a search (TKT-13); here the list is sorted as Jira would.
-  tickets_find: (a) => ({
-    issues: sortTickets(world.issues, a.order as TicketSort, PRIORITIES),
-    more: false,
-  }),
+  tickets_find: (a) => {
+    const text = typeof a.text === "string" ? a.text.trim().toLowerCase() : "";
+    const pool = a.whose === "anyone" ? [...world.issues, ...world.elsewhere] : world.elsewhere;
+    const types = a.types as string[] | undefined;
+    const matching = pool.filter(
+      (i) =>
+        (a.whose !== "unassigned" || !i.assignee) &&
+        (a.includeDone || i.status_category !== "done") &&
+        (!types?.length || types.includes(i.issue_type)) &&
+        (i.key.toLowerCase().includes(text) || i.summary.toLowerCase().includes(text)),
+    );
+    return {
+      issues: sortTickets(matching, (a.order || "updated") as TicketSort, PRIORITIES),
+      more: false,
+      ...(a.forLink ? { tracker_scope: mockTicketScope() } : {}),
+    };
+  },
+  link_task_ticket: (a): LinkedTaskTicket => {
+    const task = world.tasks.find((t) => t.id === a.taskId);
+    if (!world.settings.tracker) throw "Ticket tracker is not configured.";
+    if (a.trackerScope !== mockTicketScope())
+      throw "The tracker connection changed. Search for the ticket again.";
+    if (!task) throw "Task not found.";
+    if (task.epic || task.review || task.sub_task)
+      throw "Only regular Work tasks can link a ticket.";
+    if (task.issue_key || task.issue_url) throw "This task already has a ticket.";
+    const key = String(a.key).trim().toLowerCase();
+    const ticket = [...world.issues, ...world.elsewhere].find((i) => i.key.toLowerCase() === key);
+    if (!ticket) throw "That ticket was not found.";
+    const owner = world.tasks.find((t) => t.issue_key === ticket.key);
+    if (owner) throw `${ticket.key} is already linked to the task "${owner.name}".`;
+    task.issue_key = ticket.key;
+    task.issue_url = ticket.url;
+    const link: TaskTicketLinked = {
+      task_id: task.id,
+      key: ticket.key,
+      url: ticket.url,
+      status: ticket.status,
+      status_category: ticket.status_category,
+      context_warning: null,
+    };
+    void emit("task:ticket-linked", link);
+    const { checkouts: _checkouts, pane_count: _paneCount, ...saved } = task;
+    return { task: structuredClone(saved), ticket: structuredClone(ticket), context_warning: null };
+  },
   ticket_priorities: () => (world.settings.tracker === "github" ? [] : PRIORITIES),
   set_tracker: (a) => {
     world.settings.tracker_chosen = a.uses as typeof world.settings.tracker;

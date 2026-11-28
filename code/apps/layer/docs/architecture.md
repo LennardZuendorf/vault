@@ -228,6 +228,8 @@ for, and the reverse, and that each is in this table.
 | `pr:draft` | `{ task_id, text }` | a chunk of a drafted PR description | `PrPanel.tsx` |
 | `pr:images-offered` | task id | an agent offered screenshots for a PR with `pr_images` (PR-13) | `PrImageOffer.tsx` |
 | `issue:draft` | `{ request_id, text }` | a chunk of an improved ticket description | `tickets/OptimizeDescription.tsx` |
+| `task:ticket-linked` | `{ task_id, key, url, status, status_category, context_warning }` | Work or an agent saved a ticket link, even if refreshing the task's context failed (TASK-20, TKT-22) | `Watchers.tsx` → queue a fresh task read, then cache the confirmed ticket for Work, not Mine |
+| `task:pr-pin-changed` | task id | A PR pin was durably saved, replaced or removed (PR-17) | `Watchers.tsx` → refresh that task's PR rows in read order |
 | `spec:draft` | `{ request_id, part, checkout_id, text }` | one file's draft so far, whole each time: the task's requirements or design (`checkout_id` null), or one repository's tasks (SPEC-5); the requirements as Apply answers rewrites them (SPEC-20); or the merge of specs from before (SPEC-25) | `Watchers.tsx` → `useSpecs.chunk`, into that editor |
 | `spec:changed` | task id | an agent ticked a step of the task's spec (`spec_task`, SPEC-13) or proposed a change (`spec_propose`, SPEC-24) | `Watchers.tsx` → `useSpecs.changed`, which reads it again if it has been read; `pty:activity` for an agent that stopped does the same, to show a spec file it changed outside the app (SPEC-22) |
 | `system-notify-click` | a `Target` (`target.rs`) | a banner was clicked | `Watchers.tsx` → `goTo`, which opens what it is about (NOTE-4) |
@@ -406,9 +408,11 @@ app's config folder and returns its extra arguments and environment.
 - **The MCP server** (`mcp.rs`) is axum on `127.0.0.1:0` with a fresh
   bearer token per run. It speaks JSON-RPC over `POST /mcp`. Tools are
   defined in `tools()` and handled in `call()`. Those in `DANGER` need
-  `confirm: true`. The tracker's tools are listed only for the workspace's
-  tracker (`commands/tracker_tools.rs`, TKT-20). The endpoint's `hook_token` is separate and accepted
-  only by `/hook`.
+  `confirm: true`. That includes `task_link_ticket` and `task_link_pr`:
+  the agent sets it only after the user agrees. The tracker's own tools
+  are listed only for the workspace's tracker (`commands/tracker_tools.rs`,
+  TKT-20). The endpoint's `hook_token` is separate and accepted only by
+  `/hook`.
 - **Context files.** `write_task_context` (`commands/task_context.rs`)
   writes the same text as `AGENTS.md` and `CLAUDE.md` into a task folder:
   the ticket (from the `TICKET.md` saved beside it, PANE-13), the layout,
@@ -581,6 +585,83 @@ push.
 - **Slack** notifications post with the Slack bot's token (BOT-15). Posts are gated by
   `slack_allows` in the backend and clipped to Slack's 3000-character
   section limit.
+
+### Linking a ticket to a task
+
+Work reuses `tickets_find` with `forLink` to receive a backend tracker scope.
+It is tied to the connection and credential generation, and carries no
+credentials. `link_task_ticket(taskId, key, trackerScope)` (Tauri, through `src/lib/api.ts`) and
+`task_link_ticket(task_id, key, confirm)` (MCP) share one operation in
+`commands/tickets.rs`. The picker scope must match before resolving; MCP
+starts with an explicit key on the connected tracker. The operation resolves the key through `Tracker::ticket`
+before locking the config. A single `ConfigStore` update rechecks the
+tracker, the task's eligibility and ownership of the canonical key, then
+saves `Task.issue_key` and `Task.issue_url`. It does not call Start work.
+
+`commands/task_context.rs` writes `TICKET.md` and regenerates the agent
+context in the task folder on the blocking helper. Both entry points
+return `{ task, ticket, context_warning }`: the updated `Task`, the
+resolved `Ticket` and a nullable context-write warning. A write failure
+after the config save does not roll back the link. The frontend refreshes
+the task after either entry point. Only a confirmed key and URL get a
+cached badge. The Work header reads status only for the active connection,
+and ticket refreshes read linked tickets outside Mine by key. Only later sweeps run the existing ticket workflow;
+linking itself makes no remote changes (TKT-22).
+
+### Reading a checkout's pull requests
+
+`commands/pr_branches.rs` combines direct lookups on the task branch and
+the current topic branch with bounded local evidence. The Git helper in
+`git/` reads the checkout's own `HEAD` reflog off the async runtime: the
+last 100 entries, up to three distinct departed topic branches from the
+task's lifetime. The tip immediately before switching away must show work
+past the branch point. A historical PR matches only when both its branch
+and head SHA match that evidence (PR-14).
+
+`task_link_pr(task_id, checkout_id, pr_url, confirm)` accepts a GitHub or
+GitHub Enterprise PR URL for the checkout's configured host and target
+repo. It rejects userinfo, the wrong host or path, and a number that is
+not positive. The backend verifies the number and target repo through the
+configured GitHub API, never by fetching the supplied URL. It rechecks
+checkout membership and duplicate pin ownership in one `ConfigStore`
+update. The reply is `{ checkout_id, pin }`, with the canonical `repo`
+(`owner/repo`), `number` and `url` in `pin`. Only one optional pin is
+kept per checkout in local config; older config has no pin by default.
+No agent sees the GitHub credentials. `PrPanel.tsx` removes a pin with
+`unpin_task_pr(taskId, checkoutId, pinRevision)` through `src/lib/api.ts`.
+It checks the displayed `pin_revision` under the same lock as the write.
+The revision is a decimal string so the window never rounds it. A changed
+pin advances the checkout's local revision, invalidates settled PR state
+and emits `task:pr-pin-changed` only after the save. A late sweep cannot
+put older rows back.
+
+`commands/github.rs` and `commands/pr_branches.rs` share the PR resolver
+with the panel, sweeps, `task_prs` and PR actions. `integrations/github.rs`
+pages branch reads with an explicit cap and reads a pin by number. The
+resolver deduplicates by canonical PR identity. An unsuccessful branch
+or pin lookup, a failed Git read or a truncated remote read leaves the
+usable results in place and sets the repo row's read error. A failed pin
+lookup does not remove the saved pin. `CheckoutPr.pr` holds the primary
+PR, `past` holds the other results, and `pin` and `error` are independent
+of `pr`. `pin_read` distinguishes a verified pin from a saved pin whose
+separate lookup failed, even if a branch read finds the same number. A
+saved link is clickable only if the backend validated it for the current
+connection and checkout and no numbered reply contradicted its stable ID.
+A disconnected or unreadable GitHub credential leaves incomplete checkout
+rows with pin identities but no links. Changing either GitHub endpoint
+invalidates cached links and starts a fresh read in an open PR tab. The primary
+PR is open first, then pinned within that group (or within past PRs if none
+is open), then newest by PR number. Keep full
+PR state, including merge state, for actions. The frontend mirror and
+mock backend use the same row contract.
+
+Feedback, retargeting and image offers use the resolver's open PR
+selection. Open PRs (`commands/open_prs.rs`) checks for an associated
+open PR before opening another. A different or fork head never becomes
+the push target: publishing still uses the task branch. A pin alone
+does not advance branch points or allow branch deletion. The existing
+landed-commit checks still apply, and incomplete evidence blocks
+automatic completion and both finish entry points (PR-16).
 
 ## The phone server
 

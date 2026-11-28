@@ -1,4 +1,4 @@
-import { CHAT_TASK_ID, paneName, taskTotals } from "./derive";
+import { CHAT_TASK_ID, paneName, taskMerged, taskTotals } from "./derive";
 import { isRoutineRun } from "./routines";
 import type { CheckoutPr, PaneInfo, TaskView } from "./types";
 
@@ -61,7 +61,6 @@ export function facts(
   const live = panes.filter((p) => p.kind === "agent" && p.running);
   const budget = (p: PaneInfo) => p.notice === "usage_limit";
   const open = rows.filter((r) => r.pr?.state === "open");
-  const landed = rows.filter((r) => r.pr && (r.pr.state === "open" || r.pr.merged));
   const subTasksOpen = subTasks.some((m) => !m);
   return {
     asking: live.some((p) => p.activity === "asking" && !budget(p)),
@@ -74,8 +73,10 @@ export function facts(
     // sub-tasks were still in review: it is merged once they all are.
     merged:
       subTasks.length === 0
-        ? landed.length > 0 && landed.every((r) => r.pr!.merged)
-        : open.length === 0 && !subTasksOpen,
+        ? taskMerged(rows)
+        : open.length === 0 &&
+          !subTasksOpen &&
+          rows.every((r) => !r.error && r.branch_covered && r.changed === 0),
     subTasksOpen,
     open: open.length,
     approved: open.length > 0 && open.every((r) => r.verdict === "approved"),

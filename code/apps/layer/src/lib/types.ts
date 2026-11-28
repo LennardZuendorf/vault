@@ -163,6 +163,21 @@ export interface TaskView extends Task {
   pane_count: number;
 }
 
+export interface LinkedTaskTicket {
+  task: Task;
+  ticket: Ticket;
+  context_warning: string | null;
+}
+
+/** The Work header's ticket details, without the description or Mine membership. */
+export interface TaskTicketLinked extends Pick<
+  Ticket,
+  "key" | "url" | "status" | "status_category"
+> {
+  task_id: string;
+  context_warning: string | null;
+}
+
 export type PaneKind = "agent" | "shell";
 
 /**
@@ -363,6 +378,11 @@ export interface Started extends Task {
 export interface TicketPage {
   issues: Ticket[];
   more: boolean;
+}
+
+export interface TicketSearch extends TicketPage {
+  /** Returned only for a picker's search. The backend validates it when linking. */
+  tracker_scope?: string;
 }
 
 export interface TicketType {

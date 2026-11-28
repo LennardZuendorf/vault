@@ -29,6 +29,9 @@ function pr(merged: boolean): CheckoutPr {
     verdict: "none",
     base: "main",
     changed: 0,
+    branch_covered: merged,
+    detached_unlanded: false,
+    covered_merge: merged,
     pr: {
       number: 1,
       title: "",

@@ -315,6 +315,8 @@ const DANGER: &[&str] = &[
     "slack_cleanup",
     "forget_repo",
     "open_prs",
+    "task_link_ticket",
+    "task_link_pr",
     "remember",
     "forget_note",
     "finish_task",
@@ -457,6 +459,19 @@ fn tools() -> Vec<Value> {
             json!({ "task_id": str_prop("Task id from list_tasks") }),
             vec!["task_id"],
         ),
+        tool(
+            "task_link_ticket",
+            "Link an existing ticket from the workspace tracker to an unlinked Work task. \
+             This does not start work again or change the ticket. Returns the task, ticket, \
+             and any context-write warning. Call only after the user agrees.",
+            json!({
+                "task_id": str_prop("Task id from list_tasks"),
+                "key": str_prop("Existing ticket key from the active tracker"),
+                "confirm": confirm_prop()
+            }),
+            vec!["task_id", "key", "confirm"],
+        ),
+        commands::pr_pins::tool_definition(),
         tool(
             "add_repo",
             "Add a repository to a task you are already working in, when the work \
@@ -602,14 +617,13 @@ fn resolve_repos(state: &tauri::State<'_, AppState>, args: &Value) -> Result<Vec
 }
 
 async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) -> Result<Value> {
-    let state = app.state::<AppState>();
-
     // Listing transitions and dry-run cleanup are reads in all but name — they
     // do not need the confirm gate. Applying them does.
     if tool_needs_confirm(name, &args) {
         require_confirm(&args, name)?;
     }
 
+    let state = app.state::<AppState>();
     match name {
         // The `*_inner` forms, handed to the blocking pool here. This handler
         // is off the main thread already, but it is on the async runtime, and
@@ -804,6 +818,14 @@ async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) ->
             let id = required(&args, "task_id")?.to_string();
             Ok(serde_json::to_value(commands::github_task_prs(state, id).await?)?)
         }
+
+        "task_link_ticket" => {
+            let task_id = required(&args, "task_id")?.to_string();
+            let key = required(&args, "key")?.to_string();
+            Ok(serde_json::to_value(commands::link_task_ticket_inner(app.clone(), task_id, key).await?)?)
+        }
+
+        "task_link_pr" => commands::pr_pins::call_tool(app.clone(), args).await,
 
         "open_prs" => {
             let task_id = required(&args, "task_id")?.to_string();
@@ -1010,6 +1032,35 @@ mod tests {
         assert!(require_confirm(&json!({}), "open_prs").is_err());
         assert!(require_confirm(&json!({ "confirm": false }), "open_prs").is_err());
         assert!(require_confirm(&json!({ "confirm": true }), "open_prs").is_ok());
+    }
+
+    #[test]
+    fn linking_a_ticket_is_listed_and_refuses_missing_or_false_confirmation() {
+        let name = "task_link_ticket";
+        for args in [json!({}), json!({ "confirm": false }), json!({ "confirm": "true" })] {
+            assert!(tool_needs_confirm(name, &args), "the dispatch gate must check {name}");
+            assert!(require_confirm(&args, name).is_err());
+        }
+        assert!(require_confirm(&json!({ "confirm": true }), name).is_ok());
+        let tool = served().into_iter().find(|t| t["name"] == name).expect("listed linker");
+        assert_eq!(tool["inputSchema"]["required"], json!(["task_id", "key", "confirm"]));
+    }
+
+    #[test]
+    fn task_link_pr_must_pass_the_dispatch_confirmation_gate() {
+        let name = "task_link_pr";
+        for confirmation in [serde_json::Value::Null, json!(false), json!("true")] {
+            let mut args =
+                json!({"task_id": "task", "checkout_id": "checkout", "pr_url": "https://github.com/acme/api/pull/9"});
+            if !confirmation.is_null() {
+                args["confirm"] = confirmation;
+            }
+            assert!(tool_needs_confirm(name, &args), "dispatch would start the lookup without confirmation");
+            assert!(require_confirm(&args, name).is_err());
+        }
+        assert!(require_confirm(&json!({ "confirm": true }), name).is_ok());
+        let tool = served().into_iter().find(|t| t["name"] == name).expect("listed pin tool");
+        assert_eq!(tool["inputSchema"]["required"], json!(["task_id", "checkout_id", "pr_url", "confirm"]));
     }
 
     #[test]

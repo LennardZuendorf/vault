@@ -1,14 +1,52 @@
 //! Where a repository's origin is, read from its remote URL.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
-use std::time::{Duration, Instant};
-
-use parking_lot::Mutex;
+use std::path::Path;
 
 use super::run;
 use crate::error::{Error, Result};
+
+pub(crate) struct OriginIdentity {
+    pub host: String,
+    pub web_port: Option<u16>,
+    pub ssh_port: Option<u16>,
+    pub owner: String,
+    pub repo: String,
+}
+
+/// Fresh, host-preserving origin for PR identity checks. Never fall back to
+/// an enclosing repo, a cached slug, or a string that might contain a token.
+pub(crate) fn checkout_origin(dir: &Path) -> Result<OriginIdentity> {
+    super::verify_checkout_root(dir)?;
+    let invalid = || Error::Git("The checkout's origin is not a Git hosting repository URL.".into());
+    let raw = run(dir, &["remote", "get-url", "origin"])
+        .map_err(|_| Error::Git("Could not read the checkout's origin.".into()))?;
+    let raw = raw.trim_end_matches('\n');
+    let url = if raw.contains("://") {
+        reqwest::Url::parse(raw)
+    } else {
+        // scp-style URLs use a colon after the host, including bracketed IPv6.
+        let colon = raw.find("]:").map(|i| i + 1).or_else(|| raw.find(':')).ok_or_else(invalid)?;
+        let (host, path) = raw.split_at(colon);
+        if host.is_empty() || host.contains('/') {
+            return Err(invalid());
+        }
+        reqwest::Url::parse(&format!("ssh://{host}/{}", path[1..].trim_start_matches('/')))
+    }
+    .map_err(|_| invalid())?;
+    if !matches!(url.scheme(), "https" | "http" | "ssh" | "git") || url.query().is_some() || url.fragment().is_some() {
+        return Err(invalid());
+    }
+    let host = url.host_str().ok_or_else(invalid)?.to_ascii_lowercase();
+    let web_port = matches!(url.scheme(), "http" | "https").then(|| url.port_or_known_default()).flatten();
+    let ssh_port = (url.scheme() == "ssh").then(|| url.port()).flatten();
+    let path = url.path().trim_end_matches('/').strip_prefix('/').ok_or_else(invalid)?;
+    let (owner, repo) = path.strip_suffix(".git").unwrap_or(path).split_once('/').ok_or_else(invalid)?;
+    if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+        return Err(invalid());
+    }
+    let (owner, repo) = (owner.into(), repo.into());
+    Ok(OriginIdentity { host, web_port, ssh_port, owner, repo })
+}
 
 /// `owner/repo` parsed from the origin remote.
 ///
@@ -53,40 +91,6 @@ pub fn origin_slug(dir: &Path) -> Result<(String, String)> {
     Err(Error::Git(format!("cannot parse owner/repo from {url}")))
 }
 
-/// How long a slug read by `origin_slug_cached` is trusted. A remote changed
-/// by hand outside the app is seen within this; one the app moves is seen
-/// at once (`forget_origins`).
-const ORIGIN_KEPT: Duration = Duration::from_secs(10 * 60);
-
-/// `owner/repo`, and when it was read.
-type Read = (Instant, (String, String));
-
-/// Slugs read, by folder.
-static ORIGINS: LazyLock<Mutex<HashMap<PathBuf, Read>>> = LazyLock::new(Default::default);
-
-/// `origin_slug`, remembered for a while, for the PR sweep. It asked git for
-/// every repository of every task every 90 seconds, for a URL that changes
-/// about never. Only a slug read is remembered: a failure is asked again.
-pub fn origin_slug_cached(dir: &Path) -> Result<(String, String)> {
-    if let Some((at, slug)) = ORIGINS.lock().get(dir) {
-        if at.elapsed() < ORIGIN_KEPT {
-            return Ok(slug.clone());
-        }
-    }
-    let slug = origin_slug(dir)?;
-    let mut origins = ORIGINS.lock();
-    // Folders of checkouts since removed go with the rest of the stale.
-    origins.retain(|_, (at, _)| at.elapsed() < ORIGIN_KEPT);
-    origins.insert(dir.to_path_buf(), (Instant::now(), slug.clone()));
-    Ok(slug)
-}
-
-/// Forget every slug read: the app has pointed a copy at another origin, and
-/// its worktrees with it.
-pub fn forget_origins() {
-    ORIGINS.lock().clear();
-}
-
 /// Clone the repository a workspace knows by its remote key
 /// (`github.com/acme/billing`) into `into`, which must not exist yet
 /// (REPO-9). Over SSH first, as most clones on a developer's Mac are, then
@@ -115,21 +119,6 @@ pub fn clone_by_key(key: &str, into: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn an_origin_is_read_once_and_again_after_the_app_moves_it() {
-        let dir = std::env::temp_dir().join(format!("vl-origin-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        run(&dir, &["init", "-q"]).unwrap();
-        run(&dir, &["remote", "add", "origin", "git@github.com:acme/web.git"]).unwrap();
-        assert_eq!(origin_slug_cached(&dir).unwrap(), ("acme".to_string(), "web".to_string()));
-
-        run(&dir, &["remote", "set-url", "origin", "git@github.com:acme/api.git"]).unwrap();
-        assert_eq!(origin_slug_cached(&dir).unwrap().1, "web", "remembered, not asked again");
-        forget_origins();
-        assert_eq!(origin_slug_cached(&dir).unwrap().1, "api");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 
     #[test]
     fn a_repository_kept_by_a_folder_elsewhere_is_not_cloned_and_a_folder_there_is_kept() {

@@ -41,6 +41,15 @@ pub enum Error {
     #[error("{0} needs the saved token authorized for single sign-on")]
     TokenNeedsSso(&'static str),
 
+    #[error("Could not read the GitHub connection. Try again.")]
+    GithubCredentialUnreadable,
+
+    #[error("The saved pin no longer identifies this GitHub pull request.")]
+    PrPinIdentityChanged,
+
+    #[error("The pull request pin changed. Review it before trying again.")]
+    PrPinRevisionChanged,
+
     #[error("{0}")]
     Other(String),
 }

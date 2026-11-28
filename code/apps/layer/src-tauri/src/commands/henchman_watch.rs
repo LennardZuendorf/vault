@@ -103,15 +103,15 @@ pub fn spawn_henchman_watch(app: AppHandle) {
 
 /// The window's sweep, without following tickets: only the reads count here.
 async fn sweep(state: &AppState) {
-    let Ok((client, _)) = super::github::github_client(state) else {
+    let Ok(connection) = super::pr_resolver::Connection::load(state).await else {
         return;
     };
     use futures_util::stream::{self, StreamExt};
-    let client = &client;
+    let connection = &connection;
     stream::iter(super::github::sweep_ids(state))
         .for_each_concurrent(super::github::SWEEP_TASKS, |id| async move {
             // One that can't be read is tried again at the next sweep.
-            let _ = super::github::task_prs(state, client, &id).await;
+            let _ = super::github::task_prs(state, connection, &id).await;
         })
         .await;
 }
@@ -207,13 +207,18 @@ mod tests {
         CheckoutPr {
             checkout_id: "c1".into(),
             repo: "api".into(),
+            pin: None,
+            pin_revision: "0".into(),
+            pin_read: false,
             pr: Some(PullRequest {
+                id: None,
                 number: 34,
                 title: "Pay in two parts".into(),
                 state: state.into(),
                 draft: false,
                 author: "me".into(),
                 head: "acme-12".into(),
+                head_repo: None,
                 head_sha: sha.into(),
                 base: "main".into(),
                 url: "https://github.com/acme/api/pull/34".into(),
@@ -230,6 +235,10 @@ mod tests {
             changed: 3,
             to_reply: 0,
             error: None,
+            branch_covered: false,
+            detached_unlanded: false,
+            covered_merge: false,
+            action_target: None,
         }
     }
 

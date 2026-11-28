@@ -15,13 +15,16 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 
 mod browser;
+mod finish_receipt;
 mod henchman;
 mod integrations;
 mod phone;
+mod pr_pins;
 mod project;
 pub mod shared;
 mod ui;
 pub use browser::{BrowserConfig, SavedSignIn, SavedTabs};
+pub(crate) use finish_receipt::FinishReceipt;
 pub use henchman::{HenchmanAgent, HenchmanConfig, StandingOrder};
 pub use integrations::{
     AthenaTable, FlowStatus, GithubConfig, GrafanaConfig, JiraConfig, LogSource, ModelChoice, SlackBotConfig,
@@ -29,6 +32,7 @@ pub use integrations::{
 };
 pub use layer_domain::TrackerKind;
 pub use phone::{PhoneConfig, PhoneDevice};
+pub use pr_pins::{PrPin, PrPinIdentity, StoredPrPin};
 pub use project::Project;
 pub use shared::Shared;
 pub use ui::UiPrefs;
@@ -150,6 +154,13 @@ pub struct Checkout {
     /// its repository is linked back at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_head: Option<String>,
+    /// One verified PR, independent of the branch currently checked out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_pin: Option<StoredPrPin>,
+    /// A replacement, including removal, changes this even if a later
+    /// replacement restores the same pin.
+    #[serde(default)]
+    pub pr_pin_revision: u64,
 }
 
 fn yes() -> bool {
@@ -236,6 +247,8 @@ pub struct AppConfig {
     pub tasks: Vec<Task>,
     #[serde(default)]
     pub checkouts: Vec<Checkout>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub(crate) finish_receipts: HashMap<String, FinishReceipt>,
     /// Read-only remnant of v1; drained by `migrate`.
     #[serde(default, skip_serializing)]
     pub workspaces: Vec<LegacyWorkspace>,
@@ -348,6 +361,8 @@ impl AppConfig {
                 push_lease: None,
                 point_before_update: None,
                 last_head: None,
+                pr_pin: None,
+                pr_pin_revision: 0,
             });
         }
         true
@@ -395,6 +410,9 @@ pub struct ConfigStore {
     /// lands one profile in another's.
     default_root: PathBuf,
     inner: RwLock<AppConfig>,
+    // Track Jira and GitHub credential changes for this process only. Take
+    // the credential lock before the config lock when both are needed.
+    tracker_credentials: [parking_lot::Mutex<u64>; 2],
     /// Held from a change until it is on disk.
     ///
     /// The change used to be made under `inner` and written after letting go
@@ -456,6 +474,7 @@ impl ConfigStore {
             base: profile.base.clone(),
             default_root: profile.default_root(),
             inner: RwLock::new(inner),
+            tracker_credentials: Default::default(),
             disk: parking_lot::Mutex::new(()),
         };
         if changed {
@@ -490,6 +509,7 @@ impl ConfigStore {
             base,
             default_root: default_worktree_root(),
             inner: RwLock::new(cfg),
+            tracker_credentials: Default::default(),
             disk: parking_lot::Mutex::new(()),
         }
     }
@@ -512,6 +532,24 @@ impl ConfigStore {
         };
         self.persist(&snapshot)?;
         crate::workspace::wrote(sent);
+        Ok(out)
+    }
+
+    /// Validate and save a local task change before making it visible. A
+    /// refusal or failed save must not reserve a ticket in memory.
+    pub(crate) fn update_local_tasks<T>(&self, f: impl FnOnce(&mut AppConfig) -> Result<T>) -> Result<T> {
+        self.update_local_tasks_if(|snapshot| Ok((f(snapshot)?, true)))
+    }
+
+    /// An idempotent local change can return a result without writing to disk.
+    pub(crate) fn update_local_tasks_if<T>(&self, f: impl FnOnce(&mut AppConfig) -> Result<(T, bool)>) -> Result<T> {
+        let _disk = self.disk.lock();
+        let mut snapshot = self.read();
+        let (out, changed) = f(&mut snapshot)?;
+        if changed {
+            self.persist(&snapshot)?;
+            *self.inner.write() = snapshot;
+        }
         Ok(out)
     }
 
@@ -664,6 +702,22 @@ mod tests {
         assert_eq!(cfg.ui.conversation_font_size, 14);
         // Saved before there was a choice of theme: the studio's (SET-5).
         assert_eq!(cfg.ui.theme, "night");
+    }
+
+    #[test]
+    fn a_checkout_pin_survives_config_round_trip_and_old_checkouts_need_no_pin() {
+        let mut checkout = serde_json::json!({
+            "id": "c1", "task_id": "t1", "project_id": "api", "path": "/wt/t1/api", "base": "main"
+        });
+        let read = |checkout: &serde_json::Value| {
+            let cfg: AppConfig = serde_json::from_value(serde_json::json!({"checkouts": [checkout]})).unwrap();
+            assert_eq!(cfg.checkouts[0].pr_pin_revision, 0);
+            serde_json::to_value(cfg).unwrap()
+        };
+        assert!(read(&checkout)["checkouts"][0].get("pr_pin").is_none());
+        let pin = serde_json::json!({"repo": "Acme/Api", "number": 42, "url": "https://github.com/Acme/Api/pull/42"});
+        checkout["pr_pin"] = pin.clone();
+        assert_eq!(read(&checkout)["checkouts"][0]["pr_pin"], pin);
     }
 
     #[test]

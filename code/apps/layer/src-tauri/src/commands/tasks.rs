@@ -6,7 +6,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use crate::config::{Checkout, ConfigStore, Project, SubTaskOf, Task};
+use crate::config::{AppConfig, Checkout, ConfigStore, FinishReceipt, Project, SubTaskOf, Task};
 use crate::error::{Error, Result};
 use crate::git;
 use crate::pty::PaneKind;
@@ -16,6 +16,9 @@ use super::panes::{agent_file_dir, remove_generated};
 use super::task_context::write_task_context;
 use super::worktree_status::{busy_tasks, fresh_statuses, status_ttl};
 use super::AppState;
+
+mod removal;
+pub(super) use removal::finish_worktrees;
 
 // ------------------------------------------------------------------- tasks
 
@@ -361,6 +364,8 @@ pub(crate) fn create_checkout(
         push_lease: None,
         point_before_update: None,
         last_head: None,
+        pr_pin: None,
+        pr_pin_revision: 0,
     };
     state.config.update(|c| c.checkouts.push(checkout.clone()))?;
     Ok(checkout)
@@ -410,11 +415,55 @@ pub(crate) fn link_chat(state: &AppState, mut task: Task, room: String) -> Resul
     Ok(task)
 }
 
+pub(super) fn ticket_owner(tasks: &[Task], key: &str) -> Option<usize> {
+    tasks.iter().position(|t| t.issue_key.as_deref().is_some_and(|saved| saved.eq_ignore_ascii_case(key)))
+}
+
+pub(super) fn check_new_ticket(tasks: &[Task], key: &str, suffix: Option<&str>) -> Result<()> {
+    if suffix.is_none_or(|suffix| suffix.trim().is_empty()) {
+        if let Some(at) = ticket_owner(tasks, key) {
+            return Err(Error::Other(format!(
+                "{key} already has a task on branch {}. Open that one, or pass a \
+                 branch_suffix to work on the ticket a second time.",
+                tasks[at].branch
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
+    Ok(new_task_inner(state, req, TicketClaim::Unchecked)?.task)
+}
+
+/// Start work claims the ticket. Starting from a PR instead uses the PR's
+/// branch to decide which task to open, even if its title names a ticket.
+pub(super) fn new_task_from_ticket(state: &AppState, req: NewTask) -> Result<Task> {
+    Ok(new_task_inner(state, req, TicketClaim::RequireSuffix)?.task)
+}
+
+/// Return a task only when it was newly created and needs the epic's spec.
+pub(super) fn new_or_adopt_sub_task(state: &AppState, mut req: NewTask, of: SubTaskOf) -> Result<Option<Task>> {
+    req.sub_task = Some(of.clone());
+    let out = new_task_inner(state, req, TicketClaim::Adopt(of))?;
+    Ok(out.created.then_some(out.task))
+}
+
+enum TicketClaim {
+    Unchecked,
+    RequireSuffix,
+    Adopt(SubTaskOf),
+}
+
+struct TaskCreation {
+    task: Task,
+    created: bool,
+}
+
+fn new_task_inner(state: &AppState, req: NewTask, claim: TicketClaim) -> Result<TaskCreation> {
     if req.project_ids.is_empty() {
         return Err(Error::Other("pick at least one repository".into()));
     }
-    let projects: Vec<Project> = req.project_ids.iter().map(|id| state.config.project(id)).collect::<Result<_>>()?;
 
     let branch =
         derive_branch(req.branch.as_deref(), req.issue_key.as_deref(), req.branch_suffix.as_deref(), &req.name);
@@ -422,7 +471,6 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     // The folder is named after the branch, so the two are always findable
     // from each other. Slashes would nest it, so they become dashes.
     let root = unique_task_root(&state.config, &branch.replace('/', "-"));
-    std::fs::create_dir_all(&root)?;
 
     let task = Task {
         id: uuid::Uuid::new_v4().to_string(),
@@ -440,7 +488,47 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
         sub_task: req.sub_task.clone(),
         browser: None,
     };
-    state.config.update(|c| c.tasks.push(task.clone()))?;
+    let mut made_root = false;
+    let inserted = state.config.update_local_tasks(|c| {
+        if let Some(key) = task.issue_key.as_deref() {
+            match &claim {
+                TicketClaim::Unchecked => {}
+                TicketClaim::RequireSuffix => check_new_ticket(&c.tasks, key, req.branch_suffix.as_deref())?,
+                TicketClaim::Adopt(of) => {
+                    if let Some(at) = ticket_owner(&c.tasks, key) {
+                        let owner = &mut c.tasks[at];
+                        owner.sub_task = Some(of.clone());
+                        return Ok((Some(owner.clone()), Vec::new()));
+                    }
+                }
+            }
+        }
+        let projects = req
+            .project_ids
+            .iter()
+            .map(|id| {
+                c.projects.iter().find(|p| p.id == *id).cloned().ok_or_else(|| Error::NotFound(format!("project {id}")))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if let Some(parent) = root.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::create_dir(&root)?;
+        made_root = true;
+        c.tasks.push(task.clone());
+        Ok((None, projects))
+    });
+    let projects = match inserted {
+        Ok((Some(owner), _)) => return Ok(TaskCreation { task: owner, created: false }),
+        Ok((None, projects)) => projects,
+        Err(e) => {
+            if made_root {
+                // Remove only the empty folder this attempt created.
+                let _ = std::fs::remove_dir(&root);
+            }
+            return Err(e);
+        }
+    };
 
     let base = req.base.as_deref().map(str::trim).filter(|s| !s.is_empty());
 
@@ -505,7 +593,7 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     // started by hand in it is no worse off than one the app launched.
     let _ = write_task_context(state, &task);
 
-    Ok(task)
+    Ok(TaskCreation { task, created: true })
 }
 
 /// What a terminal has printed, as readable text.
@@ -726,50 +814,60 @@ pub struct Finished {
 ///
 /// Local branches only: the pull requests and what they landed are on
 /// GitHub, and the remote branch is the repository's business — many delete
-/// it on merge themselves. `landed` is each checkout's merged PR head; a
-/// branch is deleted only when that head contains it.
-#[tauri::command]
-pub async fn finish_task(
+/// it on merge themselves. PR heads come from a fresh backend read; a
+/// branch is deleted only when that evidence proves it landed.
+pub(super) async fn finish_task_with(
     app: AppHandle,
     task_id: String,
-    transition_id: Option<String>,
-    landed: std::collections::HashMap<String, String>,
+    transition: Option<(super::ticket_flow::JiraConnection, String)>,
 ) -> Result<Finished> {
-    let task = app.state::<AppState>().config.task(&task_id)?;
+    let (scope, connection, evidence) = {
+        let state = app.state::<AppState>();
+        let scope = super::pr_resolver::Scope::capture(&state, &task_id, std::time::Instant::now())?;
+        super::pr_task::not_a_review(&scope.task, "finished")?;
+        if let Some((jira, _)) = &transition {
+            jira.require_ticket(&state, &scope.task)?;
+        }
+        let connection = super::pr_resolver::Connection::load(&state).await?;
+        let evidence = scope.all(&connection, false).await?;
+        if let Some((jira, _)) = &transition {
+            jira.require_ticket(&state, &scope.task)?;
+        }
+        (scope, connection, evidence)
+    };
+    let task = scope.task.clone();
     let (repos, branches) = {
-        let (task_id, branch) = (task_id.clone(), task.branch.clone());
+        let branch = task.branch.clone();
         super::blocking(app.clone(), move |state| {
-            // Where each branch lives, read before the task's record is gone.
-            let homes: Vec<(String, String, PathBuf, String)> = state
-                .config
-                .checkouts_of(&task_id)
-                .into_iter()
-                .filter_map(|c| {
-                    let p = state.config.project(&c.project_id).ok()?;
+            let homes = evidence
+                .iter()
+                .map(|r| {
+                    let c = &r.checkout;
+                    let p = state.config.project(&c.project_id)?;
                     let home = super::owner_of(&p, &c.path);
-                    Some((c.id, p.name, home, c.base))
+                    Ok((r, p.name, home))
                 })
-                .collect();
-            let repos = delete_task_inner(state, task_id, false, true)?;
+                .collect::<Result<Vec<_>>>()?;
+            let repos = finish_worktrees(state, &scope, &connection, &evidence, |_| Ok(()))?;
             if repos.iter().any(|r| !r.ok) {
                 return Ok((repos, Vec::new()));
             }
             let branches = homes
                 .into_iter()
-                .map(|(checkout_id, repo, path, base)| {
+                .map(|(row, repo, path)| {
                     // Only a branch its merged PR contains, or one with nothing
                     // of its own. "Merged" is said of the task once every PR
                     // has landed, and a commit made after one did — or in a
                     // repo that never had a PR — lives on this branch alone;
                     // deleting it deleted the work.
-                    let covered =
-                        super::branch_landed(&path, &branch, &base, landed.get(&checkout_id).map(String::as_str));
+                    let covers = |sha| super::branch_landed(&path, &branch, &row.checkout.base, sha);
+                    let covered = covers(None) || row.merged_heads.iter().any(|sha| covers(Some(sha.as_str())));
                     let (ok, detail) = if !git::branch_exists(&path, &branch) {
                         (true, "already gone".to_string())
                     } else if !covered {
                         (
                             false,
-                            if landed.contains_key(&checkout_id) {
+                            if !row.merged_heads.is_empty() {
                                 "kept: it has commits its merged pull request does not".to_string()
                             } else {
                                 "kept: no merged pull request covers it".to_string()
@@ -783,7 +881,7 @@ pub async fn finish_task(
                             Err(e) => (false, e.to_string()),
                         }
                     };
-                    RepoResult { checkout_id, repo, ok, detail }
+                    RepoResult { checkout_id: row.checkout.id.clone(), repo, ok, detail }
                 })
                 .collect();
             Ok((repos, branches))
@@ -796,12 +894,14 @@ pub async fn finish_task(
     if finished.repos.iter().any(|r| !r.ok) {
         return Ok(finished);
     }
-    if let (Some(id), Some(key)) = (transition_id, task.issue_key.as_deref()) {
+    if let Some((jira, id)) = transition {
         let state = app.state::<AppState>();
-        let moved = match super::jira::jira_client(&state) {
-            Ok((client, _)) => client.transition(key, &id).await,
-            Err(e) => Err(e),
-        };
+        let moved = async {
+            jira.require_current(&state)?;
+            let key = jira.key(&task).ok_or_else(super::ticket_flow::jira_changed)?;
+            jira.client.transition(key, &id).await
+        }
+        .await;
         match moved {
             Ok(()) => finished.ticket_moved = true,
             // The task is already gone, so this is the only place it can be said.
@@ -822,35 +922,50 @@ pub async fn delete_task(app: AppHandle, id: String, force: bool) -> Result<Vec<
     // git worktree remove and waiting on agents both sleep. Running them on
     // the command thread freezes every other invoke — including the ones that
     // keep the window painting — so the UI looks crashed until they finish.
-    let done = super::blocking(app.clone(), move |state| delete_task_inner(state, id, force, false)).await;
+    let done = super::blocking(app.clone(), move |state| {
+        delete_task_inner(state, id, force, false, |_| Ok(()), |_| Ok(()), |_| None)
+    })
+    .await;
     crate::runs::changed(&app);
     done
 }
 
 /// `finished`: Finish task, rather than Delete, as the run log keeps it (RUN-9).
-fn delete_task_inner(state: &AppState, id: String, force: bool, finished: bool) -> Result<Vec<RepoResult>> {
+fn delete_task_inner(
+    state: &AppState,
+    id: String,
+    force: bool,
+    finished: bool,
+    before_remove: impl Fn(Option<&Checkout>) -> Result<()>,
+    before_forgetting: impl Fn(&AppConfig) -> Result<()>,
+    receipt: impl Fn(&Checkout) -> Option<FinishReceipt>,
+) -> Result<Vec<RepoResult>> {
     let task = state.config.task(&id)?;
+    let checkouts = state.config.checkouts_of(&id);
 
     // Ask before stopping anything. git refuses to remove a dirty worktree
     // without force, and the task is then kept — but its agents had already
     // been stopped, so a refused delete still cost every conversation in it.
     // The sidebar's count that decides whether to force can be minutes old.
     if !force {
-        let dirty: Vec<RepoResult> = state
-            .config
-            .checkouts_of(&id)
-            .into_iter()
+        let dirty: Vec<RepoResult> = checkouts
+            .iter()
             .filter_map(|c| {
-                let status = git::status(&PathBuf::from(&c.path)).ok()?;
-                (status.dirty_files > 0).then(|| RepoResult {
-                    repo: state.config.project(&c.project_id).map(|p| p.name).unwrap_or_else(|_| "(unknown)".into()),
-                    checkout_id: c.id,
-                    ok: false,
-                    detail: format!(
+                let status = git::status(&PathBuf::from(&c.path));
+                let detail = match status {
+                    Ok(status) if status.dirty_files > 0 => format!(
                         "{} uncommitted change{}",
                         status.dirty_files,
                         if status.dirty_files == 1 { "" } else { "s" }
                     ),
+                    Err(e) if finished => e.to_string(),
+                    _ => return None,
+                };
+                Some(RepoResult {
+                    repo: state.config.project(&c.project_id).map(|p| p.name).unwrap_or_else(|_| "(unknown)".into()),
+                    checkout_id: c.id.clone(),
+                    ok: false,
+                    detail,
                 })
             })
             .collect();
@@ -858,60 +973,54 @@ fn delete_task_inner(state: &AppState, id: String, force: bool, finished: bool) 
             return Ok(dirty);
         }
     }
+    before_remove(None)?;
     let closed = state.ptys.close_task(&id);
     let _ = state.config.update(|c| c.saved_panes.retain(|p| !closed.contains(&p.id)));
     state.browser.close_task(&id);
 
-    let mut results = Vec::new();
-    for checkout in state.config.checkouts_of(&id) {
-        let project = match state.config.project(&checkout.project_id) {
-            Ok(p) => p,
-            // The repo is gone from the app, so there is no worktree admin to
-            // clean up; drop the record.
-            Err(_) => continue,
-        };
-
-        let path = PathBuf::from(&checkout.path);
-        let (ok, detail) = if !path.exists() {
-            // Already removed by hand; just tidy the admin files, wherever
-            // it was registered.
-            let _ = git::prune_worktrees(&project.repo());
-            let _ = git::prune_worktrees(Path::new(&project.path));
-            (true, "already gone".to_string())
-        } else {
-            match git::remove_worktree(&super::owner_of(&project, &checkout.path), &checkout.path, force) {
-                Ok(()) => (true, "removed".to_string()),
-                Err(e) => (false, e.to_string()),
-            }
-        };
-
-        results.push(RepoResult { checkout_id: checkout.id, repo: project.name, ok, detail });
-    }
+    // Agents can commit or detach HEAD during shutdown. Never use a new
+    // checkout list to expand what Finish was authorized to remove.
+    before_remove(None)?;
+    let checkouts = if finished { checkouts } else { state.config.checkouts_of(&id) };
+    let (results, removed) = removal::remove_worktrees(state, checkouts, force, finished, before_remove);
 
     let stuck: Vec<String> = results.iter().filter(|r| !r.ok).map(|r| r.checkout_id.clone()).collect();
 
     if !stuck.is_empty() {
+        if finished {
+            removal::reconcile_removed(state, &removed, receipt)?;
+            return Ok(results);
+        }
         // Keep the task so the worktrees stay reachable and the user can retry
         // with force, rather than stranding them.
-        state.config.update(|c| {
+        state.config.update_local_tasks(|c| {
+            before_forgetting(c)?;
             c.checkouts.retain(|ch| ch.task_id != id || stuck.contains(&ch.id));
+            Ok(())
         })?;
         return Ok(results);
     }
 
-    // The app's own files go first, or the folder is never empty and lingers
-    // as an orphan under the worktree root. Anything else in there is the
-    // user's, so remove_dir refuses rather than taking it.
-    if let Some(dir) = agent_file_dir(state, &task) {
+    // Only the app's own files are removed. Anything else keeps the folder.
+    let agent_dir = agent_file_dir(state, &task);
+    let done = crate::runs::task_done(&state.config.read(), &id, finished, chrono::Utc::now());
+    let forgot = state.config.update_local_tasks(|c| {
+        before_forgetting(c)?;
+        c.tasks.retain(|t| t.id != id);
+        c.checkouts.retain(|ch| ch.task_id != id);
+        c.finish_receipts.remove(&id);
+        Ok(())
+    });
+    if let Err(e) = forgot {
+        if finished {
+            removal::reconcile_removed(state, &removed, receipt)?;
+        }
+        return Err(e);
+    }
+    if let Some(dir) = agent_dir {
         remove_generated(&dir);
     }
     let _ = std::fs::remove_dir(&task.root);
-
-    let done = crate::runs::task_done(&state.config.read(), &id, finished, chrono::Utc::now());
-    state.config.update(|c| {
-        c.tasks.retain(|t| t.id != id);
-        c.checkouts.retain(|ch| ch.task_id != id);
-    })?;
     if let Some(done) = done {
         state.runs.record_task(done);
     }
@@ -923,6 +1032,131 @@ fn delete_task_inner(state: &AppState, id: String, force: bool, finished: bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn round_two_a_later_finish_guard_refusal_reconciles_the_worktree_already_removed() {
+        use super::super::repos::tests::{add_task, setup};
+        let (root, mut cfg) = setup();
+        add_task(&mut cfg, &root, "finish-partial");
+        let first = cfg.checkouts[0].clone();
+        let second = Checkout {
+            id: "second".into(),
+            path: root.join("tasks/finish-partial/second").to_string_lossy().into_owned(),
+            ..first.clone()
+        };
+        cfg.checkouts.push(second.clone());
+        for checkout in [&first, &second] {
+            std::fs::create_dir_all(Path::new(&checkout.path).parent().unwrap()).unwrap();
+            git(Path::new(&cfg.projects[0].path), &["worktree", "add", "-qb", &checkout.id, &checkout.path]);
+        }
+        let state = super::super::repos::tests::state(&root, cfg);
+        let refused = delete_task_inner(
+            &state,
+            "finish-partial".into(),
+            false,
+            true,
+            |checkout| {
+                if checkout.is_some_and(|c| c.id == second.id) {
+                    Err(Error::Other("The second checkout changed.".into()))
+                } else {
+                    Ok(())
+                }
+            },
+            |_| Ok(()),
+            |_| None,
+        );
+        assert!(!Path::new(&first.path).exists());
+        assert!(Path::new(&second.path).is_dir());
+        assert!(state.config.task("finish-partial").is_ok());
+        assert!(state.config.checkout(&second.id).is_ok());
+        assert!(state.config.checkout(&first.id).is_err(), "a deleted worktree still stranded the retry");
+        assert!(refused.unwrap().iter().any(|row| row.checkout_id == second.id && !row.ok));
+        let retry =
+            delete_task_inner(&state, "finish-partial".into(), false, true, |_| Ok(()), |_| Ok(()), |_| None).unwrap();
+        assert_eq!(retry.len(), 1);
+        assert!(retry[0].ok);
+        assert!(!Path::new(&second.path).exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn finish_rechecks_a_checkout_after_the_initial_guard_and_keeps_detached_work() {
+        use super::super::repos::tests::{add_task, commit, setup};
+        let (root, mut cfg) = setup();
+        add_task(&mut cfg, &root, "finish-race");
+        let checkout = cfg.checkouts[0].clone();
+        let worktree = PathBuf::from(&checkout.path);
+        std::fs::create_dir_all(worktree.parent().unwrap()).unwrap();
+        git(Path::new(&cfg.projects[0].path), &["worktree", "add", "-qb", "finish-race", &checkout.path]);
+        let state = super::super::repos::tests::state(&root, cfg);
+        let first = std::cell::Cell::new(true);
+        let outcome = delete_task_inner(
+            &state,
+            "finish-race".into(),
+            false,
+            true,
+            |_| {
+                if first.replace(false) {
+                    // Simulate an agent completing Git work after the preflight.
+                    git(&worktree, &["checkout", "--detach"]);
+                    commit(&worktree, "last-agent-commit");
+                    Ok(())
+                } else {
+                    Err(Error::Other("Last agent left detached work.".into()))
+                }
+            },
+            |_| Ok(()),
+            |_| None,
+        );
+        let kept = worktree.is_dir() && state.config.checkout(&checkout.id).is_ok();
+        let refused = outcome.is_err() || outcome.unwrap().iter().any(|r| !r.ok);
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(refused && kept, "Finish removed the detached commit's worktree");
+    }
+
+    #[test]
+    fn finish_never_forgets_a_checkout_added_after_the_snapshot() {
+        use super::super::repos::tests::{add_task, setup};
+        let (root, mut cfg) = setup();
+        add_task(&mut cfg, &root, "finish-race");
+        let first = cfg.checkouts[0].clone();
+        let mut new = Checkout { id: "new".into(), ..first.clone() };
+        new.path = root.join("tasks/finish-race/new").to_string_lossy().into_owned();
+        for checkout in [&first, &new] {
+            let path = Path::new(&checkout.path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            git(Path::new(&cfg.projects[0].path), &["worktree", "add", "-qb", &checkout.id, &checkout.path]);
+        }
+        let state = super::super::repos::tests::state(&root, cfg);
+        let add_once = std::cell::Cell::new(true);
+        let result = delete_task_inner(
+            &state,
+            "finish-race".into(),
+            false,
+            true,
+            |target| {
+                if target.is_some() && add_once.replace(false) {
+                    state.config.update_local_tasks(|c| {
+                        c.checkouts.push(new.clone());
+                        Ok(())
+                    })?;
+                }
+                Ok(())
+            },
+            |c| {
+                if c.checkouts.len() != 1 {
+                    return Err(Error::Other("Checkout set changed.".into()));
+                }
+                Ok(())
+            },
+            |_| None,
+        );
+        let kept = Path::new(&new.path).is_dir() && state.config.checkout(&new.id).is_ok();
+        let reconciled = !Path::new(&first.path).exists() && state.config.checkout(&first.id).is_err();
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(result.is_err() && kept, "new worktree or its checkout record was removed");
+        assert!(reconciled, "the changed checkout set did not excuse a stale record for the removed worktree");
+    }
     use crate::config::AppConfig;
 
     fn git(dir: &Path, args: &[&str]) -> String {
@@ -983,6 +1217,7 @@ mod tests {
             status_cache: Default::default(),
             prs_settled: Default::default(),
             prs_seen: Default::default(),
+            prs_read_at: Default::default(),
             news: Default::default(),
             messages: crate::messages::Messages::for_tests(root.join("messages.json")),
             notes: crate::notes::Notes::load(root),

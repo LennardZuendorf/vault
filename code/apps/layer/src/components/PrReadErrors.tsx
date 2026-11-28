@@ -2,6 +2,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { TOKEN_NEEDS_SSO, TOKEN_REJECTED } from "../lib/derive";
 import type { CheckoutPr } from "../lib/types";
 import { useStore } from "../store";
+import { PrPin } from "./PrPin";
 
 /**
  * The repos whose pull requests could not be read. A refused token is said
@@ -10,7 +11,15 @@ import { useStore } from "../store";
  * token not authorized for an organization's single sign-on was the same,
  * with GitHub's "SAML enforcement" JSON.
  */
-export function PrReadErrors({ rows }: { rows: CheckoutPr[] }) {
+export function PrReadErrors({
+  taskId,
+  rows,
+  onStale,
+}: {
+  taskId: string;
+  rows: CheckoutPr[];
+  onStale: (error?: unknown) => void;
+}) {
   const toggleSettings = useStore((s) => s.toggleSettings);
   const webUrl = useStore((s) => s.settings?.github?.web_url);
   const fail = useStore((s) => s.fail);
@@ -59,15 +68,29 @@ export function PrReadErrors({ rows }: { rows: CheckoutPr[] }) {
       {others.length > 0 && (
         <div className="card">
           <h3>Repos that could not be read</h3>
-          {others.map((r) => (
-            <div key={r.checkout_id} className="check">
-              <span className="dot" style={{ background: "var(--status-danger-ink)" }} />
-              <span className="name">{r.repo}</span>
-              <span className="muted">{r.error}</span>
-            </div>
-          ))}
+          {others.map((r) =>
+            r.pin && !r.pin_read ? (
+              <PrPin key={r.checkout_id} taskId={taskId} row={r} onStale={onStale} unavailable />
+            ) : (
+              <div key={r.checkout_id} className="check">
+                <span className="dot" style={{ background: "var(--status-danger-ink)" }} />
+                <span className="name">{r.repo}</span>
+                <span className="muted">{r.error}</span>
+              </div>
+            ),
+          )}
         </div>
       )}
+      {failed
+        .filter(
+          (r) =>
+            r.pin && !r.pin_read && (r.error === TOKEN_REJECTED || r.error === TOKEN_NEEDS_SSO),
+        )
+        .map((row) => (
+          <div key={row.checkout_id} className="card">
+            <PrPin taskId={taskId} row={row} onStale={onStale} unavailable />
+          </div>
+        ))}
     </>
   );
 }

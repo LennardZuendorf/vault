@@ -594,6 +594,7 @@ mod tests {
             status_cache: Default::default(),
             prs_settled: Default::default(),
             prs_seen: Default::default(),
+            prs_read_at: Default::default(),
             news: Default::default(),
             messages: crate::messages::Messages::for_tests(root.join("messages.json")),
             notes: crate::notes::Notes::load(root),

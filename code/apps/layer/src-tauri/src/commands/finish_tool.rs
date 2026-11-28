@@ -1,18 +1,61 @@
 //! `finish_task` for agents (TASK-18): what Finish task does in the app, for
 //! a chat the user asks to put a landed task away. The finishing itself is
-//! `tasks.rs`'s; this works out what the dialog would have had: each merged
-//! pull request's head, and the done-category transition for the ticket.
-
-use std::collections::HashMap;
+//! `tasks.rs`'s; this works out the done-category transition for the ticket.
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 
 use crate::error::{Error, Result};
 use crate::integrations::jira::Transition;
 use crate::mcp::{bool_prop, required, str_prop, tool};
 
+use super::ticket_flow::{jira_changed, JiraConnection};
 use super::AppState;
+
+#[derive(serde::Serialize)]
+pub struct FinishTransitions {
+    scope: String,
+    transitions: Vec<Transition>,
+}
+
+/// List only transitions for the Jira site in the task's saved link.
+#[tauri::command]
+pub async fn finish_task_transitions(state: State<'_, AppState>, task_id: String) -> Result<Option<FinishTransitions>> {
+    let task = state.config.task(&task_id)?;
+    let jira = match JiraConnection::load(&state) {
+        Ok(jira) => jira,
+        Err(Error::NotConfigured("Jira")) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let Some(key) = jira.key(&task) else { return Ok(None) };
+    jira.require_ticket(&state, &task)?;
+    let transitions = done_transitions(&jira, key).await?;
+    jira.require_ticket(&state, &task)?;
+    Ok(Some(FinishTransitions { scope: jira.scope(&task)?, transitions }))
+}
+
+/// Finish locally, then apply the chosen Jira transition if its scope still matches.
+#[tauri::command]
+pub async fn finish_task(
+    app: AppHandle,
+    task_id: String,
+    transition_id: Option<String>,
+    transition_scope: Option<String>,
+) -> Result<super::tasks::Finished> {
+    let transition = if let Some(id) = transition_id {
+        let state = app.state::<AppState>();
+        let task = state.config.task(&task_id)?;
+        let jira = JiraConnection::load(&state)?;
+        jira.require_ticket(&state, &task)?;
+        if transition_scope.as_deref() != Some(jira.scope(&task)?.as_str()) {
+            return Err(jira_changed());
+        }
+        Some((jira, id))
+    } else {
+        None
+    };
+    super::tasks::finish_task_with(app, task_id, transition).await
+}
 
 pub fn finish_tools() -> Vec<Value> {
     vec![tool(
@@ -64,13 +107,13 @@ pub async fn finish_call(app: &AppHandle, args: Value, caller: Option<&str>) -> 
         }
     }
 
-    let landed = merged_heads(&state, &task.id).await?;
     let wanted = args.get("transition").and_then(Value::as_str).filter(|s| !s.trim().is_empty());
-    let ticket = match (
-        task.issue_key.as_deref(),
-        state.config.with(|c| c.tracker_in_use() == Some(crate::config::TrackerKind::Jira)),
-    ) {
-        (Some(key), true) => Some((key.to_string(), closing(&state, key, wanted).await?)),
+    let jira = JiraConnection::load(&state).ok().filter(|jira| jira.key(&task).is_some());
+    let ticket = match &jira {
+        Some(jira) => {
+            let key = jira.key(&task).ok_or_else(jira_changed)?;
+            Some((key.to_owned(), closing(&state, jira, &task, key, wanted).await?))
+        }
         _ if wanted.is_some() => {
             return Err(Error::Other(format!("{} has no Jira ticket to move; nothing was changed", task.name)));
         }
@@ -78,7 +121,8 @@ pub async fn finish_call(app: &AppHandle, args: Value, caller: Option<&str>) -> 
     };
     let transition_id = ticket.as_ref().and_then(|(_, c)| c.chosen.as_ref()).map(|t| t.id.clone());
 
-    let finished = super::finish_task(app.clone(), task.id.clone(), transition_id, landed).await?;
+    let transition = jira.zip(transition_id);
+    let finished = super::tasks::finish_task_with(app.clone(), task.id.clone(), transition).await?;
     let kept = finished.repos.iter().any(|r| !r.ok);
     let mut out = json!({
         "finished": !kept,
@@ -106,27 +150,32 @@ pub async fn finish_call(app: &AppHandle, args: Value, caller: Option<&str>) -> 
     Ok(out)
 }
 
-/// Each checkout's merged pull request head, as the dialog passes it. A
-/// branch with no merged PR covering it is kept, so without GitHub every
-/// branch with work on it is.
-async fn merged_heads(state: &AppState, task_id: &str) -> Result<HashMap<String, String>> {
-    if !state.config.with(|c| c.github.is_some()) {
-        return Ok(HashMap::new());
+/// UI and MCP share this guard. Closed or missing PRs are not proof that the
+/// task landed, and a non-primary open PR still blocks Finish.
+pub(super) fn validate_finish(rows: &[super::pr_resolver::Resolved], recovering: bool) -> Result<()> {
+    for row in rows {
+        row.require_complete()?;
+        if let Some(pr) = row.row.open() {
+            return Err(Error::Other(format!(
+                "{}'s pull request #{} is still open. Nothing was changed.",
+                row.row.repo, pr.number
+            )));
+        }
+        if row.row.detached_unlanded {
+            return Err(Error::Other(format!(
+                "{} has unlanded commits on a detached HEAD. Keep them on a branch before finishing.",
+                row.row.repo
+            )));
+        }
     }
-    let (client, _) = super::github::github_client(state)?;
-    let rows = super::github::task_prs(state, &client, task_id).await?;
-    if let Some(open) = rows.iter().find(|r| r.pr.as_ref().is_some_and(|p| p.state == "open")) {
-        let number = open.pr.as_ref().map(|p| p.number).unwrap_or_default();
-        return Err(Error::Other(format!(
-            "{}'s pull request #{number} is still open; finishing is for work that has landed. \
-             Nothing was changed.",
-            open.repo
-        )));
+    if !rows.iter().any(|r| r.row.covered_merge)
+        && !(recovering && rows.iter().all(|r| r.row.branch_covered && r.row.changed == 0))
+    {
+        return Err(Error::Other(
+            "No merged pull request could be verified for this task. Nothing was changed.".into(),
+        ));
     }
-    Ok(rows
-        .into_iter()
-        .filter_map(|r| r.pr.filter(|p| p.merged && !p.head_sha.is_empty()).map(|p| (r.checkout_id, p.head_sha)))
-        .collect())
+    Ok(())
 }
 
 struct Closing {
@@ -139,16 +188,23 @@ struct Closing {
 /// Only into Jira's done category, by category and never by name (TASK-9).
 /// Picked without being told only when it is known: the project's status for
 /// merged work (TKT-8), or the only done one. Won't Do is done too.
-async fn closing(state: &AppState, key: &str, wanted: Option<&str>) -> Result<Closing> {
-    let (client, cfg) = super::jira::jira_client(state)?;
-    let issue = client.issue(key).await?;
+async fn closing(
+    state: &AppState,
+    jira: &JiraConnection,
+    task: &crate::config::Task,
+    key: &str,
+    wanted: Option<&str>,
+) -> Result<Closing> {
+    jira.require_ticket(state, task)?;
+    let issue = jira.client.issue(key).await?;
+    jira.require_ticket(state, task)?;
     if issue.status_category == "done" && wanted.is_none() {
         return Ok(Closing { already: Some(issue.status), chosen: None, options: Vec::new() });
     }
-    let done: Vec<Transition> =
-        client.transitions(key).await?.into_iter().filter(|t| t.to_category == "done").collect();
+    let done = done_transitions(jira, key).await?;
+    jira.require_ticket(state, task)?;
     let project = key.split('-').next().unwrap_or_default();
-    let merged = cfg.flow.get(project).and_then(|f| f.merged.as_ref()).map(|m| m.id.as_str());
+    let merged = jira.config.flow.get(project).and_then(|f| f.merged.as_ref()).map(|m| m.id.as_str());
     let options = done.iter().map(|t| format!("{} (to {})", t.name, t.to_status)).collect::<Vec<_>>();
     let chosen = pick(&done, wanted, merged).map_err(|w| {
         Error::Other(format!(
@@ -158,6 +214,10 @@ async fn closing(state: &AppState, key: &str, wanted: Option<&str>) -> Result<Cl
         ))
     })?;
     Ok(Closing { already: None, chosen, options })
+}
+
+async fn done_transitions(jira: &JiraConnection, key: &str) -> Result<Vec<Transition>> {
+    Ok(jira.client.transitions(key).await?.into_iter().filter(|t| t.to_category == "done").collect())
 }
 
 /// The one named, by transition or status, or else the one into the

@@ -4,20 +4,21 @@
 //! for the screenshots a drafted description came with (PR-4), which Open
 //! PRs adds once the pull requests are open.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
-use crate::config::{Checkout, Task};
+use crate::config::Checkout;
 use crate::error::{Error, Result};
-use crate::git;
 use crate::integrations::github::{self, Image, MAX_BYTES, MAX_IMAGES};
 use crate::mcp::{required, str_prop, tool};
 
 use super::diff::RepoResult;
-use super::github::github_client;
+use super::pr_resolver::{Connection, Scope};
 use super::{off_runtime, AppState};
 
 pub fn pr_images_tools() -> Vec<Value> {
@@ -64,6 +65,13 @@ pub async fn pr_images_call(app: &AppHandle, args: Value) -> Result<Value> {
     super::pr_task::not_a_review(&task, "given images")?;
     let checkout = checkout_for(&state, &task.id, args.get("repo").and_then(Value::as_str))?;
     let repo = state.config.project(&checkout.project_id)?.name;
+    let scope = Scope::capture(&state, &task.id, Instant::now())?;
+    let connection = Connection::load(&state).await?;
+    let read = scope.checkout(&connection, &checkout.id, false).await?;
+    read.require_complete()?;
+    let number = read.row.open().ok_or_else(|| Error::NotFound(format!("an open pull request for {repo}")))?.number;
+    let target =
+        read.row.action_target.ok_or_else(|| Error::Other("GitHub did not identify the open pull request.".into()))?;
 
     // Read and checked now, so a key file renamed `.png` is refused to the
     // agent rather than shown to the user.
@@ -81,9 +89,24 @@ pub async fn pr_images_call(app: &AppHandle, args: Value) -> Result<Value> {
         })
         .collect::<Vec<_>>();
     let count = images.len();
-    super::pr_image_offers::offer(app, &task.id, super::pr_image_offers::Offer { repo: repo.clone(), images });
+    if !scope.is_current(&state, &connection) {
+        return Err(super::pr_resolver::stale());
+    }
+    super::pr_image_offers::offer(
+        app,
+        &task.id,
+        super::pr_image_offers::Offer {
+            id: uuid::Uuid::new_v4().to_string(),
+            number,
+            checkout_id: checkout.id,
+            target,
+            repo: repo.clone(),
+            images,
+        },
+    );
     Ok(json!({
         "repo": repo,
+        "number": number,
         "offered": count,
         "published": false,
         "next": "The user adds them from the task's Pull requests tab in Layer; nothing is in the pull request until then.",
@@ -115,12 +138,33 @@ pub async fn show_pr_images(
     state: State<'_, AppState>,
     task_id: String,
     images: Vec<DraftImage>,
+    offer_id: Option<String>,
+    targets: Option<HashMap<String, String>>,
 ) -> Result<Vec<RepoResult>> {
     let task = state.config.task(&task_id)?;
     super::pr_task::not_a_review(&task, "given images")?;
+    let offer = offer_id.as_deref().map(|id| super::pr_image_offers::approved(&task_id, id)).transpose()?;
+    if let Some(offer) = &offer {
+        if images.is_empty()
+            || images.iter().any(|shown| {
+                !offer.images.iter().any(|offered| {
+                    (shown.path.as_str(), shown.caption.as_str(), &shown.repo)
+                        == (offered.path.as_str(), offered.caption.as_str(), &offered.repo)
+                })
+            })
+        {
+            return Err(Error::Other("These screenshots do not match the current offer. Review it again.".into()));
+        }
+    }
+    let scope = Scope::capture(&state, &task.id, Instant::now())?;
+    let connection = Connection::load(&state).await?;
     let mut results = Vec::new();
     for (repo, wanted) in by_repo(images) {
-        let checkout = match checkout_for(&state, &task.id, repo.as_deref()) {
+        let checkout = match &offer {
+            Some(offer) => state.config.checkout(&offer.checkout_id),
+            None => checkout_for(&state, &task.id, repo.as_deref()),
+        };
+        let checkout = match checkout {
             Ok(c) => c,
             Err(e) => {
                 let name = repo.unwrap_or_default();
@@ -130,7 +174,30 @@ pub async fn show_pr_images(
         };
         let name = state.config.project(&checkout.project_id).map(|p| p.name).unwrap_or_default();
         let count = wanted.len();
-        results.push(match show_in_pr(&state, &task, &checkout, wanted).await {
+        let target = match &offer {
+            Some(offer) => Some(offer.target.as_str()),
+            None => targets.as_ref().and_then(|targets| targets.get(&checkout.id).map(String::as_str)),
+        };
+        let shown = match target {
+            Some(target) => {
+                async {
+                    let images = off_runtime(move || read_images(&wanted)).await??;
+                    show_approved_images(
+                        &state,
+                        &scope,
+                        &connection,
+                        &checkout.id,
+                        &images,
+                        target,
+                        offer_id.as_deref(),
+                    )
+                    .await
+                }
+                .await
+            }
+            None => Err(Error::Other("No pull request was approved for these screenshots.".into())),
+        };
+        results.push(match shown {
             Ok(_) => RepoResult {
                 checkout_id: checkout.id,
                 repo: name,
@@ -210,24 +277,41 @@ pub(super) fn preview(image: &Image) -> String {
 
 /// Show `wanted` in the open pull request of `checkout`'s branch: the PR's
 /// address, and each image's caption and address.
-async fn show_in_pr(
+pub(super) async fn show_approved_images(
     state: &AppState,
-    task: &Task,
-    checkout: &Checkout,
-    wanted: Wanted,
-) -> Result<(String, Vec<(String, String)>)> {
-    let repo = state.config.project(&checkout.project_id)?.name;
-    let images = off_runtime(move || read_images(&wanted)).await??;
-
-    let dir = PathBuf::from(&checkout.path);
-    let (owner, name) = off_runtime(move || git::origin_slug_cached(&dir)).await??;
-    let (client, _) = github_client(state)?;
-    let branches = super::pr_branches::branches(checkout, &task.branch).await?;
-    let pr = super::pr_branches::open_pull(&client, &owner, &name, &branches).await?.ok_or_else(|| {
-        Error::Other(format!("{repo} has no open pull request for {}: open it with open_prs first", task.branch))
-    })?;
-    let shown = client.show_images(&owner, &name, pr.number, &pr.url, &images).await?;
-    Ok((pr.url, shown.into_iter().map(|s| (s.caption, s.url)).collect()))
+    scope: &Scope,
+    connection: &Connection,
+    checkout_id: &str,
+    images: &[Image],
+    target: &str,
+    offer_id: Option<&str>,
+) -> Result<()> {
+    let result = scope.checkout(connection, checkout_id, false).await?;
+    let (owner, name) = result.slug()?;
+    let pr = result.require_target(target)?;
+    let client = connection.client()?;
+    client.verify_edit_target(owner, name, pr).await?;
+    if !scope.local_is_current(connection, std::slice::from_ref(&result)).await {
+        return Err(super::pr_resolver::stale());
+    }
+    client
+        .show_images(owner, name, pr.number, &pr.url, images, |response| {
+            let remote = response.map_or(Ok(()), |v| github::check_edit_target(v, owner, name, pr.number, pr.id));
+            let result = &result;
+            async move {
+                remote?;
+                result.require_repo_current(connection).await?;
+                if !scope.is_current(state, connection) {
+                    return Err(super::pr_resolver::stale());
+                }
+                if let Some(offer_id) = offer_id {
+                    super::pr_image_offers::approved(&scope.task.id, offer_id)?;
+                }
+                Ok(())
+            }
+        })
+        .await?;
+    Ok(())
 }
 
 /// The task's checkout of `repo`, or its only one when none is named.

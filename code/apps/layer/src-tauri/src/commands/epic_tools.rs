@@ -111,7 +111,7 @@ async fn subtasks(app: &AppHandle, epic: &Task) -> Result<Value> {
     let state = app.state::<AppState>();
     let e = epic.clone();
     let tab = super::blocking(app.clone(), move |state| Ok(view(state, &e))).await?;
-    let github = super::github::github_client(&state).ok();
+    let github = super::pr_resolver::Connection::load(&state).await.ok();
     let mut out = Vec::new();
     for sub in tab.sub_tasks {
         let Some(task) = sub.task_id.as_deref().and_then(|id| state.config.task(id).ok()) else {
@@ -122,7 +122,7 @@ async fn subtasks(app: &AppHandle, epic: &Task) -> Result<Value> {
         let running = panes.iter().filter(|p| p.running).count();
         let asking = panes.iter().filter(|p| p.running && p.activity == Activity::Asking).count();
         let prs = match &github {
-            Some((client, _)) => super::github::task_prs(&state, client, &task.id).await.unwrap_or_default(),
+            Some(connection) => super::github::task_prs(&state, connection, &task.id).await.unwrap_or_default(),
             None => Vec::new(),
         };
         let live: Vec<_> =
@@ -131,7 +131,7 @@ async fn subtasks(app: &AppHandle, epic: &Task) -> Result<Value> {
         // Verdicts only from the open ones, as the task list reads them: a
         // merged pull request's reviews are not fetched.
         let open: Vec<_> = live.iter().filter(|r| r.pr.as_ref().is_some_and(|p| !p.merged)).collect();
-        let state_word = if !live.is_empty() && open.is_empty() {
+        let state_word = if super::github::task_merged(&prs) {
             "merged"
         } else if open.iter().any(|r| r.verdict == "changes_requested") {
             "changes"

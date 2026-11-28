@@ -20,16 +20,14 @@ use crate::error::{Error, Result};
 /// noticeable part of each call to a site across an ocean.
 pub fn http_client() -> reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .user_agent("villain-layer")
-                .build()
-                .unwrap_or_default()
-        })
-        .clone()
+    CLIENT.get_or_init(|| http_client_builder().build().unwrap_or_default()).clone()
+}
+
+fn http_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .user_agent("villain-layer")
 }
 
 /// A string field of a JSON object, or "" when it is missing or not a string.

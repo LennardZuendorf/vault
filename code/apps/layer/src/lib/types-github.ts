@@ -44,10 +44,16 @@ export interface CheckRun {
 export interface CheckoutPr {
   checkout_id: string;
   repo: string;
+  /** A saved link is empty when the backend could not validate it for this checkout. */
+  pin: { repo: string; number: number; url: string } | null;
+  /** Exact decimal u64; a JavaScript number could round it. */
+  pin_revision: string;
+  /** The numbered lookup verified the pin; an automatic match alone does not. */
+  pin_read: boolean;
   pr: PullRequest | null;
   checks: CheckRun[];
   reviews: Review[];
-  /** Earlier pull requests from this branch, newest first. */
+  /** Other associated pull requests, which can include open PRs. */
   past: PullRequest[];
   verdict: Verdict;
   /** Where this repo's next PR is opened against; may differ from pr.base. */
@@ -57,7 +63,14 @@ export interface CheckoutPr {
   /** Threads and comments on the open PR waiting on its author's reply (PR-6). */
   to_reply: number;
   error: string | null;
+  branch_covered: boolean;
+  detached_unlanded: boolean;
+  covered_merge: boolean;
+  action_target: string | null;
 }
+
+export const PR_PIN_REVISION_CHANGED =
+  "The pull request pin changed. Review it before trying again.";
 
 export interface RepoBranchFacts {
   checkout_id: string;
@@ -252,6 +265,8 @@ export interface DraftImage {
 
 /** Screenshots an agent offered for `repo`'s open pull request, held until the user adds them (PR-13). */
 export interface PrImageOffer {
+  id: string;
+  number: number;
   repo: string;
   images: DraftImage[];
 }

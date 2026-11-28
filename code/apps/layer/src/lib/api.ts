@@ -1,5 +1,6 @@
 import type { Operation, TrackerKind } from "@layer/types";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { OpenPrRow } from "./pr-draft-images";
 import type {
   AcpVersion,
   AcpView,
@@ -22,6 +23,8 @@ import type {
   Ticket,
   TicketType,
   TicketPage,
+  TicketSearch,
+  LinkedTaskTicket,
   JiraTransition,
   LoopView,
   PaneInfo,
@@ -89,6 +92,8 @@ import type {
 import type { RoutinePatch, RoutineRun, Routines } from "./types-routines";
 import type { RunLog } from "./types-runs";
 
+export { errMessage, failureText } from "./api-errors";
+
 export const api = {
   // projects
   listProjects: () => invoke<Project[]>("list_projects"),
@@ -133,11 +138,15 @@ export const api = {
   taskOutgoing: (taskId: string) => invoke<RepoOutgoing[]>("task_outgoing", { taskId }),
   deleteTask: (id: string, force = false) => invoke<RepoResult[]>("delete_task", { id, force }),
   /**
-   * Worktrees, then local branches, then the ticket. `landed` is each
-   * checkout's merged PR head; a branch it does not contain is kept.
+   * Worktrees, then local branches, then the ticket. A branch the merged
+   * PR evidence does not cover is kept.
    */
-  finishTask: (taskId: string, transitionId: string | null, landed: Record<string, string>) =>
-    invoke<Finished>("finish_task", { taskId, transitionId, landed }),
+  finishTask: (taskId: string, transitionId: string | null, transitionScope: string | null) =>
+    invoke<Finished>("finish_task", { taskId, transitionId, transitionScope }),
+  finishTaskTransitions: (taskId: string) =>
+    invoke<{ scope: string; transitions: JiraTransition[] } | null>("finish_task_transitions", {
+      taskId,
+    }),
   addCheckout: (taskId: string, projectId: string) =>
     invoke<AddedRepo>("add_checkout", { taskId, projectId }),
   removeCheckout: (checkoutId: string, force = false) =>
@@ -374,10 +383,21 @@ export const api = {
     includeDone: boolean,
     types: string[],
     order: string,
-  ) => invoke<TicketPage>("tickets_find", { text: text || null, whose, includeDone, types, order }),
+    forLink?: boolean,
+  ) =>
+    invoke<TicketSearch>("tickets_find", {
+      text: text || null,
+      whose,
+      includeDone,
+      types,
+      order,
+      forLink,
+    }),
   ticketPriorities: () => invoke<string[]>("ticket_priorities"),
   setTracker: (uses: TrackerKind) => invoke<void>("set_tracker", { uses }),
   ticketsByKey: (keys: string[]) => invoke<Ticket[]>("tickets_by_key", { keys }),
+  linkTaskTicket: (taskId: string, key: string, trackerScope: string) =>
+    invoke<LinkedTaskTicket>("link_task_ticket", { taskId, key, trackerScope }),
   ticketRequiredFields: (projectKey: string, issueTypeId: string) =>
     invoke<RequiredField[]>("ticket_required_fields", { projectKey, issueTypeId }),
   fileTicket: (req: {
@@ -427,27 +447,38 @@ export const api = {
     invoke<string>("github_connect", { apiUrl, webUrl, token, reviewTeam }),
   githubReviewQueue: () => invoke<ReviewQueue>("github_review_queue"),
   githubTaskPrs: (taskId: string) => invoke<CheckoutPr[]>("github_task_prs", { taskId }),
+  unpinTaskPr: (taskId: string, checkoutId: string, pinRevision: string) =>
+    invoke<void>("unpin_task_pr", { taskId, checkoutId, pinRevision }),
   githubAllPrs: () => invoke<TaskPrs[]>("github_all_prs"),
   setCheckoutBase: (checkoutId: string, base: string) =>
     invoke<void>("set_checkout_base", { checkoutId, base }),
   taskBranchFacts: (taskId: string) => invoke<RepoBranchFacts[]>("task_branch_facts", { taskId }),
   checkoutBranches: (checkoutId: string) => invoke<string[]>("checkout_branches", { checkoutId }),
-  githubRetargetPr: (checkoutId: string) => invoke<string>("github_retarget_pr", { checkoutId }),
+  githubRetargetPr: (checkoutId: string, target: string) =>
+    invoke<string>("github_retarget_pr", { checkoutId, target }),
   /** Whether the PR is a draft afterwards (PR-15). */
-  githubSetPrDraft: (checkoutId: string, number: number, draft: boolean) =>
-    invoke<boolean>("github_set_pr_draft", { checkoutId, number, draft }),
+  githubSetPrDraft: (checkoutId: string, target: string, draft: boolean) =>
+    invoke<boolean>("github_set_pr_draft", { checkoutId, target, draft }),
   /** `skip`: checkout ids left out of this call, neither pushed nor opened. */
   githubOpenPrs: (taskId: string, title: string, body: string, draft: boolean, skip: string[]) =>
-    invoke<RepoResult[]>("github_open_prs", { taskId, title, body, draft, skip }),
+    invoke<OpenPrRow[]>("github_open_prs", { taskId, title, body, draft, skip }),
   /** The draft's screenshots, each into its repository's open PR (PR-4). */
-  showPrImages: (taskId: string, images: DraftImage[]) =>
+  showPrImages: (
+    taskId: string,
+    images: DraftImage[],
+    offerId: string | null,
+    targets: Record<string, string> | null = null,
+  ) =>
     invoke<RepoResult[]>("show_pr_images", {
       taskId,
+      offerId,
+      targets,
       images: images.map(({ path, caption, repo }) => ({ path, caption, repo })),
     }),
   /** Screenshots an agent offered with `pr_images`, waiting for the user (PR-13). */
   prImageOffer: (taskId: string) => invoke<PrImageOffer | null>("pr_image_offer", { taskId }),
-  dropPrImageOffer: (taskId: string) => invoke<void>("drop_pr_image_offer", { taskId }),
+  dropPrImageOffer: (taskId: string, offerId: string) =>
+    invoke<void>("drop_pr_image_offer", { taskId, offerId }),
   githubPrFeedback: (taskId: string) => invoke<RepoFeedback[]>("github_pr_feedback", { taskId }),
   /** Typed into `paneId` when given; otherwise only returned, to start an agent with. */
   sendPrFeedback: (
@@ -601,21 +632,3 @@ export const api = {
   /** Returns the list as kept: each site as its host, what is not one dropped. */
   setBrowserSites: (sites: string[]) => invoke<string[]>("set_browser_sites", { sites }),
 };
-
-export function errMessage(e: unknown): string {
-  if (typeof e === "string") return e;
-  if (e instanceof Error) return e.message;
-  return JSON.stringify(e);
-}
-
-/**
- * A failure as the user reads it: a sentence, capital first and a full stop
- * last (`studio/design/behaviour.md`). Errors from git, Jira or Slack arrive as
- * fragments ("invalid_auth", "push rejected").
- */
-export function failureText(e: unknown): string {
-  const text = errMessage(e).trim();
-  if (!text) return "Something went wrong. Try again.";
-  const capital = text[0].toUpperCase() + text.slice(1);
-  return /[.!?…:)]$/.test(capital) ? capital : `${capital}.`;
-}

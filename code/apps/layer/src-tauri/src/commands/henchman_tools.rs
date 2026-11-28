@@ -292,15 +292,15 @@ fn facts(agents: &[PaneInfo], rows: &[CheckoutPr], changed: u32, sub_tasks: &[bo
     let live: Vec<&PaneInfo> = agents.iter().filter(|p| p.kind == PaneKind::Agent && p.running).collect();
     let budget = |p: &&PaneInfo| p.notice.as_deref() == Some("usage_limit");
     let open: Vec<&CheckoutPr> = rows.iter().filter(|r| is_open(r)).collect();
-    let landed: Vec<&CheckoutPr> =
-        rows.iter().filter(|r| r.pr.as_ref().is_some_and(|p| p.state == "open" || p.merged)).collect();
     let sub_tasks_open = sub_tasks.iter().any(|merged| !merged);
     // An epic's own pull request merging said "finish the task" while its
     // sub-tasks were still in review: it is merged once they all are.
     let merged = if sub_tasks.is_empty() {
-        !landed.is_empty() && landed.iter().all(|r| r.pr.as_ref().is_some_and(|p| p.merged))
+        super::github::task_merged(rows)
     } else {
-        open.is_empty() && !sub_tasks_open
+        open.is_empty()
+            && !sub_tasks_open
+            && rows.iter().all(|r| r.error.is_none() && r.branch_covered && r.changed == 0)
     };
     Facts {
         asking: live.iter().any(|p| p.activity == Activity::Asking && !budget(p)),
@@ -422,11 +422,11 @@ async fn prs_of(state: &AppState, tasks: &[Task]) -> std::collections::HashMap<S
         tasks.iter().filter(|t| t.review.is_none() && !seen.contains_key(&t.id)).map(|t| t.id.clone()).collect()
     };
     if !missing.is_empty() {
-        if let Ok((client, _)) = super::github::github_client(state) {
+        if let Ok(connection) = super::pr_resolver::Connection::load(state).await {
             use futures_util::stream::{self, StreamExt};
-            let client = &client;
+            let connection = &connection;
             stream::iter(missing)
-                .map(|id| async move { super::github::task_prs(state, client, &id).await })
+                .map(|id| async move { super::github::task_prs(state, connection, &id).await })
                 .buffered(4)
                 .collect::<Vec<_>>()
                 .await;

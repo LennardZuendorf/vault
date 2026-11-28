@@ -19,7 +19,7 @@ use crate::tickets::{NewTicket, Ticket, TicketPage, Tracker};
 use super::panes::{agent_file_dir, start_agent, Resume};
 use super::spec::{and_list, approve, spec_of, Slot, DRAFTS};
 use super::task_context::{keep_ticket, write_task_context};
-use super::tasks::{new_task, NewTask};
+use super::tasks::{new_or_adopt_sub_task, NewTask};
 use super::tickets::{default_ticket_type, tracker};
 use super::AppState;
 
@@ -348,7 +348,6 @@ async fn file_one(
     issue_type: &str,
     fields: &Value,
 ) -> Result<()> {
-    let state = app.state::<AppState>();
     let ToFile { sub, description, project_ids, remembered } = one;
     if project_ids.is_empty() {
         return Err(Error::Other("none of its repositories is in the epic".into()));
@@ -381,22 +380,6 @@ async fn file_one(
     };
 
     let (key, url) = (issue.as_ref().map(|i| i.key.clone()), issue.as_ref().map(|i| i.url.clone()));
-    // A ticket that already has a task is that task: a second would check
-    // the same branch out twice.
-    let had = key
-        .as_deref()
-        .and_then(|k| state.config.with(|c| c.tasks.iter().find(|t| t.issue_key.as_deref() == Some(k)).cloned()));
-    let of = SubTaskOf { epic: epic.id.clone(), title: sub.title.clone() };
-    if let Some(task) = had {
-        let id = task.id.clone();
-        state.config.update(move |c| {
-            if let Some(t) = c.tasks.iter_mut().find(|t| t.id == id) {
-                t.sub_task = Some(of);
-            }
-        })?;
-        return Ok(());
-    }
-
     let new = NewTask {
         name: match &key {
             Some(k) => format!("{k} {}", sub.title),
@@ -410,33 +393,37 @@ async fn file_one(
         issue_url: url,
         epic_key: epic.issue_key.clone(),
         epic: false,
-        sub_task: Some(of),
+        sub_task: None,
     };
     let epic = epic.clone();
-    let task = super::blocking(app.clone(), move |state| {
-        let task = new_task(state, new)?;
-        let from = spec_of(state, &epic);
-        let mut texts: Vec<(Slot, String)> = [Part::Requirements, Part::Design]
-            .into_iter()
-            .filter_map(|p| Some((Slot::shared(p), from.approved(&Slot::shared(p))?)))
-            .collect();
-        texts.extend(sub.repos.iter().map(|r| (Slot::tasks(&r.folder), r.tasks.clone())));
-        let failed = approve(&spec_of(state, &task), &task, &texts, Some(from.kind()))?;
-        write_task_context(state, &task)?;
-        if !failed.is_empty() {
-            let where_: Vec<String> = failed.iter().map(|f| format!("{} ({})", f.folder, f.error)).collect();
-            return Err(Error::Other(format!(
-                "its task was made, but its spec could not be committed in {}",
-                and_list(&where_.iter().map(String::as_str).collect::<Vec<_>>())
-            )));
-        }
-        Ok(task)
-    })
-    .await?;
-    if let Some(issue) = issue {
+    let task = super::blocking(app.clone(), move |state| make_sub_task(state, &epic, &sub, new)).await?;
+    if let (Some(task), Some(issue)) = (task, issue) {
         keep_ticket(app.clone(), task, issue).await;
     }
     Ok(())
+}
+
+fn make_sub_task(state: &AppState, epic: &Task, sub: &SubTask, new: NewTask) -> Result<Option<Task>> {
+    let of = SubTaskOf { epic: epic.id.clone(), title: sub.title.clone() };
+    let Some(task) = new_or_adopt_sub_task(state, new, of)? else {
+        return Ok(None);
+    };
+    let from = spec_of(state, epic);
+    let mut texts: Vec<(Slot, String)> = [Part::Requirements, Part::Design]
+        .into_iter()
+        .filter_map(|p| Some((Slot::shared(p), from.approved(&Slot::shared(p))?)))
+        .collect();
+    texts.extend(sub.repos.iter().map(|r| (Slot::tasks(&r.folder), r.tasks.clone())));
+    let failed = approve(&spec_of(state, &task), &task, &texts, Some(from.kind()))?;
+    write_task_context(state, &task)?;
+    if !failed.is_empty() {
+        let where_: Vec<String> = failed.iter().map(|f| format!("{} ({})", f.folder, f.error)).collect();
+        return Err(Error::Other(format!(
+            "its task was made, but its spec could not be committed in {}",
+            and_list(&where_.iter().map(String::as_str).collect::<Vec<_>>())
+        )));
+    }
+    Ok(Some(task))
 }
 
 /// The sub-tasks `task` waits for that have not merged. One not filed, or
@@ -452,17 +439,13 @@ pub(crate) async fn waiting_for(app: &AppHandle, task: &Task) -> Result<Vec<Stri
         Ok((waits, filed_of(state, &of.epic)))
     })
     .await?;
-    let github = super::github::github_client(&state).ok();
+    let github = super::pr_resolver::Connection::load(&state).await.ok();
     let mut open = Vec::new();
     for title in waits {
         let merged = match (filed.iter().find(|t| is(t, &title)), &github) {
-            (Some(t), Some((client, _))) => super::github::task_prs(&state, client, &t.id)
+            (Some(t), Some(connection)) => super::github::task_prs(&state, connection, &t.id)
                 .await
-                .map(|rows| {
-                    let live: Vec<_> =
-                        rows.iter().filter_map(|r| r.pr.as_ref()).filter(|p| p.merged || p.state == "open").collect();
-                    !live.is_empty() && live.iter().all(|p| p.merged)
-                })
+                .map(|rows| super::github::task_merged(&rows))
                 .unwrap_or(false),
             _ => false,
         };
@@ -533,6 +516,7 @@ pub async fn start_sub_task(
 
 #[cfg(test)]
 mod tests {
+    use super::super::tasks::new_task;
     use super::*;
 
     fn task(id: &str, key: &str) -> Task {
@@ -568,5 +552,85 @@ mod tests {
         assert_eq!(tasks[1].sub_task, None);
         assert_eq!(tasks[2].sub_task.as_ref().map(|s| s.epic.as_str()), Some("o"));
         assert_eq!(tasks[3].sub_task, None);
+    }
+
+    #[test]
+    fn a_ticket_claimed_before_sub_task_insertion_adopts_the_work_and_leaves_its_spec_alone() {
+        use super::super::repos::tests::{add_task, git, setup, state};
+        use std::path::Path;
+
+        let (root, mut cfg) = setup();
+        add_task(&mut cfg, &root, "epic");
+        cfg.tasks[0].epic = true;
+        let state = state(&root, cfg);
+        let epic = state.config.task("epic").unwrap();
+        let work = new_task(
+            &state,
+            NewTask {
+                name: "Investigate the API".into(),
+                project_ids: vec!["api".into()],
+                branch: Some("my-api-work".into()),
+                branch_suffix: None,
+                base: None,
+                issue_key: None,
+                issue_url: None,
+                epic_key: None,
+                epic: false,
+                sub_task: None,
+            },
+        )
+        .unwrap();
+        let repo = &state.config.checkouts_of(&work.id)[0];
+        let checkout = Path::new(&repo.path);
+        let spec_path = checkout.join("specs/my-api-work/tasks.md");
+        let existing_spec = "## Tasks\n- [x] 1. Investigate the API.\n";
+        std::fs::create_dir_all(spec_path.parent().unwrap()).unwrap();
+        std::fs::write(&spec_path, existing_spec).unwrap();
+        let head = git(checkout, &["rev-parse", "HEAD"]);
+        let worktrees = git(checkout, &["worktree", "list", "--porcelain"]);
+
+        let sub = spec::sub_tasks("Epic", &[("api".into(), "## API-42 Repair the API\n- [ ] 1. Repair it.".into())])
+            .remove(0);
+        let of = SubTaskOf { epic: epic.id.clone(), title: sub.title.clone() };
+        let url = "https://example.test/browse/API-42";
+        let new = NewTask {
+            name: "API-42 Repair the API".into(),
+            project_ids: vec!["api".into()],
+            branch: None,
+            branch_suffix: None,
+            base: None,
+            issue_key: sub.key.clone(),
+            issue_url: Some(url.into()),
+            epic_key: None,
+            epic: false,
+            sub_task: None,
+        };
+        assert!(state.config.with(|c| c.tasks.iter().all(|t| t.issue_key.is_none())));
+        // The linker saves the association after the epic found no owner,
+        // but before the epic's blocking insertion runs.
+        state
+            .config
+            .update_local_tasks(|c| {
+                let task = c.tasks.iter_mut().find(|t| t.id == work.id).unwrap();
+                task.issue_key = Some("API-42".into());
+                task.issue_url = Some(url.into());
+                Ok(())
+            })
+            .unwrap();
+
+        let outcome = make_sub_task(&state, &epic, &sub, new);
+
+        let saved = state.config.task(&work.id).unwrap();
+        assert_eq!(saved.sub_task, Some(of), "the epic did not adopt the task that claimed the ticket");
+        assert!(outcome.unwrap().is_none(), "adopting must not return a new task");
+        assert_eq!(saved.name, work.name);
+        assert_eq!(saved.branch, work.branch);
+        assert_eq!(saved.issue_url.as_deref(), Some(url));
+        assert_eq!(state.config.read().tasks.len(), 2);
+        assert!(!state.config.worktree_root().join("API-42").exists());
+        assert_eq!(git(checkout, &["worktree", "list", "--porcelain"]), worktrees);
+        assert_eq!(git(checkout, &["rev-parse", "HEAD"]), head);
+        assert_eq!(std::fs::read_to_string(spec_path).unwrap(), existing_spec);
+        std::fs::remove_dir_all(&root).ok();
     }
 }

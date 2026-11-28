@@ -59,19 +59,21 @@ pub fn kind_of(bytes: &[u8]) -> Option<&'static str> {
 impl GitHub {
     /// Store `images` for pull request `number` and show them in its
     /// description, replacing the ones shown before. Returns what is shown.
-    pub async fn show_images(
+    pub async fn show_images<F: std::future::Future<Output = Result<()>> + Send>(
         &self,
         owner: &str,
         repo: &str,
         number: u64,
         pr_url: &str,
         images: &[Image],
+        check: impl Fn(Option<&Value>) -> F,
     ) -> Result<Vec<Shown>> {
         let files: Vec<String> =
             images.iter().enumerate().map(|(i, img)| format!("{}-{}.{}", i + 1, slug(&img.caption), img.ext)).collect();
 
         let mut tree = Vec::new();
         for (img, path) in images.iter().zip(&files) {
+            check(None).await?;
             let blob = self
                 .json(self.req(reqwest::Method::POST, &format!("/repos/{owner}/{repo}/git/blobs")).json(&json!({
                     "content": base64::engine::general_purpose::STANDARD.encode(&img.bytes),
@@ -80,13 +82,14 @@ impl GitHub {
                 .await?;
             tree.push(json!({ "path": path, "mode": "100644", "type": "blob", "sha": sha_of(&blob)? }));
         }
+        check(None).await?;
         let tree = self
             .json(
                 self.req(reqwest::Method::POST, &format!("/repos/{owner}/{repo}/git/trees"))
                     .json(&json!({ "tree": tree })),
             )
             .await?;
-        let commit = self.commit_for(owner, repo, number, sha_of(&tree)?).await?;
+        let commit = self.commit_for(owner, repo, number, sha_of(&tree)?, &check).await?;
 
         let shown: Vec<Shown> = images
             .iter()
@@ -96,6 +99,7 @@ impl GitHub {
 
         let path = format!("/repos/{owner}/{repo}/pulls/{number}");
         let v = self.json(self.req(reqwest::Method::GET, &path)).await?;
+        check(Some(&v)).await?;
         let body = v.get("body").and_then(Value::as_str).unwrap_or_default();
         let next = with_images(body, &shown);
         if next != body {
@@ -105,7 +109,15 @@ impl GitHub {
     }
 
     /// A commit of `tree` alone, and the pull request's ref pointed at it.
-    async fn commit_for(&self, owner: &str, repo: &str, number: u64, tree: &str) -> Result<String> {
+    async fn commit_for<F: std::future::Future<Output = Result<()>> + Send>(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        tree: &str,
+        check: &impl Fn(Option<&Value>) -> F,
+    ) -> Result<String> {
+        check(None).await?;
         let commit = self
             .json(self.req(reqwest::Method::POST, &format!("/repos/{owner}/{repo}/git/commits")).json(&json!({
                 "message": format!("Images for #{number}"),
@@ -126,7 +138,9 @@ impl GitHub {
                     .json(&json!({ "sha": commit, "force": true })),
             )
         };
-        if self.has_ref(owner, repo, &name).await? {
+        let exists = self.has_ref(owner, repo, &name).await?;
+        check(None).await?;
+        if exists {
             point().await?;
             return Ok(commit);
         }
@@ -137,6 +151,7 @@ impl GitHub {
             Ok(_) => {}
             // Another upload for the same PR created it in between.
             Err(Error::Other(e)) if e.starts_with("GitHub 422") => {
+                check(None).await?;
                 point().await?;
             }
             Err(e) => return Err(e),
@@ -259,6 +274,8 @@ mod tests {
     #[test]
     fn images_go_above_the_list_of_other_prs() {
         let web = siblings::Sibling {
+            id: None,
+            editable: true,
             repo: "web".into(),
             owner: "acme".into(),
             name: "web".into(),
@@ -396,7 +413,7 @@ mod tests {
         // PR 120's ref is listed when asking for 12's, and is not it.
         let (gh, seen) = github(&["refs/pr-images/120"], false).await;
 
-        let shown = gh.show_images("acme", "web", 12, PR, &[png("Night")]).await.unwrap();
+        let shown = gh.show_images("acme", "web", 12, PR, &[png("Night")], |_| async { Ok(()) }).await.unwrap();
 
         assert_eq!(shown[0].url, "https://github.com/acme/web/raw/commit1/1-night.png");
         let seen = seen.lock();
@@ -414,7 +431,7 @@ mod tests {
     async fn a_later_upload_replaces_what_the_prs_ref_held() {
         let (gh, seen) = github(&["refs/pr-images/12"], false).await;
 
-        gh.show_images("acme", "web", 12, PR, &[png("Day")]).await.unwrap();
+        gh.show_images("acme", "web", 12, PR, &[png("Day")], |_| async { Ok(()) }).await.unwrap();
 
         let seen = seen.lock();
         let commit = seen.iter().find(|r| r.starts_with("POST /repos/acme/web/git/commits")).unwrap();
@@ -428,7 +445,7 @@ mod tests {
     async fn a_ref_another_upload_created_first_is_moved_rather_than_failing() {
         let (gh, seen) = github(&[], true).await;
 
-        gh.show_images("acme", "web", 12, PR, &[png("Day")]).await.unwrap();
+        gh.show_images("acme", "web", 12, PR, &[png("Day")], |_| async { Ok(()) }).await.unwrap();
 
         let seen = seen.lock();
         assert!(seen.iter().any(|r| r.starts_with("POST /repos/acme/web/git/refs ")));
@@ -465,7 +482,7 @@ mod tests {
             .collect();
         let gh = GitHub::new(&GithubConfig { api_url, ..Default::default() }, &token).unwrap();
 
-        let shown = gh.show_images(owner, repo, number, &url, &images).await.unwrap();
+        let shown = gh.show_images(owner, repo, number, &url, &images, |_| async { Ok(()) }).await.unwrap();
 
         for s in &shown {
             println!("{}: {}", s.caption, s.url);

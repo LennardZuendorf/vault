@@ -11,6 +11,7 @@ use crate::error::{Error, Result};
 mod landed;
 mod only;
 mod outgoing;
+mod pr_history;
 mod remote;
 mod snapshot;
 mod store;
@@ -18,7 +19,9 @@ mod upkeep;
 pub use landed::{all_landed, have_commit, landed_through};
 pub use only::{commit_only, head_commit};
 pub use outgoing::{outgoing_commits, outgoing_from, outgoing_patch};
-pub use remote::{clone_by_key, forget_origins, origin_slug, origin_slug_cached};
+pub(crate) use pr_history::{departed_topics, verify_checkout_root};
+pub(crate) use remote::checkout_origin;
+pub use remote::{clone_by_key, origin_slug};
 pub use snapshot::fingerprint;
 pub use store::{
     adopt_worktree, belongs_to, changed_between, copy_local_config, create_store, default_tip, follow_clone_origin,
@@ -138,21 +141,22 @@ pub fn current_branch(dir: &Path) -> Result<String> {
 /// an agent may cut one and open its pull request from there. Not its base
 /// or the repo's default branch, whose pull requests are everyone's, and
 /// none when HEAD is detached.
-pub fn other_branch(dir: &Path, task_branch: &str, base: &str) -> Option<String> {
-    let on = run(dir, &["symbolic-ref", "-q", "--short", "HEAD"]).ok()?.trim().to_string();
-    if on.is_empty() || on == task_branch || on == base || on == default_branch(dir) {
-        return None;
-    }
-    Some(on)
+pub(crate) fn other_branch_checked(dir: &Path, task_branch: &str, base: &str) -> Result<Option<String>> {
+    let on = current_branch(dir)?;
+    Ok((!on.is_empty() && on != "HEAD" && on != task_branch && on != base && on != default_branch(dir)).then_some(on))
 }
 
 /// The repo's default branch, best-effort: origin/HEAD, then main, then master.
 pub fn default_branch(dir: &Path) -> String {
-    if let Ok(out) = run(dir, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) {
-        if let Some(name) = out.trim().strip_prefix("origin/") {
-            return name.to_string();
-        }
-    }
+    tracked_default_branch(dir).unwrap_or_else(|| guessed_default_branch(dir))
+}
+
+fn tracked_default_branch(dir: &Path) -> Option<String> {
+    let out = run(dir, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).ok()?;
+    out.trim().strip_prefix("origin/").map(str::to_string)
+}
+
+fn guessed_default_branch(dir: &Path) -> String {
     for candidate in ["main", "master"] {
         if run(dir, &["rev-parse", "--verify", "--quiet", candidate]).is_ok() {
             return candidate.to_string();
@@ -519,24 +523,37 @@ fn untracked_text(path: &Path) -> Option<String> {
 
 /// How many files differ from the baseline, committed or not.
 ///
-/// The same set `changed_files` lists, counted without building it: no file
-/// is opened, which is what makes this safe to call for every repository of
-/// every task on the pull-request watch's timer.
-pub fn changed_count(dir: &Path, base: &str, base_commit: Option<&str>, scope: Scope) -> usize {
-    let merge_base = compare_against(dir, base, base_commit, scope);
-    changed_count_from(dir, &merge_base)
+/// Count files without opening them. A failed Git command must not become a
+/// zero: PR completion uses this count as evidence that no work is left.
+pub(crate) fn changed_count(dir: &Path, base: &str, point: Option<&str>) -> Result<usize> {
+    let rev = baseline(dir, base, point);
+    if rev.starts_with('-') {
+        return Err(Error::Git("The checkout's base is not a valid revision.".into()));
+    }
+    let tracked = run(dir, &["diff", "--name-only", &rev, "--"])?;
+    let untracked = run(dir, &["ls-files", "--others", "--exclude-standard"])?;
+    Ok(tracked.lines().count() + untracked.lines().count())
 }
 
-/// `changed_count` measured from any revision: files that differ from it,
-/// committed or not, plus untracked ones.
-fn changed_count_from(dir: &Path, rev: &str) -> usize {
-    let tracked = run(dir, &["diff", "--name-only", rev])
-        .map(|o| o.lines().filter(|l| !l.trim().is_empty()).count())
-        .unwrap_or(0);
-    let untracked = run(dir, &["ls-files", "--others", "--exclude-standard"])
-        .map(|o| o.lines().filter(|l| !l.trim().is_empty()).count())
-        .unwrap_or(0);
-    tracked + untracked
+pub(crate) fn task_branch_tip(dir: &Path, branch: &str) -> Option<String> {
+    run(dir, &["rev-parse", "--verify", &format!("refs/heads/{branch}")]).ok().map(|s| s.trim().to_owned())
+}
+
+/// Opening a PR pushes the task ref, whether or not this worktree is on it.
+pub(crate) fn task_branch_has_commits(dir: &Path, branch: &str, base: &str, point: Option<&str>) -> Result<bool> {
+    let tip = format!("refs/heads/{branch}");
+    let from = if let Some(point) = point.filter(|p| is_ancestor(dir, p, &tip)) {
+        point.to_owned()
+    } else {
+        if base.starts_with('-') {
+            return Err(Error::Git("The checkout's base is not a valid revision.".into()));
+        }
+        run(dir, &["merge-base", &format!("refs/remotes/origin/{base}"), &tip])
+            .or_else(|_| run(dir, &["merge-base", base, &tip]))?
+            .trim()
+            .to_owned()
+    };
+    Ok(!run(dir, &["log", "-n", "1", "--format=%H", &format!("{from}..{tip}"), "--"])?.trim().is_empty())
 }
 
 /// What the diff is measured against.

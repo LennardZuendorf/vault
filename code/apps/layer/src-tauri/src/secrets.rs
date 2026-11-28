@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use parking_lot::Mutex;
+use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
 
 use crate::error::Result;
@@ -33,6 +34,8 @@ const BUNDLE: &str = "tokens";
 
 pub const JIRA: &str = "jira-token";
 pub const GITHUB: &str = "github-token";
+const LEGACY_GITHUB_ORIGIN: &str = "github-token-origin";
+const GITHUB_BINDING: &str = "github-token-binding";
 /// Notifications' own Slack token, from before they were posted by the bot
 /// (§24). Read only to forget it: `forget_old_slack`.
 pub const SLACK: &str = "slack-token";
@@ -131,7 +134,7 @@ fn store(bundle: Bundle) -> Result<()> {
         return Ok(());
     }
     if bundle.is_empty() {
-        let _ = delete_item(BUNDLE);
+        delete_item(BUNDLE)?;
     } else {
         write_item(BUNDLE, &serde_json::to_string(&bundle)?)?;
     }
@@ -154,7 +157,102 @@ pub fn set(key: &str, secret: &str) -> Result<()> {
     let _writing = WRITING.lock();
     let mut bundle = load()?;
     bundle.insert(key.to_string(), secret.to_string());
+    if key == GITHUB {
+        clear_github_binding(&mut bundle);
+    }
     store(bundle)
+}
+
+pub(crate) struct GithubCredential {
+    token: Option<String>,
+    proof: Option<String>,
+}
+
+impl GithubCredential {
+    fn from_bundle(mut bundle: Bundle) -> Self {
+        Self { token: bundle.remove(GITHUB), proof: bundle.remove(GITHUB_BINDING) }
+    }
+
+    /// Existing branch reads may still use a legacy connection. This token
+    /// is not proof of identity for a saved pin. Once a proof exists, a
+    /// mismatch is not a legacy credential and must not be sent elsewhere.
+    pub(crate) fn legacy_token(&self) -> Option<&str> {
+        self.token.as_deref().filter(|_| self.proof.is_none())
+    }
+
+    pub(crate) fn for_origin(self, origin: &str) -> Result<String> {
+        if let Some(token) =
+            self.token.filter(|token| self.proof.as_deref().is_some_and(|proof| proof == github_binding(token, origin)))
+        {
+            return Ok(token);
+        }
+        Err(crate::error::Error::Other(
+            "Reconnect GitHub in Settings and enter the token again. The saved token is not bound to this API origin."
+                .into(),
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture(token: &str, origin: Option<&str>) -> Self {
+        let mut bundle = Bundle::from([(GITHUB.into(), token.into())]);
+        if let Some(origin) = origin {
+            write_github_credential(&mut bundle, Some((token, origin)));
+        }
+        Self::from_bundle(bundle)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_after_older_rewrite(token: &str, origin: &str, replacement: &str) -> Self {
+        let mut bundle = Bundle::new();
+        write_github_credential(&mut bundle, Some((token, origin)));
+        // Older builds changed only keys they knew; they kept other entries.
+        bundle.insert(GITHUB.into(), replacement.into());
+        Self::from_bundle(bundle)
+    }
+}
+
+pub(crate) fn github_credential() -> Result<GithubCredential> {
+    let bundle =
+        load().map_err(|_| crate::error::Error::Other("Could not read the GitHub connection. Try again.".into()))?;
+    Ok(GithubCredential::from_bundle(bundle))
+}
+
+/// A downgraded build can replace the token while preserving unknown bundle
+/// keys. The versioned proof must describe both this exact token and its origin.
+fn github_binding(token: &str, origin: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"villain-layer github token binding v1\0");
+    hash.update((origin.len() as u64).to_be_bytes());
+    hash.update(origin.as_bytes());
+    hash.update(token.as_bytes());
+    format!("v1:{}", hex::encode(hash.finalize()))
+}
+
+fn clear_github_binding(bundle: &mut Bundle) {
+    bundle.remove(GITHUB_BINDING);
+    bundle.remove(LEGACY_GITHUB_ORIGIN);
+}
+
+/// The token and its proof must be written or cleared in one Keychain item
+/// update. A config write failure must never bind a new token to an old origin.
+pub(crate) fn set_github_credential(verified: Option<(&str, &str)>) -> Result<()> {
+    let _writing = WRITING.lock();
+    let mut bundle = load()?;
+    write_github_credential(&mut bundle, verified);
+    store(bundle)
+}
+
+fn write_github_credential(bundle: &mut Bundle, verified: Option<(&str, &str)>) {
+    clear_github_binding(bundle);
+    match verified {
+        Some((token, origin)) => {
+            bundle.insert(GITHUB.into(), token.into());
+            bundle.insert(GITHUB_BINDING.into(), github_binding(token, origin));
+        }
+        None => {
+            bundle.remove(GITHUB);
+        }
+    }
 }
 
 /// Drop the token notifications had before the bot posted them. Their
@@ -171,6 +269,9 @@ pub fn delete(key: &str) -> Result<()> {
     let _writing = WRITING.lock();
     let mut bundle = load()?;
     bundle.remove(key);
+    if key == GITHUB {
+        clear_github_binding(&mut bundle);
+    }
     store(bundle)
 }
 
@@ -220,4 +321,36 @@ pub fn adopt(from: &str) -> Result<()> {
     write_item(BUNDLE, &saved)?;
     *cache().lock() = None;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_two_an_older_builds_token_rewrite_invalidates_the_origin_binding() {
+        let origin = "https://api.github.com";
+        let answer = GithubCredential::fixture_after_older_rewrite("verified-token", origin, "replacement-token")
+            .for_origin(origin);
+        assert!(answer.is_err(), "an old build's new token must not inherit the origin binding");
+        let error = answer.err().unwrap();
+        assert!(error.to_string().contains("Reconnect GitHub"));
+        assert!(!error.to_string().contains("replacement-token"));
+    }
+
+    #[test]
+    fn review_two_a_legacy_or_unknown_proof_requires_reconnect() {
+        let origin = "https://api.github.com";
+        let token = "fixture-token";
+        let mut bundle = Bundle::from([(GITHUB.into(), token.into()), (LEGACY_GITHUB_ORIGIN.into(), origin.into())]);
+        assert!(GithubCredential::from_bundle(bundle.clone()).for_origin(origin).is_err());
+        write_github_credential(&mut bundle, Some((token, origin)));
+        assert_eq!(GithubCredential::from_bundle(bundle.clone()).for_origin(origin).unwrap(), token);
+        assert!(GithubCredential::from_bundle(bundle.clone()).for_origin("https://api.other.test").is_err());
+        let proof = bundle.get_mut(GITHUB_BINDING).unwrap();
+        proof.replace_range(..3, "v9:");
+        assert!(GithubCredential::from_bundle(bundle.clone()).for_origin(origin).is_err());
+        write_github_credential(&mut bundle, None);
+        assert!(bundle.is_empty());
+    }
 }

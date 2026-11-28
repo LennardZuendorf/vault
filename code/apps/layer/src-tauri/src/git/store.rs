@@ -75,7 +75,6 @@ pub fn follow_clone_origin(store: &Path, clone: &Path) -> Result<bool> {
     match super::origin_url(clone) {
         Some(url) if fetches_clone => {
             run(store, &["config", "remote.origin.url", &url])?;
-            super::forget_origins();
             Ok(true)
         }
         _ => Ok(false),

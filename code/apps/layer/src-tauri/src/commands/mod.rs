@@ -28,6 +28,8 @@ pub struct AppState {
     pub prs_settled: parking_lot::Mutex<HashMap<String, Instant>>,
     /// Each task's pull requests as last read, for the Henchman (HEN-5).
     pub prs_seen: parking_lot::Mutex<HashMap<String, Vec<CheckoutPr>>>,
+    /// A slow read cannot replace newer evidence or act on an old association.
+    pub(crate) prs_read_at: parking_lot::Mutex<HashMap<String, Instant>>,
     /// Reviews and tickets already seen, so a banner is only for what is new.
     pub news: crate::news::Seen,
     /// The message center's log (MSG-1).
@@ -155,6 +157,8 @@ mod pr_branches;
 mod pr_draft;
 mod pr_image_offers;
 mod pr_images;
+pub(crate) mod pr_pins;
+mod pr_resolver;
 mod pr_task;
 mod pr_template;
 mod processes;
@@ -202,7 +206,7 @@ pub use henchman_orders::*;
 pub use henchman_tools::*;
 pub use henchman_watch::spawn_henchman_watch;
 pub use jira::*;
-pub(crate) use landed::{advance, branch_landed, landed};
+pub(crate) use landed::branch_landed;
 pub use limits::*;
 pub use loops::*;
 pub use messages::*;
@@ -599,6 +603,8 @@ mod tests {
             push_lease: None,
             point_before_update: None,
             last_head: None,
+            pr_pin: None,
+            pr_pin_revision: 0,
         });
         let state = super::AppState {
             slack_bot: Default::default(),
@@ -610,6 +616,7 @@ mod tests {
             status_cache: Default::default(),
             prs_settled: Default::default(),
             prs_seen: Default::default(),
+            prs_read_at: Default::default(),
             news: Default::default(),
             messages: crate::messages::Messages::for_tests(std::env::temp_dir().join("vl-test-messages.json")),
             notes: crate::notes::Notes::load(&root),

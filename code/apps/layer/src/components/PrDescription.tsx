@@ -9,6 +9,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { useRunningAgentsOf } from "../lib/panes";
+import { draftPrImages, type OpenPrRow } from "../lib/pr-draft-images";
 import { trackerOfKey } from "../lib/tracker";
 import type { DraftImage, RepoResult, TaskView } from "../lib/types";
 import { Field, Spinner } from "./ui";
@@ -141,19 +142,12 @@ export function usePrDescription(task: TaskView, dialog: Failure) {
    * Add the screenshots to the pull requests Open PRs just opened, each to
    * its repository's: not to one that failed to open or was left out.
    */
-  async function addImages(
-    taskId: string,
-    opened: RepoResult[],
-    leftOut: string[],
-  ): Promise<RepoResult[]> {
+  async function addImages(opened: OpenPrRow[]): Promise<RepoResult[]> {
     // Seen by now: the dialog showed them before Open was pressed.
     setProblems([]);
-    const skip = new Set(
-      [...opened.filter((r) => !r.ok).map((r) => r.repo), ...leftOut].map((r) => r.toLowerCase()),
-    );
-    const going = images.filter((i) => !i.repo || !skip.has(i.repo.toLowerCase()));
-    if (going.length === 0) return [];
-    const added = await api.showPrImages(taskId, going);
+    const going = draftPrImages(images, task.checkouts, opened);
+    if (going.images.length === 0) return [];
+    const added = await api.showPrImages(task.id, going.images, null, going.targets);
     if (added.every((r) => r.ok)) setImages([]);
     return added;
   }

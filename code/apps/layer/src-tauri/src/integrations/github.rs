@@ -13,6 +13,8 @@ mod branches;
 mod hunk;
 mod images;
 mod issues;
+mod pin_pull;
+mod pull_pages;
 mod ready;
 mod requested;
 mod siblings;
@@ -21,8 +23,10 @@ pub use branches::{BranchPr, PrState, MY_PULLS_LIMIT};
 pub use hunk::CodeLine;
 pub use images::{kind_of, Image, MAX_BYTES, MAX_IMAGES};
 pub use issues::IssueRef;
+pub(crate) use pull_pages::{valid_repo_segment, BranchPulls};
 pub use requested::ReviewRequest;
 pub(crate) use requested::{drop_already_listed, mine_review_query, team_review_query};
+pub(crate) use siblings::check_edit_target;
 pub use siblings::Sibling;
 
 pub struct GitHub {
@@ -33,12 +37,16 @@ pub struct GitHub {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PullRequest {
+    #[serde(skip)]
+    pub(crate) id: Option<u64>,
     pub number: u64,
     pub title: String,
     pub state: String,
     pub draft: bool,
     pub author: String,
     pub head: String,
+    #[serde(skip)]
+    pub(crate) head_repo: Option<String>,
     /// The commit the PR's branch pointed at on GitHub. For a merged PR, what
     /// landed: work after it is what still needs a PR.
     pub head_sha: String,
@@ -91,7 +99,10 @@ impl GitHub {
     }
 
     async fn json(&self, rb: reqwest::RequestBuilder) -> Result<Value> {
-        let res = rb.send().await?;
+        Self::read_json(rb.send().await?).await
+    }
+
+    async fn read_json(res: reqwest::Response) -> Result<Value> {
         let status = res.status();
         let sso = res.headers().get("x-github-sso").and_then(|v| v.to_str().ok()).map(str::to_owned);
         let body = res.text().await?;
@@ -151,17 +162,6 @@ impl GitHub {
         Ok(v.as_array().map(|a| a.iter().map(to_pr).collect()).unwrap_or_default())
     }
 
-    /// Every pull request a branch has had, newest first.
-    ///
-    /// [`pull_for_branch`](Self::pull_for_branch) asks only for open ones,
-    /// which is right when only the open one matters but useless for
-    /// looking back: GitHub drops a PR from that listing the moment it closes,
-    /// so a panel built on it watches history disappear. A branch abandoned
-    /// once and retried has two, and both are worth keeping on screen.
-    pub async fn pulls_for_branch(&self, owner: &str, repo: &str, branch: &str) -> Result<Vec<PullRequest>> {
-        self.list_pulls(owner, repo, branch, "all", 20).await
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub async fn create_pull(
         &self,
@@ -193,6 +193,17 @@ impl GitHub {
     pub async fn pull(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest> {
         let v = self.json(self.req(reqwest::Method::GET, &format!("/repos/{owner}/{repo}/pulls/{number}"))).await?;
         Ok(to_pr(&v))
+    }
+
+    pub(crate) async fn verify_edit_target(&self, owner: &str, repo: &str, pr: &PullRequest) -> Result<()> {
+        self.read_edit_target(owner, repo, pr).await.map(|_| ())
+    }
+
+    async fn read_edit_target(&self, owner: &str, repo: &str, pr: &PullRequest) -> Result<Value> {
+        let path = format!("/repos/{owner}/{repo}/pulls/{}", pr.number);
+        let v = self.json(self.req(reqwest::Method::GET, &path)).await?;
+        check_edit_target(&v, owner, repo, pr.number, pr.id)?;
+        Ok(v)
     }
 
     /// Move an open pull request onto another base branch.
@@ -545,12 +556,14 @@ fn parse_team(v: &Value) -> Option<GhTeam> {
 
 fn to_pr(v: &Value) -> PullRequest {
     PullRequest {
+        id: v.get("id").and_then(Value::as_u64).filter(|id| *id != 0),
         number: v.get("number").and_then(|n| n.as_u64()).unwrap_or(0),
         title: str_at(v, "title"),
         state: str_at(v, "state"),
         draft: v.get("draft").and_then(|d| d.as_bool()).unwrap_or(false),
         author: v.pointer("/user/login").and_then(|l| l.as_str()).unwrap_or_default().to_string(),
         head: v.pointer("/head/ref").and_then(|r| r.as_str()).unwrap_or_default().to_string(),
+        head_repo: v.pointer("/head/repo/full_name").and_then(Value::as_str).map(str::to_string),
         head_sha: v.pointer("/head/sha").and_then(|r| r.as_str()).unwrap_or_default().to_string(),
         base: v.pointer("/base/ref").and_then(|r| r.as_str()).unwrap_or_default().to_string(),
         url: str_at(v, "html_url"),

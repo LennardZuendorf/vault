@@ -19,6 +19,7 @@ import { SidebarGrip } from "./components/sidebar/SidebarGrip";
 import { SpecView } from "./components/SpecView";
 import { Splash } from "./components/Splash";
 import { Terminals } from "./components/Terminals";
+import { LinkTaskTicket } from "./components/tickets/LinkTaskTicket";
 import { statusClass } from "./components/tickets/status";
 import { TicketsView } from "./components/tickets/TicketsView";
 import { SidebarToggle } from "./components/ui";
@@ -32,6 +33,7 @@ import { chatAtWork, isHenchman, waitingCount } from "./lib/lair";
 import { pressKeys } from "./lib/press";
 import { isRoutineRun, useRoutines } from "./lib/routines";
 import { specProgress, useSpecs } from "./lib/specs";
+import { readsTicket, sameTicketUrl, ticketConnectionScope, trackerOfKey } from "./lib/tracker";
 import type { TaskView } from "./lib/types";
 import { selectedTask, useStore, type View } from "./store";
 import { Watchers } from "./Watchers";
@@ -238,8 +240,26 @@ function TaskMain({ task }: { task: TaskView }) {
   const setTab = useStore((s) => s.setTab);
   const cursorIde = useStore((s) => s.cursorIde);
   const fail = useStore((s) => s.fail);
-  // Where the board has it, from your ticket list: in step with the work or not.
-  const ticket = useStore((s) => s.issues.find((i) => i.key === task.issue_key));
+  const scope = useStore((s) => ticketConnectionScope(s.settings));
+  const linkScope = !task.epic && !task.review && !task.sub_task ? scope : null;
+  const linked = useStore((s) => s.linkedTickets[task.id]);
+  const linkedTicket =
+    linked?.key === task.issue_key && sameTicketUrl(linked.url, task.issue_url)
+      ? linked
+      : undefined;
+  const ticket = useStore((s) => {
+    if (
+      !task.issue_key ||
+      !task.issue_url ||
+      !readsTicket(s.settings, task.issue_key, task.issue_url)
+    )
+      return;
+    return (
+      s.issues.find((i) => i.key === task.issue_key && sameTicketUrl(i.url, task.issue_url)) ??
+      linkedTicket
+    );
+  });
+  const tracker = trackerOfKey(task.issue_key ?? "");
   // The Agents badge counts what is open now. The task's own count comes
   // from the task poll, which can be a minute behind a pane just opened.
   const paneCount = useStore((s) => s.panes.filter((p) => p.task_id === task.id).length);
@@ -316,7 +336,7 @@ function TaskMain({ task }: { task: TaskView }) {
           </button>
         </div>
         {/* Elsewhere: links, not buttons (studio/design/components.md). */}
-        {(cursorIde || task.issue_url) && (
+        {(cursorIde || task.issue_url || linkScope) && (
           <div className="ws-links">
             {cursorIde && (
               <button
@@ -327,13 +347,14 @@ function TaskMain({ task }: { task: TaskView }) {
                 Cursor ↗
               </button>
             )}
+            {linkScope && <LinkTaskTicket key={linkScope} task={task} scope={linkScope} />}
             {task.issue_url && (
               <button
                 className="ui-link"
-                title={`Open ${task.issue_key} in Jira`}
+                title={`Open ${task.issue_key} in ${tracker}`}
                 onClick={() => void openUrl(task.issue_url!)}
               >
-                {task.issue_key} ↗
+                {task.issue_key} · {tracker} ↗
               </button>
             )}
             {ticket && (
@@ -344,6 +365,11 @@ function TaskMain({ task }: { task: TaskView }) {
           </div>
         )}
       </div>
+      {linkedTicket?.context_warning && (
+        <p role="status" className="ui-tint-warn error-message">
+          {linkedTicket.context_warning}
+        </p>
+      )}
 
       <div className="ui-tabs task-tabs" role="tablist">
         <button

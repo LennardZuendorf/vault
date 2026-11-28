@@ -41,7 +41,10 @@ function pr(over: { merged?: boolean; closed?: boolean } = {}, row: Partial<Chec
     past: [],
     verdict: "none",
     base: "main",
-    changed: 1,
+    changed: over.merged || over.closed ? 0 : 1,
+    branch_covered: !!(over.merged || over.closed),
+    detached_unlanded: false,
+    covered_merge: !!over.merged,
     to_reply: 0,
     error: null,
     pr: {

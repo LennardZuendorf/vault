@@ -12,12 +12,85 @@
 use serde::Serialize;
 use tauri::State;
 
-use crate::config::{FlowStatus, StartTo, Task, TicketFlow};
+use crate::config::{FlowStatus, JiraConfig, StartTo, Task, TicketFlow, TrackerKind};
 use crate::error::{Error, Result};
 use crate::integrations::jira::{Jira, ProjectStatus};
 
-use super::github::CheckoutPr;
+use super::github::{task_merged, CheckoutPr};
+use super::pr_resolver::{Connection, Resolved, Scope};
 use super::AppState;
+
+pub(super) struct JiraConnection {
+    pub client: Jira,
+    pub config: JiraConfig,
+    generation: u64,
+}
+
+impl JiraConnection {
+    pub(super) fn load(state: &AppState) -> Result<Self> {
+        Self::load_with(state, || crate::secrets::get(crate::secrets::JIRA)?.ok_or(Error::NotConfigured("Jira")))
+    }
+
+    pub(super) fn load_with(state: &AppState, token: impl FnOnce() -> Result<String>) -> Result<Self> {
+        let generation = state.config.tracker_credential_generation(TrackerKind::Jira);
+        let config = state
+            .config
+            .with(|c| (c.tracker_in_use() == Some(TrackerKind::Jira)).then(|| c.jira.clone()).flatten())
+            .ok_or(Error::NotConfigured("Jira"))?;
+        let client = Jira::new(&config, &token()?)?;
+        Ok(Self { client, config, generation: *generation })
+    }
+
+    pub(super) fn key<'a>(&self, task: &'a Task) -> Option<&'a str> {
+        let key = task.issue_key.as_deref()?;
+        let expected = format!("{}/browse/{key}", self.config.base_url.trim_end_matches('/'));
+        let expected = reqwest::Url::parse(&expected).ok()?;
+        let saved = reqwest::Url::parse(task.issue_url.as_deref()?).ok()?;
+        (saved == expected
+            && saved.username().is_empty()
+            && saved.password().is_none()
+            && saved.query().is_none()
+            && saved.fragment().is_none())
+        .then_some(key)
+    }
+
+    pub(super) fn current(&self, state: &AppState) -> bool {
+        let generation = state.config.tracker_credential_generation(TrackerKind::Jira);
+        state.config.with(|c| self.matches(c, *generation))
+    }
+
+    fn matches(&self, config: &crate::config::AppConfig, generation: u64) -> bool {
+        generation == self.generation
+            && config.tracker_in_use() == Some(TrackerKind::Jira)
+            && config.jira.as_ref().is_some_and(|j| j.base_url == self.config.base_url && j.email == self.config.email)
+    }
+
+    pub(super) fn require_current(&self, state: &AppState) -> Result<()> {
+        if self.current(state) {
+            Ok(())
+        } else {
+            Err(jira_changed())
+        }
+    }
+
+    pub(super) fn require_ticket(&self, state: &AppState, task: &Task) -> Result<()> {
+        self.require_current(state)?;
+        let current = state.config.task(&task.id)?;
+        if self.key(task).is_some() && current.issue_key == task.issue_key && current.issue_url == task.issue_url {
+            Ok(())
+        } else {
+            Err(jira_changed())
+        }
+    }
+
+    pub(super) fn scope(&self, task: &Task) -> Result<String> {
+        super::tickets::jira_ticket_scope(&self.config, self.generation, task)
+    }
+}
+
+pub(super) fn jira_changed() -> Error {
+    Error::Other("The Jira connection or linked ticket changed. Review the ticket action again.".into())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Stage {
@@ -47,14 +120,10 @@ impl Stage {
 /// merged, with nothing left over: work committed since, or in a repo that
 /// never had one, is not done.
 pub fn stage(rows: &[CheckoutPr]) -> Option<Stage> {
-    let live: Vec<_> = rows.iter().filter_map(|r| r.pr.as_ref()).filter(|p| p.state == "open" || p.merged).collect();
-    if live.is_empty() {
-        return None;
-    }
-    if live.iter().all(|p| p.merged) && rows.iter().all(|r| r.changed == 0) {
+    if task_merged(rows) {
         return Some(Stage::Merged);
     }
-    live.iter().any(|p| p.state == "open" && !p.draft).then_some(Stage::Review)
+    rows.iter().flat_map(CheckoutPr::pulls).any(|p| p.state == "open" && !p.draft).then_some(Stage::Review)
 }
 
 /// The stage a task has reached that its ticket has not been moved for.
@@ -79,24 +148,38 @@ pub struct TicketMove {
 
 /// Move `task`'s ticket if its pull requests have reached a stage it has
 /// not been moved for. None when there is nothing to say.
-pub(crate) async fn follow(state: &AppState, client: &Jira, task: &Task, rows: &[CheckoutPr]) -> Option<TicketMove> {
-    let key = task.issue_key.clone()?;
+pub(super) async fn follow(
+    state: &AppState,
+    jira: &JiraConnection,
+    scope: &Scope,
+    connection: &Connection,
+    rows: &[CheckoutPr],
+    evidence: &[Resolved],
+) -> Option<TicketMove> {
+    let task = &scope.task;
+    let current = || scope.is_current(state, connection) && jira.current(state);
+    if !scope.follows_jira() || !current() {
+        return None;
+    }
+    let key = jira.key(task)?.to_owned();
     let stage = due(task, stage(rows))?;
     let project = key.split('-').next()?.to_string();
-    let target = state.config.read().jira.and_then(|j| j.flow.get(&project).cloned()).and_then(|f| {
-        if stage == Stage::Review {
-            f.review
-        } else {
-            f.merged
-        }
-    });
+    let target =
+        jira.config.flow.get(&project).cloned().and_then(|f| if stage == Stage::Review { f.review } else { f.merged });
     let mut out = TicketMove { key: key.clone(), stage: stage.key(), moved_to: None, unchosen: false, error: None };
     let Some(target) = target else {
         out.unchosen = true;
         return Some(out);
     };
-    match move_to(client, &key, &target, stage == Stage::Review).await {
-        Ok(moved) => out.moved_to = moved,
+    let eligible =
+        || async { (stage == Stage::Review || scope.local_is_current(connection, evidence).await) && current() };
+    let moved = move_to_if(&jira.client, &key, &target, stage == Stage::Review, eligible).await;
+    if !eligible().await {
+        return None;
+    }
+    match moved {
+        Ok(Move::Settled(moved)) => out.moved_to = moved,
+        Ok(Move::Stale) => return None,
         // The network: tried again next sweep.
         Err(e @ Error::Http(_)) => {
             out.error = Some(e.to_string());
@@ -107,23 +190,43 @@ pub(crate) async fn follow(state: &AppState, client: &Jira, task: &Task, rows: &
     // Once, whatever Jira said: a workflow that will not make the move is
     // said once, not every ninety seconds, and a ticket moved on by hand
     // after this stays where it was put.
-    let id = task.id.clone();
-    let _ = state.config.update(|c| {
-        if let Some(t) = c.tasks.iter_mut().find(|t| t.id == id) {
-            t.ticket_stage = Some(stage.key().into());
-        }
-    });
+    let jira_generation = state.config.tracker_credential_generation(TrackerKind::Jira);
+    scope.record_ticket_stage(state, connection, stage.key(), |config| jira.matches(config, *jira_generation)).ok()?;
     (out.moved_to.is_some() || out.error.is_some()).then_some(out)
 }
 
 /// Move `key` to `target`, unless it is there already, or, with
 /// `not_from_done`, closed: review is never a way back out of done.
 async fn move_to(client: &Jira, key: &str, target: &FlowStatus, not_from_done: bool) -> Result<Option<String>> {
+    match move_to_if(client, key, target, not_from_done, || std::future::ready(true)).await? {
+        Move::Settled(moved) => Ok(moved),
+        Move::Stale => Ok(None),
+    }
+}
+
+enum Move {
+    Settled(Option<String>),
+    Stale,
+}
+
+async fn move_to_if<F: std::future::Future<Output = bool>>(
+    client: &Jira,
+    key: &str,
+    target: &FlowStatus,
+    not_from_done: bool,
+    current: impl Fn() -> F,
+) -> Result<Move> {
     let issue = client.issue(key).await?;
+    if !current().await {
+        return Ok(Move::Stale);
+    }
     if issue.status_id == target.id || (issue.status_category == "done" && not_from_done) {
-        return Ok(None);
+        return Ok(Move::Settled(None));
     }
     let transitions = client.transitions(key).await?;
+    if !current().await {
+        return Ok(Move::Stale);
+    }
     let way = transitions.iter().find(|t| t.to_id == target.id).ok_or_else(|| {
         Error::Other(format!(
             "{key} is {}, and its workflow has no way from there to {}. Move it in Jira.",
@@ -131,7 +234,7 @@ async fn move_to(client: &Jira, key: &str, target: &FlowStatus, not_from_done: b
         ))
     })?;
     client.transition(key, &way.id).await?;
-    Ok(Some(target.name.clone()))
+    Ok(Move::Settled(Some(target.name.clone())))
 }
 
 /// Where `flow` sends a ticket when work starts. A project with nothing
@@ -247,13 +350,18 @@ mod tests {
         CheckoutPr {
             checkout_id: "c".into(),
             repo: "api".into(),
+            pin: None,
+            pin_revision: "0".into(),
+            pin_read: false,
             pr: (!state.is_empty()).then(|| PullRequest {
+                id: None,
                 number: 1,
                 title: "t".into(),
                 state: state.into(),
                 draft,
                 author: "me".into(),
                 head: "ACME-1".into(),
+                head_repo: None,
                 head_sha: "abc".into(),
                 base: "main".into(),
                 url: String::new(),
@@ -270,6 +378,10 @@ mod tests {
             changed,
             to_reply: 0,
             error: None,
+            branch_covered: changed == 0,
+            detached_unlanded: false,
+            covered_merge: merged,
+            action_target: None,
         }
     }
 
@@ -309,6 +421,20 @@ mod tests {
             "a repo with work and no PR"
         );
         assert_eq!(stage(&[row("closed", false, false, 2)]), None, "closed without merging is given up on");
+    }
+
+    #[test]
+    fn a_merge_does_not_complete_a_task_when_a_checkout_is_unread() {
+        let mut unread = row("", false, false, 0);
+        unread.error = Some("pull request listing was truncated".into());
+        assert_eq!(stage(&[row("closed", false, true, 0), unread]), None);
+    }
+
+    #[test]
+    fn another_open_pr_still_counts_when_it_is_not_the_primary() {
+        let mut checkout = row("closed", false, true, 0);
+        checkout.past.push(row("open", false, false, 0).pr.unwrap());
+        assert_eq!(stage(&[checkout]), Some(Stage::Review));
     }
 
     #[test]

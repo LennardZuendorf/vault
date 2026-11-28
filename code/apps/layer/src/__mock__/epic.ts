@@ -132,6 +132,13 @@ function prs(
       {
         checkout_id: `c-${taskId}-${repo}`,
         repo,
+        action_target: merged ? null : `fixture-pr:${taskId}:${repo}:${number}`,
+        pin: null,
+        pin_revision: "0",
+        pin_read: false,
+        branch_covered: merged,
+        detached_unlanded: false,
+        covered_merge: merged,
         pr: {
           number,
           title: "",

@@ -113,7 +113,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::config::{AppConfig, ConfigStore};
+    use crate::config::{AppConfig, ConfigStore, JiraConfig};
 
     fn git(dir: &Path, args: &[&str]) -> String {
         crate::git::run_for_tests(dir, args).unwrap().trim().to_string()
@@ -167,6 +167,7 @@ mod tests {
             status_cache: Default::default(),
             prs_settled: Default::default(),
             prs_seen: Default::default(),
+            prs_read_at: Default::default(),
             news: Default::default(),
             messages: crate::messages::Messages::for_tests(root.join("messages.json")),
             notes: crate::notes::Notes::load(root),
@@ -201,6 +202,51 @@ mod tests {
         let again = task_for_pr_inner(&state, "acme/api", "ACME-7-retry", "main", "Retry the login").unwrap();
         assert_eq!(again.id, task.id, "the second click opens the same task");
         assert_eq!(state.config.read().tasks.len(), 1);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_pull_request_gets_its_own_task_when_its_ticket_is_linked_on_another_branch() {
+        let (root, _remote, clone) = github_and_clone();
+        let state = state(&root, &clone);
+        let site = "https://acme.atlassian.net";
+        let ticket = "https://acme.atlassian.net/browse/ACME-7";
+        state.config.update(|c| c.jira = Some(JiraConfig { base_url: site.into(), ..Default::default() })).unwrap();
+        let original = new_task(
+            &state,
+            NewTask {
+                name: "Fix the login".into(),
+                project_ids: vec!["api".into()],
+                branch: None,
+                branch_suffix: None,
+                base: None,
+                issue_key: Some("ACME-7".into()),
+                issue_url: Some(ticket.into()),
+                epic_key: None,
+                epic: false,
+                sub_task: None,
+            },
+        )
+        .unwrap();
+        git(&clone, &["switch", "-qc", "retry-login"]);
+        std::fs::write(clone.join("a.txt"), "retried\n").unwrap();
+        git(&clone, &["commit", "-qam", "retry"]);
+        git(&clone, &["push", "-q", "origin", "retry-login"]);
+        let pushed = git(&clone, &["rev-parse", "HEAD"]);
+        git(&clone, &["switch", "-q", "main"]);
+        git(&clone, &["branch", "-qD", "retry-login"]);
+
+        let task = task_for_pr_inner(&state, "acme/api", "retry-login", "main", "ACME-7: Retry the login").unwrap();
+
+        assert_ne!(task.id, original.id);
+        assert_eq!(task.branch, "retry-login");
+        assert_eq!(task.issue_key.as_deref(), Some("ACME-7"));
+        assert_eq!(task.issue_url.as_deref(), Some(ticket));
+        let checkout = &state.config.checkouts_of(&task.id)[0];
+        assert_eq!(git(Path::new(&checkout.path), &["rev-parse", "HEAD"]), pushed);
+        let original = state.config.task(&original.id).unwrap();
+        assert_eq!(original.branch, "ACME-7");
+        assert_eq!(original.issue_url.as_deref(), Some(ticket));
         std::fs::remove_dir_all(&root).ok();
     }
 
