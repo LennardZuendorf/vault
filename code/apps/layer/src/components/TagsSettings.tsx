@@ -32,7 +32,10 @@ export function TagsSettings() {
     }
   }
   return (
-    <Field label="Tags" hint="Reusable text tags for chats and work in this profile.">
+    // The hint goes above the field, not under the list: below a long list
+    // it was out of sight, and it says what the page is for.
+    <Field label="Tags">
+      <div className="hint tags-hint">Reusable text tags for chats and work in this profile.</div>
       <form className="browser-add" onSubmit={(e) => void add(e)}>
         <input
           className="ui-field"
@@ -61,9 +64,12 @@ export function TagsSettings() {
       </div>
       <ErrorMessage>{failure.error}</ErrorMessage>
       {tags.length ? (
-        <ul className="site-chips" aria-label="Tag catalog">
+        // The tag chip the rows use. The site chip this had before keeps
+        // room on its right for a remove button a tag does not have, so a
+        // short tag ("Fe") came out as a lopsided circle.
+        <ul className="site-chips tags-list" aria-label="Tag catalog">
           {tags.map((tag) => (
-            <li key={tag} className="ui-chip site-chip">
+            <li key={tag} className="ui-chip item-details-tag">
               {tag}
             </li>
           ))}
