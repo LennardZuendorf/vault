@@ -34,10 +34,12 @@ import { emit } from "@tauri-apps/api/event";
  * That is the cue to add it to `answer` below.
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { prPermalinkIdentity } from "../lib/pr-permalink";
 import { sortTickets, type TicketSort } from "../lib/ticket-sort";
 import type {
   BrowserView,
   Catchup,
+  CheckoutPrComments,
   Cleaned,
   FlowStatus,
   LogSource,
@@ -61,7 +63,7 @@ import { routineAnswers } from "./routines";
 import { runAnswers } from "./runs";
 import { specAnswers } from "./spec";
 import { githubTracker } from "./tracker";
-import { ago, SCENARIOS } from "./world";
+import { ago, reviewDetailFixture, SCENARIOS } from "./world";
 
 type Args = Record<string, unknown>;
 type Answer = (args: Args) => unknown;
@@ -918,6 +920,34 @@ const answer: Record<string, Answer> = {
   github_all_prs: () => structuredClone(world.prs),
   github_task_prs: (a) =>
     structuredClone(world.prs.find((p) => p.task_id === a.taskId)?.rows ?? []),
+  github_pr_comments: (a) => {
+    const row = world.prs
+      .find((p) => p.task_id === a.taskId)
+      ?.rows.find((r) => r.checkout_id === a.checkoutId);
+    const pr = row?.pr;
+    if (!row || !pr || pr.state !== "open" || pr.number !== a.number)
+      throw new Error("That pull request is not open for this checkout.");
+    const feedback = world.feedback.find(
+      (r) => r.checkout_id === row.checkout_id && r.number === pr.number && r.url === pr.url,
+    );
+    return structuredClone({
+      checkout_id: row.checkout_id,
+      number: pr.number,
+      url: pr.url,
+      comments: feedback?.comments ?? [],
+      reviews: feedback?.reviews ?? [],
+      threads: (feedback?.threads ?? []).map((thread) => ({
+        ...thread,
+        comments: thread.comments.map((note, i) => ({
+          ...note,
+          url: note.url || (i === 0 ? thread.url : `${thread.url}-reply-${i}`),
+        })),
+      })),
+      comments_state: "complete",
+      reviews_state: "complete",
+      threads_state: "complete",
+    } satisfies CheckoutPrComments);
+  },
   github_set_pr_draft: (a) => {
     for (const r of world.prs.flatMap((p) => p.rows))
       if (r.pr && r.checkout_id === a.checkoutId && r.pr.number === a.number)
@@ -950,6 +980,22 @@ const answer: Record<string, Answer> = {
     return null;
   },
   github_review_queue: () => structuredClone(world.reviews),
+  github_review_pr_details: ({ repo, number, url }) => {
+    const repoKey = typeof repo === "string" ? repo.toLowerCase() : "";
+    const permalink = typeof url === "string" ? prPermalinkIdentity(url) : null;
+    const { mine, team, authored } = world.reviews;
+    const card = [...mine, ...(team?.prs ?? []), ...(authored?.prs ?? [])].find(
+      (pr) => pr.repo.toLowerCase() === repoKey && pr.number === number,
+    );
+    if (!card || !permalink || prPermalinkIdentity(card.url) !== permalink)
+      throw new Error("Couldn’t read details for this pull request. Try again.");
+    const fixture = world.reviewDetails[`${repoKey}#${card.number}`];
+    const details =
+      fixture && prPermalinkIdentity(fixture.url) === permalink
+        ? fixture
+        : reviewDetailFixture(card);
+    return structuredClone({ ...details, repo });
+  },
   github_pr_feedback: () => world.feedback,
   checkout_branches: () => ["main", "develop"],
   set_checkout_base: (a) => {

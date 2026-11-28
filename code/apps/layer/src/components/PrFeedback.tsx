@@ -2,11 +2,12 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../lib/api";
 import { read, write } from "../lib/persist";
-import type { CodeLine, FeedbackItem, FeedbackNote, RepoFeedback, TaskView } from "../lib/types";
+import type { FeedbackItem, FeedbackNote, RepoFeedback, TaskView } from "../lib/types";
 import { useStore } from "../store";
 import { AgentTargetFields, useAgentTarget } from "./AgentTarget";
 import { ChevronIcon, ExternalIcon } from "./icons";
 import { Markdown } from "./Markdown";
+import { PrCodeExcerpt } from "./PrCodeExcerpt";
 import { ErrorMessage, Modal, useFailure } from "./ui";
 
 /* oxlint-disable react/no-array-index-key -- diff lines and a thread's comments, in order, with no ids */
@@ -142,27 +143,6 @@ const REVIEW_VERB: Record<string, string> = {
   COMMENTED: "reviewed",
 };
 
-const OP_CLASS = { "+": "add", "-": "del", " ": "" } as const;
-
-/** The lines a thread is on, above its comments, as GitHub shows them. */
-function Code({ lines }: { lines: CodeLine[] }) {
-  return (
-    <div className="fb-code">
-      <div className="diff-lines">
-        {lines.map((l, i) => (
-          <div key={i} className={`diff-line ${OP_CLASS[l.op] ?? ""}`}>
-            <span className="ln">{l.n ?? ""}</span>
-            <span className="tx">
-              {l.op}
-              {l.text}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function EntryRow({ entry, on, onToggle }: { entry: Entry; on: boolean; onToggle: () => void }) {
   const item = entry.item;
   const [open, setOpen] = useState(!entry.resolved);
@@ -178,7 +158,7 @@ function EntryRow({ entry, on, onToggle }: { entry: Entry; on: boolean; onToggle
     head = range ? `${item.path}:${range}` : item.path;
     content = (
       <>
-        {item.code.length > 0 && <Code lines={item.code} />}
+        {item.code.length > 0 && <PrCodeExcerpt lines={item.code} />}
         {item.comments.map((c, n) => (
           <div key={n} className="fb-comment">
             <div className="fb-author">{c.author}</div>

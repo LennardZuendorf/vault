@@ -6,9 +6,9 @@ import type { EpicOf } from "./lib/grouping";
 import { forgetAllBut, read, readOneOf, write } from "./lib/persist";
 import { keep, only, reuse, sameJson } from "./lib/same";
 import { useSpecs } from "./lib/specs";
+import { acceptTaskPrReads, type TaskPrSnapshots } from "./lib/task-pr-snapshots";
 import type {
   AgentStatus,
-  CheckoutPr,
   Ticket,
   TicketType,
   Message,
@@ -75,7 +75,7 @@ export interface ReviewNote {
   code: string;
 }
 
-export interface State {
+export interface State extends TaskPrSnapshots {
   projects: Project[];
   /**
    * How each repository is doing, by project id (REPO-5). Read at launch,
@@ -87,13 +87,13 @@ export interface State {
   /** Panes the last launch did not put back (PANE-7). */
   waiting: WaitingPane[];
   agents: AgentStatus[];
-  /** PR rows per task id, refreshed by the background watch. */
-  prs: Record<string, CheckoutPr[]>;
   /** Pull requests waiting on you, and on the configured review team. */
   reviewQueue: ReviewQueue | null;
   reviewQueueLoading: boolean;
   reviewQueueError: string | null;
   settings: Settings | null;
+  /** Replacing a token may leave the visible GitHub settings unchanged. */
+  githubConnectionRevision: number;
   issues: Ticket[];
   issueTypes: TicketType[];
   /** The site's priorities, highest first, for sorting by them (TKT-13). */
@@ -174,19 +174,21 @@ export interface State {
   refreshPanes: (opts?: { poll?: boolean }) => Promise<void>;
   refreshWaiting: () => Promise<void>;
   refreshPrs: () => Promise<void>;
+  refreshTaskPrs: (taskId: string) => Promise<void>;
   /** `quiet` is a timer tick: no toast, and no spinner if a queue is already shown. */
-  refreshReviewQueue: (opts?: { quiet?: boolean }) => Promise<void>;
+  refreshReviewQueue: (opts?: { quiet?: boolean; fresh?: boolean }) => Promise<void>;
   /** The message center's log (MSG-1), newest first. */
   messages: Message[];
   refreshMessages: () => Promise<void>;
-  /** Replace one task's PR rows, for a panel that fetched them itself. */
-  setTaskPrs: (taskId: string, rows: CheckoutPr[]) => void;
   /** Notes on the Diff tab, by task id (DIFF-6). */
   notes: Record<string, ReviewNote[]>;
   addNote: (taskId: string, note: Omit<ReviewNote, "id">) => void;
   dropNotes: (taskId: string, ids: number[]) => void;
   editNote: (taskId: string, id: number, body: string) => void;
-  refreshSettings: () => Promise<void>;
+  refreshSettings: (opts?: {
+    githubReconnected?: boolean;
+    githubDisconnected?: boolean;
+  }) => Promise<void>;
   /** `quiet` is a timer tick: no toast, and no spinner over a list already shown. */
   refreshIssues: (opts?: { quiet?: boolean }) => Promise<void>;
 }
@@ -209,43 +211,25 @@ let sweeping = false;
  * the next one (PR-12). So one more runs when it lands.
  */
 let sweepAgain = false;
-let reviewsInflight: Promise<void> | null = null;
 
-/**
- * The task and pane calls currently out, so overlapping requests can be
- * coalesced rather than stacked: wake-from-sleep often fires several polls at
- * once, and each would be a git status of every hot worktree.
- *
- * Dropping the later call outright was the first version, and it dropped the
- * refresh that mattered: a task deleted while a poll happened to be in flight
- * stayed in the sidebar until the next tick, up to a minute off the Work view.
- */
-let tasksInflight: Promise<void> | null = null;
-let panesInflight: Promise<void> | null = null;
-
-interface Slot {
-  get: () => Promise<void> | null;
-  set: (p: Promise<void> | null) => void;
-  /** The one refresh queued behind the call in flight, shared by everyone who asked meanwhile. */
+interface RefreshSlot {
+  current: Promise<void> | null;
   next?: Promise<void> | null;
 }
 
 /**
- * Run `work` once, sharing it with polls that overlap and queueing behind it
- * for anything that is not a poll.
- *
- * Everything that queues while a call is out shares one refresh after it:
- * each hook post announces itself, and five of them during one call became
- * five calls in a row, each waiting for the last.
+ * Share overlapping polls; explicit refreshes share one successor instead.
+ * They asked after something changed, which the in-flight read cannot see.
  */
-async function coalesce(slot: Slot, poll: boolean, work: () => Promise<void>): Promise<void> {
-  const current = slot.get();
-  if (current) {
-    if (poll) return current;
-    // Wait the in-flight one out, then ask again: what it returns was asked
-    // for before whatever just changed.
+async function coalesce(
+  slot: RefreshSlot,
+  poll: boolean,
+  work: () => Promise<void>,
+): Promise<void> {
+  if (slot.current) {
+    if (poll) return slot.current;
     if (!slot.next) {
-      slot.next = current
+      slot.next = slot.current
         .catch(() => {})
         .then(() => {
           slot.next = null;
@@ -255,39 +239,18 @@ async function coalesce(slot: Slot, poll: boolean, work: () => Promise<void>): P
     return slot.next;
   }
   const run = work();
-  slot.set(run);
+  slot.current = run;
   try {
     await run;
   } finally {
-    if (slot.get() === run) slot.set(null);
+    if (slot.current === run) slot.current = null;
   }
 }
 
-const tasksSlot: Slot = {
-  get: () => tasksInflight,
-  set: (p) => {
-    tasksInflight = p;
-  },
-};
-const panesSlot: Slot = {
-  get: () => panesInflight,
-  set: (p) => {
-    panesInflight = p;
-  },
-};
-const reviewsSlot: Slot = {
-  get: () => reviewsInflight,
-  set: (p) => {
-    reviewsInflight = p;
-  },
-};
-let messagesInflight: Promise<void> | null = null;
-const messagesSlot: Slot = {
-  get: () => messagesInflight,
-  set: (p) => {
-    messagesInflight = p;
-  },
-};
+const tasksSlot: RefreshSlot = { current: null };
+const panesSlot: RefreshSlot = { current: null };
+const messagesSlot: RefreshSlot = { current: null };
+let reviewsSlot: RefreshSlot = { current: null };
 
 function sameMessages(a: Message[], b: Message[]): boolean {
   return (
@@ -299,16 +262,29 @@ function sameMessages(a: Message[], b: Message[]): boolean {
   );
 }
 
-/**
- * When each task's PR rows were last fetched. A sweep walks every task and
- * can take a minute on a slow link; landing after a panel fetched its own
- * rows — the PR just opened — it put back the world from before, and the
- * panel offered to open the PR again.
- */
 /** How long the splash waits for the first lists before the window opens anyway. */
 const BOOT_WAIT = 1500;
 
-const prsFetchedAt = new Map<string, number>();
+// A sweep walks every task and can take a minute. A late result once replaced
+// the newly opened PR with the earlier snapshot, so the panel offered to open
+// it again. Use request order, not timestamps that two reads can share.
+let prReadSequence = 0;
+const latestTaskPrRequest = new Map<string, number>();
+
+function resetGitHubReads(revision: number): Partial<State> {
+  // The next queue must not join or wait behind a request using the old token.
+  reviewsSlot = { current: null };
+  latestTaskPrRequest.clear();
+  return {
+    githubConnectionRevision: revision + 1,
+    prs: {},
+    prReadRevision: {},
+    reviewQueue: null,
+    reviewQueueLoading: false,
+    reviewQueueError: null,
+  };
+}
+
 /** "ACME:review": a project and stage already told to choose a status, this run. */
 const askedFlow = new Set<string>();
 
@@ -386,12 +362,14 @@ export const useStore = create<State>((set, get) => {
     panes: [],
     waiting: [],
     prs: {},
+    prReadRevision: {},
     reviewQueue: null,
     messages: [],
     reviewQueueLoading: false,
     reviewQueueError: null,
     agents: [],
     settings: null,
+    githubConnectionRevision: 0,
     issues: [],
     issueTypes: [],
     priorities: [],
@@ -540,10 +518,13 @@ export const useStore = create<State>((set, get) => {
               // more, and the watch would keep comparing against them for good.
               // Its Diff notes likewise, kept for as long as the app ran.
               prs: only(s.prs, live),
+              prReadRevision: only(s.prReadRevision, live),
               notes: only(s.notes, live),
             };
           });
-          for (const id of prsFetchedAt.keys()) if (!live.has(id)) prsFetchedAt.delete(id);
+          for (const id of latestTaskPrRequest.keys()) {
+            if (!live.has(id)) latestTaskPrRequest.delete(id);
+          }
           // Its spec, edits and drafts too, which live in their own store.
           const byTask = useSpecs.getState().byTask;
           const specs = only(byTask, live);
@@ -593,20 +574,21 @@ export const useStore = create<State>((set, get) => {
         return;
       }
       sweeping = true;
-      const began = Date.now();
+      const began = ++prReadSequence;
+      const connection = get().githubConnectionRevision;
       try {
         const all = await api.githubAllPrs();
+        if (get().githubConnectionRevision !== connection) return;
         // Merged, not replaced: a task the sweep could not read is left out of
         // its result, and dropping it here would blank a panel that had just
-        // fetched those rows for itself. Nor over rows fetched after it began.
-        const fresh = all.filter((t) => (prsFetchedAt.get(t.task_id) ?? 0) < began);
-        for (const t of fresh) prsFetchedAt.set(t.task_id, began);
+        // fetched those rows for itself. An explicit read can also land while
+        // the sweep is still reading other tasks, even if that read began first.
         set((s) => {
-          const changed = fresh.filter((t) => !sameJson(s.prs[t.task_id], t.rows));
-          if (changed.length === 0) return s;
-          return {
-            prs: { ...s.prs, ...Object.fromEntries(changed.map((t) => [t.task_id, t.rows])) },
-          };
+          const fresh = all.filter(
+            ({ task_id: id }) =>
+              (latestTaskPrRequest.get(id) ?? 0) < began && (s.prReadRevision[id] ?? 0) < began,
+          );
+          return fresh.length === 0 ? s : acceptTaskPrReads(s, fresh, ++prReadSequence);
         });
         const moves = all.map((t) => t.ticket).filter((m): m is TicketMove => m !== null);
         reportTickets(moves, get().toast, get().fail);
@@ -615,10 +597,10 @@ export const useStore = create<State>((set, get) => {
         // Left as it was: stale rows beat empty ones.
       } finally {
         sweeping = false;
-      }
-      if (sweepAgain) {
-        sweepAgain = false;
-        await get().refreshPrs();
+        if (sweepAgain) {
+          sweepAgain = false;
+          await get().refreshPrs();
+        }
       }
     },
 
@@ -639,17 +621,47 @@ export const useStore = create<State>((set, get) => {
         },
       })),
 
-    setTaskPrs: (taskId, rows) => {
-      prsFetchedAt.set(taskId, Date.now());
-      set((s) => (sameJson(s.prs[taskId], rows) ? s : { prs: { ...s.prs, [taskId]: rows } }));
+    refreshTaskPrs: async (taskId) => {
+      if (!get().settings?.github_connected) return;
+      const began = ++prReadSequence;
+      const connection = get().githubConnectionRevision;
+      latestTaskPrRequest.set(taskId, began);
+      const current = () =>
+        connection === get().githubConnectionRevision &&
+        latestTaskPrRequest.get(taskId) === began &&
+        (get().prReadRevision[taskId] ?? 0) < began;
+      try {
+        const rows = await api.githubTaskPrs(taskId);
+        if (!current()) return;
+        set((s) => acceptTaskPrReads(s, [{ task_id: taskId, rows }], ++prReadSequence));
+      } catch (error) {
+        if (current()) throw error;
+      }
     },
 
-    refreshSettings: async () => {
-      const before = get().settings;
-      // Kept when unchanged: this runs after every preference toggle, and a new
-      // object redrew every view that reads the settings, about a dozen.
+    refreshSettings: async (opts) => {
+      if (opts?.githubReconnected || opts?.githubDisconnected) {
+        // The settings command has already succeeded. Do not wait for the
+        // settings read to discard rows and errors from the previous login.
+        set((s) => ({
+          ...resetGitHubReads(s.githubConnectionRevision),
+          ...(opts.githubDisconnected && s.settings
+            ? { settings: { ...s.settings, github_connected: false, github: null } }
+            : {}),
+        }));
+      }
+      const revision = get().githubConnectionRevision;
       const settings = await api.getSettings();
-      set((s) => ({ settings: keep(s.settings, settings) }));
+      if (get().githubConnectionRevision !== revision) return;
+      const before = get().settings;
+      const connectionChanged =
+        Boolean(before?.github_connected) !== settings.github_connected ||
+        before?.github?.api_url !== settings.github?.api_url ||
+        before?.github?.web_url !== settings.github?.web_url;
+      set({
+        ...(!opts?.githubReconnected && connectionChanged ? resetGitHubReads(revision) : {}),
+        settings: keep(before, settings),
+      });
       // Only until the first list lands: someone with nothing assigned has an
       // empty list for good, and every settings change re-fetched 500 issues.
       if (settings.tracker != null && !get().issuesLoaded && !get().issuesLoading) {
@@ -666,42 +678,40 @@ export const useStore = create<State>((set, get) => {
           issuesLoaded: false,
         });
       }
-      // Only when GitHub itself changed. Every slider moved and every update
-      // from base refreshed settings, and each ran a search — which GitHub
-      // allows thirty of a minute.
-      const githubChanged =
-        before?.github_connected !== settings.github_connected ||
-        JSON.stringify(before?.github) !== JSON.stringify(settings.github);
-      if (settings.github_connected) {
-        if (githubChanged || get().reviewQueue === null)
-          void get().refreshReviewQueue({ quiet: true });
-      } else if (get().reviewQueue || get().reviewQueueError) {
-        set({ reviewQueue: null, reviewQueueError: null });
+      // A team change needs a new search, but does not change the connection.
+      const teamChanged = before?.github?.review_team !== settings.github?.review_team;
+      if (
+        settings.github_connected &&
+        (opts?.githubReconnected || teamChanged || get().reviewQueue === null)
+      ) {
+        void get().refreshReviewQueue({ quiet: true, fresh: teamChanged && !connectionChanged });
       }
     },
 
-    refreshReviewQueue: (opts) =>
-      coalesce(reviewsSlot, opts?.quiet ?? false, async () => {
-        if (!get().settings?.github_connected) return;
+    refreshReviewQueue: (opts) => {
+      const connection = get().githubConnectionRevision;
+      const current = () => connection === get().githubConnectionRevision;
+      return coalesce(reviewsSlot, !!opts?.quiet && !opts.fresh, async () => {
+        if (!current() || !get().settings?.github_connected) return;
         // A timer tick should not flash the spinner over a list already on
         // screen. The first load has nothing to keep, so it still shows one.
         const spin = !opts?.quiet || get().reviewQueue === null;
         if (spin) set({ reviewQueueLoading: true });
         try {
           const queue = await api.githubReviewQueue();
-          // Disconnected while this was out: the list goes with the
-          // connection, or the badge counts reviews from nothing connected.
-          if (!get().settings?.github_connected) return;
+          if (!current()) return;
           set((s) => ({ reviewQueue: keep(s.reviewQueue, queue), reviewQueueError: null }));
         } catch (e) {
+          if (!current()) return;
           // A timer tick stays quiet — the view shows the message — but a
           // Refresh you pressed should also say so up top.
           set({ reviewQueueError: errMessage(e) });
           if (!opts?.quiet) get().fail(e);
         } finally {
-          if (spin) set({ reviewQueueLoading: false });
+          if (spin && current()) set({ reviewQueueLoading: false });
         }
-      }),
+      });
+    },
 
     refreshMessages: () =>
       coalesce(messagesSlot, false, async () => {

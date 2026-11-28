@@ -223,6 +223,7 @@ mod tests {
                 review_comments: 0,
             }),
             checks: Vec::new(),
+            checks_state: Default::default(),
             reviews: Vec::new(),
             past: Vec::new(),
             verdict: "none".into(),

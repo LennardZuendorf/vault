@@ -751,9 +751,10 @@ Known gaps:
 ## 8. Pull requests
 
 The Pull requests tab shows, per repo, the open PR, or an earlier one if
-none is open. It shows checks, the latest review per reviewer, the verdict,
-and how far behind the base it is. From here: push everything, open PRs,
-mark a PR ready for review or back to draft, retarget a PR onto the
+none is open. It shows CI, the latest review per reviewer, the verdict, and
+how far behind the base it is. Each open PR has a read-only **Comments**
+section, separate from **Feedback → agent**. From here: push everything,
+open PRs, mark a PR ready for review or back to draft, retarget a PR onto the
 checkout's base or take the PR's base for the
 checkout (GitHub moves a PR itself when its base is merged and deleted),
 send feedback to an agent, and finish a merged task.
@@ -944,15 +945,41 @@ send feedback to an agent, and finish a merged task.
   a token that may read the PR but not change it, is shown on the tab.
   Before, Open PRs opened drafts (PR-1) and only GitHub could take one out
   of draft.
+- **PR-16** Each open PR's card MUST offer **Comments**. Opening it reads
+  only that repository's PR. It shows conversation comments, submitted
+  review text, and inline threads with their replies, authors and links
+  back to GitHub. It keeps file and line context when GitHub supplies it,
+  marks outdated threads, and folds resolved threads by default while
+  letting the user open them. It uses the same safe Markdown as the picker
+  (PR-10). Reading comments or checks does not send anything to an agent
+  or write to GitHub. **Feedback → agent** still uses its own picker and
+  explicit send (PR-6, PR-7, PR-10). Earlier PR history and the other PR
+  actions are unchanged.
+- **PR-17** A PR card MUST label CI in text even when folded. The expanded
+  card shows each check's name, state and GitHub link when available. Both
+  use the check runs for the PR's current head. If a name repeats, a
+  passing run MUST NOT hide a failed one. A known failure takes precedence
+  over pending runs. Distinguish passing, pending, cancelled, only skipped
+  or neutral, and no reported check runs. Unavailable or incomplete reads
+  MUST NOT read as passing. An incomplete read still shows the runs
+  it found and says that the list is incomplete.
+- **PR-18** Opening Comments or refreshing the tab MUST distinguish a read
+  in progress, a complete empty result, and a failed or incomplete read.
+  An error or a read limit is shown on the affected PR and section, without
+  hiding results that were read there or elsewhere. **Refresh** reloads
+  open Comments; the background PR sweep does not load them. A result for
+  another PR or an older request MUST NOT replace the current result.
+  GitHub connection handling stays as in PR-12.
 
 Code: `commands/github.rs`, `commands/pr_branches.rs`, `commands/pr_draft.rs`, `integrations/github/ready.rs`, `commands/open_prs.rs`, `commands/pr_images.rs`, `commands/pr_image_offers.rs`, `PrImageOffer.tsx`, `commands/outgoing.rs`, `git/outgoing.rs`, `Outgoing.tsx`, `commands/landed.rs`, `git/landed.rs`, `integrations/github.rs`, `integrations/github/images.rs`, `PrPanel.tsx`, `PrReadErrors.tsx`,
 `PrFeedback.tsx`, `Markdown.tsx`, `lib/markdown.ts`; its connection in `CodeSettings.tsx`.
 
 Known gaps:
-- Only the first 100 check runs of a commit are read.
-- Legacy commit statuses (Jenkins, older CircleCI) are not read at all.
-- A failed checks or reviews request reads as "no checks" / "no verdict"
-  rather than as an error.
+- This tab's CI reads GitHub Check Runs only. It does not read legacy
+  commit statuses (Jenkins, older CircleCI); the Reviews rollup includes
+  them (REV-13).
+- A failed review verdict request still reads as "no verdict" rather than
+  as an error. This is separate from the Comments reader (PR-18).
 - Two feedback sends for one task seconds apart overwrite each other's
   `PR_FEEDBACK.md`.
 - There is no rate-limit handling beyond pacing.
@@ -1231,12 +1258,13 @@ dot marks it only while something waits on your review.
   so when there are more. Before this, every card was a title and an
   author: a one-line fix looked like a rewrite, and a PR you had approved
   before its author pushed again looked like one you had already done.
-- **REV-10** A PR in "To review" MUST open on GitHub, where it is
-  reviewed. Reviewing it here (a checkout of its own, Claude's reading
-  plan and findings beside its diff, and the review posted from the app)
-  shipped in 0.5.0 and was taken out: the page was the Diff tab for your
-  own work with a review laid over it, and it did not read as a review. A
-  review checkout left from 0.5.0 lists as an ordinary task, named
+- **REV-10** The card action for a PR in "To review" MUST open GitHub,
+  where reviews are submitted. Reviewing it here (a checkout of its own,
+  Claude's reading plan and findings beside its diff, and the review
+  posted from the app) shipped in 0.5.0 and was taken out: the page was
+  the Diff tab for your own work with a review laid over it, and it did
+  not read as a review. A review checkout left from 0.5.0 lists as an
+  ordinary task, named
   `Review: <title>`, to be deleted. It is still never pushed nor opened as
   a pull request, and its ticket never moves.
 - **REV-11** Each tab MUST group by its own question (who it was asked of
@@ -1250,6 +1278,22 @@ dot marks it only while something waits on your review.
   yours and your team's, each card saying who it was asked of; a failed
   team lookup still shows as a note above it (REV-1). Epic is not offered
   without Jira.
+- **REV-12** Cards in **To review** and **Opened by you** MUST offer
+  read-only **Comments** (PR-16) and **Check runs** (the names, states and
+  available links in PR-17). This includes personal and team requests,
+  fork PRs, and PRs with no Layer task or registered repository. Open a
+  section to read that PR in place, without navigating, starting a task,
+  checking out a branch, writing to GitHub or sending to an agent.
+  **Refresh** reloads open details; grouping and sorting do not load them.
+  Each section reports loading, empty, failed and incomplete reads
+  independently (PR-18). Card clicks, **GitHub**, **Start task**, grouping
+  and sorting still work as before (REV-7, REV-10, REV-11).
+- **REV-13** The card's overall CI state MUST be readable in text and
+  remain GitHub's rollup of check runs and commit statuses, independently
+  of the on-demand **Check runs** list. That list describes runs for the
+  PR's current head, not individual legacy commit statuses. An empty,
+  unavailable, incomplete or passing list does not make the overall PR
+  pass. A failing rollup stays visible even if no check runs are reported.
 
 Code: `commands/github.rs` (`review_queue`, `github_review_queue`),
 `integrations/github/authored.rs`, `integrations/github/requested.rs`,

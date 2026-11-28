@@ -9,7 +9,7 @@ use tauri::{AppHandle, State};
 use crate::config::GithubConfig;
 use crate::error::{Error, Result};
 use crate::git;
-use crate::integrations::github::{self, CodeLine, GitHub};
+use crate::integrations::github::{self, CodeLine, GitHub, ReadState};
 use crate::secrets;
 
 use super::jira::stored_or;
@@ -56,6 +56,7 @@ pub struct CheckoutPr {
     pub repo: String,
     pub pr: Option<crate::integrations::github::PullRequest>,
     pub checks: Vec<crate::integrations::github::CheckRun>,
+    pub checks_state: ReadState,
     /// Every review submitted on `pr`, so the panel can name who said what.
     pub reviews: Vec<crate::integrations::github::Review>,
     /// Earlier pull requests from this same branch, newest first. A branch
@@ -418,7 +419,6 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
 
     // Then GitHub, for every repo at once.
     let rows = checkouts.into_iter().zip(local).map(|(checkout, (changed, slug, branches))| {
-        let task = &task;
         async move {
             let repo =
                 state.config.project(&checkout.project_id).map(|p| p.name).unwrap_or_else(|_| "(unknown)".into());
@@ -428,6 +428,7 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
                 repo,
                 pr: None,
                 checks: Vec::new(),
+                checks_state: ReadState::Unavailable,
                 reviews: Vec::new(),
                 past: Vec::new(),
                 verdict: "none".into(),
@@ -465,33 +466,38 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
                             let found = all.remove(at);
 
                             if found.state == "open" {
-                                // None of these needs anything from the
-                                // others, and this runs for every repository of
-                                // every task on a timer — so they go together
-                                // rather than in turn.
-                                //
-                                // The listing carries no comment counts, which is
-                                // why the one being shown in full is fetched
-                                // again rather than reported with those silently
-                                // zeroed.
-                                let (checks, reviews, full, to_reply) = tokio::join!(
-                                    // The commit, not the branch name: a name is
-                                    // read by the URL, a sha is not.
-                                    client.checks(
-                                        &owner,
-                                        &name,
-                                        if found.head_sha.is_empty() { &task.branch } else { &found.head_sha },
-                                    ),
-                                    client.reviews(&owner, &name, found.number),
-                                    client.pull(&owner, &name, found.number),
-                                    client.pr_to_reply(&owner, &name, found.number),
+                                let number = found.number;
+                                let details = async {
+                                    // The listing has no comment counts. The
+                                    // fuller read may also see a push, so only
+                                    // ask about the head we will display.
+                                    let pr = client
+                                        .pull(&owner, &name, number)
+                                        .await
+                                        .ok()
+                                        .filter(|pr| {
+                                            pr.number == number && matches!(pr.state.as_str(), "open" | "closed")
+                                        })
+                                        .unwrap_or(found);
+                                    let checks = if pr.state == "open" {
+                                        client.pr_checks(&owner, &name, &pr.head_sha).await
+                                    } else {
+                                        github::PrChecks::default()
+                                    };
+                                    (pr, checks)
+                                };
+                                let ((pr, checks), reviews, to_reply) = tokio::join!(
+                                    details,
+                                    client.reviews(&owner, &name, number),
+                                    client.pr_to_reply(&owner, &name, number),
                                 );
 
-                                row.checks = checks.unwrap_or_default();
+                                row.checks = checks.checks;
+                                row.checks_state = checks.checks_state;
                                 row.reviews = reviews.unwrap_or_default();
                                 row.verdict = github::verdict(&row.reviews).to_string();
                                 row.to_reply = to_reply.unwrap_or(0);
-                                row.pr = Some(full.ok().unwrap_or(found));
+                                row.pr = Some(pr);
                             } else {
                                 // Closed is final: its checks and reviews will not
                                 // change, and nothing on screen reads them. Three
@@ -900,6 +906,14 @@ pub(crate) const FEEDBACK_FILE: &str = "PR_FEEDBACK.md";
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        extract::{Path, Query},
+        http::StatusCode,
+        routing::{get, post},
+        Json, Router,
+    };
+    use serde_json::{json, Value};
+    use std::sync::{Arc, Mutex};
 
     fn thread(checkout: &str, path: &str, line: Option<u64>) -> FeedbackItem {
         FeedbackItem::Thread {
@@ -947,6 +961,7 @@ mod tests {
             repo: "api".into(),
             pr,
             checks: Vec::new(),
+            checks_state: ReadState::Unavailable,
             reviews: Vec::new(),
             past: Vec::new(),
             verdict: "none".into(),
@@ -1057,5 +1072,266 @@ mod tests {
         .unwrap();
         assert!(matches!(items[0], FeedbackItem::Comment { .. }));
         assert!(matches!(items[1], FeedbackItem::Check { .. }));
+    }
+
+    const LIST_HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const FULL_HEAD: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn check_run(id: u64, sha: &str, name: &str, conclusion: &str) -> Value {
+        json!({
+            "id": id, "head_sha": sha, "name": name, "status": "completed", "conclusion": conclusion,
+            "html_url": format!("https://gh.example/acme/api/runs/{id}")
+        })
+    }
+
+    fn check_page(total: u64, runs: Vec<Value>) -> (StatusCode, Json<Value>) {
+        (StatusCode::OK, Json(json!({ "total_count": total, "check_runs": runs })))
+    }
+
+    fn check_page_of_passing(start: u64) -> Vec<Value> {
+        (start..start + 100).map(|i| check_run(i, LIST_HEAD, "build", "success")).collect()
+    }
+
+    async fn read_task_pr_checks(
+        listing_head: &str,
+        detail_head: &str,
+        page: impl Fn(&str, u32) -> (StatusCode, Json<Value>) + Send + Sync + 'static,
+    ) -> (Value, Vec<(String, u32)>) {
+        let dir = std::env::temp_dir().join(format!("vl-task-pr-checks-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        git::run_for_tests(&dir, &["init", "-q", "-b", "task"]).unwrap();
+        git::run_for_tests(&dir, &["remote", "add", "origin", "git@gh.example:acme/api.git"]).unwrap();
+        let cfg = serde_json::from_value(json!({
+            "projects": [{"id": "p", "name": "api", "path": dir, "default_branch": "main"}],
+            "tasks": [{"id": "t", "name": "task", "root": dir, "branch": "task", "created_at": "2026-11-01T12:00:00Z"}],
+            "checkouts": [{"id": "c", "task_id": "t", "project_id": "p", "path": dir, "base": "main"}]
+        }))
+        .unwrap();
+        let state = AppState {
+            config: crate::config::ConfigStore::for_tests(dir.join("config.json"), cfg),
+            ptys: Default::default(),
+            ticket_types: Default::default(),
+            epic_field_missing: Default::default(),
+            pending_notices: Default::default(),
+            status_cache: Default::default(),
+            prs_settled: Default::default(),
+            prs_seen: Default::default(),
+            news: Default::default(),
+            messages: crate::messages::Messages::for_tests(dir.join("messages.json")),
+            notes: crate::notes::Notes::load(&dir),
+            browser: Default::default(),
+            loops: Default::default(),
+            runs: crate::runs::Runs::for_tests(dir.join("runs.json")),
+            slack_bot: Default::default(),
+        };
+        let pr = |sha| {
+            json!({
+                "number": 42, "title": "CI read", "state": "open", "draft": false, "user": {"login": "ana"},
+                "head": {"ref": "task", "sha": sha}, "base": {"ref": "main"},
+                "html_url": "https://gh.example/acme/api/pull/42"
+            })
+        };
+        let listed = json!([pr(listing_head)]);
+        let detail = pr(detail_head);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&calls);
+        let page = Arc::new(page);
+        let app = Router::new()
+            .route("/repos/acme/api/pulls", get(move || async { Json(listed) }))
+            .route("/repos/acme/api/pulls/42", get(move || async { Json(detail) }))
+            .route(
+                "/repos/acme/api/pulls/42/reviews",
+                get(|| async {
+                    Json(json!([{"id": 1, "user": {"login": "sam"}, "state": "APPROVED",
+                        "submitted_at": "2026-11-01T12:00:00Z", "html_url": "https://gh.example/acme/api/pull/42#review"}]))
+                }),
+            )
+            .route("/graphql", post(|| async { StatusCode::FORBIDDEN }))
+            .route(
+                "/repos/acme/api/commits/{sha}/check-runs",
+                get(move |Path(sha): Path<String>, Query(query): Query<HashMap<String, String>>| {
+                    let recorded = Arc::clone(&recorded);
+                    let page = Arc::clone(&page);
+                    async move {
+                        assert_eq!(query["per_page"], "100");
+                        assert!(query.get("filter").is_none_or(|v| v == "latest"));
+                        let n = query.get("page").map_or(1, |v| v.parse().unwrap());
+                        recorded.lock().unwrap().push((sha.clone(), n));
+                        page(&sha, n)
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let gh = GitHub::new(
+            &GithubConfig {
+                api_url: format!("http://{}", listener.local_addr().unwrap()),
+                web_url: "https://gh.example".into(),
+                review_team: None,
+            },
+            "test-token",
+        )
+        .unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let rows = task_prs(&state, &gh, "t").await.unwrap();
+        server.abort();
+        std::fs::remove_dir_all(dir).unwrap();
+        let calls = calls.lock().unwrap().clone();
+        (json!(rows[0]), calls)
+    }
+
+    #[tokio::test]
+    async fn task_pr_checks_a_successful_empty_page_is_complete_even_when_feedback_count_fails() {
+        let (row, calls) = read_task_pr_checks(LIST_HEAD, LIST_HEAD, |_, _| check_page(0, vec![])).await;
+        assert_eq!(row["checks"], json!([]));
+        assert_eq!(row["checks_state"], "complete");
+        assert_eq!(calls, [(LIST_HEAD.to_string(), 1)]);
+    }
+
+    #[tokio::test]
+    async fn task_pr_checks_a_passing_duplicate_does_not_hide_a_failure_on_the_next_page() {
+        let (row, calls) = read_task_pr_checks(LIST_HEAD, LIST_HEAD, |sha, n| match n {
+            1 => check_page(101, check_page_of_passing(1)),
+            2 => check_page(101, vec![check_run(101, sha, "build", "failure")]),
+            _ => panic!("unexpected page {n}"),
+        })
+        .await;
+        let checks = row["checks"].as_array().unwrap();
+        assert_eq!(checks.len(), 101);
+        assert_eq!(checks[0]["conclusion"], "success");
+        assert_eq!(
+            checks[100],
+            json!({ "name": "build", "status": "completed", "conclusion": "failure",
+                "url": "https://gh.example/acme/api/runs/101" })
+        );
+        assert_eq!(row["checks_state"], "complete");
+        assert_eq!(calls, [(LIST_HEAD.to_string(), 1), (LIST_HEAD.to_string(), 2)]);
+    }
+
+    #[tokio::test]
+    async fn task_pr_checks_a_late_page_failure_keeps_the_checks_and_the_review_verdict() {
+        for bad_page in [
+            (StatusCode::FORBIDDEN, json!({ "message": "not allowed" })),
+            (StatusCode::OK, json!({ "total_count": 101, "check_runs": null })),
+        ] {
+            let (row, calls) = read_task_pr_checks(LIST_HEAD, LIST_HEAD, move |_, n| match n {
+                1 => check_page(101, check_page_of_passing(1)),
+                2 => (bad_page.0, Json(bad_page.1.clone())),
+                _ => panic!("unexpected page {n}"),
+            })
+            .await;
+            assert_eq!(row["checks"].as_array().unwrap().len(), 100);
+            assert_eq!(row["checks_state"], "incomplete");
+            assert_eq!(row["verdict"], "approved");
+            assert!(row["error"].is_null());
+            assert_eq!(calls.len(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn task_pr_checks_an_unreadable_first_page_is_not_complete_empty() {
+        for (status, body) in [
+            (StatusCode::NOT_FOUND, json!({ "message": "commit not found" })),
+            (StatusCode::OK, json!({ "total_count": 0 })),
+            (StatusCode::OK, json!({ "check_runs": [] })),
+            (StatusCode::OK, json!({ "total_count": "0", "check_runs": [] })),
+            (StatusCode::OK, json!({ "total_count": 1, "check_runs": [] })),
+        ] {
+            let (row, _) = read_task_pr_checks(LIST_HEAD, LIST_HEAD, move |_, _| (status, Json(body.clone()))).await;
+            assert_eq!(row["checks"], json!([]));
+            assert_eq!(row["checks_state"], "unavailable", "first page: {status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn task_pr_checks_malformed_runs_do_not_hide_readable_ones_or_certify_the_page() {
+        let (row, _) = read_task_pr_checks(LIST_HEAD, LIST_HEAD, |sha, _| {
+            let mut malformed = check_run(2, sha, "missing conclusion", "success");
+            malformed["conclusion"] = Value::Null;
+            check_page(
+                3,
+                vec![check_run(1, sha, "kept", "success"), malformed, check_run(3, FULL_HEAD, "wrong SHA", "failure")],
+            )
+        })
+        .await;
+        assert_eq!(row["checks_state"], "incomplete");
+        assert_eq!(row["checks"].as_array().unwrap().len(), 1);
+        assert_eq!(row["checks"][0]["name"], "kept");
+    }
+
+    #[tokio::test]
+    async fn task_pr_checks_a_malformed_link_does_not_hide_a_failure_with_a_passing_peer() {
+        let (row, _) = read_task_pr_checks(LIST_HEAD, LIST_HEAD, |sha, _| {
+            let mut failure = check_run(2, sha, "build", "failure");
+            failure["html_url"] = json!(42);
+            check_page(2, vec![check_run(1, sha, "build", "success"), failure])
+        })
+        .await;
+        assert_eq!(
+            row["checks"],
+            json!([
+                {"name": "build", "status": "completed", "conclusion": "success",
+                    "url": "https://gh.example/acme/api/runs/1"},
+                {"name": "build", "status": "completed", "conclusion": "failure", "url": null}
+            ])
+        );
+        assert_eq!(row["checks_state"], "incomplete");
+    }
+
+    #[tokio::test]
+    async fn task_pr_checks_missing_and_null_links_do_not_make_a_read_incomplete() {
+        let (row, _) = read_task_pr_checks(LIST_HEAD, LIST_HEAD, |sha, _| {
+            let mut missing = check_run(1, sha, "lint", "success");
+            missing.as_object_mut().unwrap().remove("html_url");
+            let mut null = check_run(2, sha, "build", "failure");
+            null["html_url"] = Value::Null;
+            check_page(2, vec![missing, null])
+        })
+        .await;
+        assert_eq!(
+            row["checks"],
+            json!([
+                {"name": "lint", "status": "completed", "conclusion": "success", "url": null},
+                {"name": "build", "status": "completed", "conclusion": "failure", "url": null}
+            ])
+        );
+        assert_eq!(row["checks_state"], "complete");
+    }
+
+    #[tokio::test]
+    async fn task_pr_checks_only_the_head_on_the_displayed_pr_is_checked_after_a_push() {
+        let (row, calls) = read_task_pr_checks(LIST_HEAD, FULL_HEAD, |sha, _| {
+            let (name, conclusion) = if sha == FULL_HEAD { ("new head", "success") } else { ("old head", "failure") };
+            check_page(1, vec![check_run(1, sha, name, conclusion)])
+        })
+        .await;
+        assert_eq!(row["pr"]["head_sha"], FULL_HEAD);
+        assert_eq!(row["checks"][0]["name"], "new head");
+        assert_eq!(row["checks_state"], "complete");
+        assert_eq!(calls, [(FULL_HEAD.to_string(), 1)]);
+    }
+
+    #[tokio::test]
+    async fn task_pr_checks_a_missing_displayed_head_does_not_read_old_head_or_a_branch() {
+        for listed in [LIST_HEAD, ""] {
+            let (row, calls) = read_task_pr_checks(listed, "", |sha, _| {
+                check_page(1, vec![check_run(1, sha, "not tied to displayed head", "success")])
+            })
+            .await;
+            assert_eq!(row["pr"]["head_sha"], "");
+            assert_eq!(row["checks"], json!([]));
+            assert_eq!(row["checks_state"], "unavailable");
+            assert!(calls.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn task_pr_checks_the_page_cap_keeps_available_rows_without_certifying_them() {
+        let (row, calls) = read_task_pr_checks(LIST_HEAD, LIST_HEAD, |_, n| {
+            check_page(1100, check_page_of_passing(u64::from(n - 1) * 100 + 1))
+        })
+        .await;
+        assert_eq!(row["checks"].as_array().unwrap().len(), 1000);
+        assert_eq!(row["checks_state"], "incomplete");
+        assert_eq!(calls.len(), 10);
     }
 }

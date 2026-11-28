@@ -22,7 +22,6 @@ import { ErrorMessage, Field, useFailure } from "./ui";
 export function CodeSettings() {
   const settings = useStore((s) => s.settings);
   const refreshSettings = useStore((s) => s.refreshSettings);
-  const refreshPrs = useStore((s) => s.refreshPrs);
   const ghRefusal = useStore((s) => githubRefusal(s.prs));
   // Connecting fails under its button, disconnecting under the connected
   // row (NOTE-6).
@@ -66,12 +65,15 @@ export function CodeSettings() {
     setBusy(true);
     github.clear();
     try {
-      await api.githubConnect(ghApi.trim(), ghWeb.trim(), ghToken.trim(), ghTeam.trim() || null);
+      const apiUrl = ghApi.trim().replace(/\/+$/, "");
+      const webUrl = ghWeb.trim().replace(/\/+$/, "");
+      const token = ghToken.trim();
+      const githubReconnected =
+        !connected || !!token || apiUrl !== g?.api_url || webUrl !== g?.web_url;
+      await api.githubConnect(apiUrl, webUrl, token, ghTeam.trim() || null);
       setGhToken("");
-      await refreshSettings();
+      await refreshSettings({ githubReconnected });
       fold();
-      // The PR tabs still hold what the old token was told.
-      void refreshPrs();
     } catch (e) {
       github.fail(e);
     } finally {
@@ -83,7 +85,7 @@ export function CodeSettings() {
     unlink.clear();
     try {
       await api.disconnect("github");
-      await refreshSettings();
+      await refreshSettings({ githubDisconnected: true });
     } catch (e) {
       unlink.fail(e);
     }
