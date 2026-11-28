@@ -4,7 +4,9 @@
 //! what a repository's check command is.
 
 use code_villain_sync::Rules;
-use layer_domain::{Actor, ConnectionKind, ModelKind, NOTES_PER_REPO, Operation, remote_key};
+use layer_domain::{
+    Actor, ConnectionKind, ModelKind, NOTES_PER_REPO, Operation, remote_key, specs_in_app,
+};
 use serde_json::{Map, Value, json};
 use sqlx::PgConnection;
 use uuid::Uuid;
@@ -64,6 +66,7 @@ impl Rules for Layer {
     ) -> Result<(), SyncError> {
         match model {
             ModelKind::Repository => {
+                specs_in_app(row);
                 // One spelling per repository, whichever way it was cloned,
                 // so two Macs that cloned it differently share it.
                 if let Some(url) = row.get("remote_key").and_then(Value::as_str) {
@@ -99,6 +102,16 @@ impl Rules for Layer {
         before: Option<&Value>,
         data: &mut Map<String, Value>,
     ) -> Result<(), SyncError> {
+        if model == ModelKind::Repository {
+            specs_in_app(data);
+            // An older Layer's `specs_in_app: false` alone leaves nothing to
+            // write, and an UPDATE that sets nothing is not SQL.
+            if data.is_empty()
+                && let Some(now) = before.and_then(|b| b.get("spec_commit"))
+            {
+                data.insert("spec_commit".into(), now.clone());
+            }
+        }
         // The patch carries only the settings; which kind they must be is
         // the record's.
         if model == ModelKind::Connection

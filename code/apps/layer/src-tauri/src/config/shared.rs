@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use super::{AppConfig, Project, TicketFlow};
+use super::{AppConfig, Project, SpecCommit, TicketFlow};
 use crate::git::UpdateBy;
 
 pub const REPOSITORY: &str = "Repository";
@@ -56,6 +56,25 @@ pub struct Held {
     pub settings: Value,
 }
 
+impl Shared {
+    /// Say `specs_in_app` as `spec_commit` in the changes still queued: the
+    /// workspace refuses a key it does not know, so an update an earlier
+    /// build queued would never be taken. True when one was rewritten.
+    pub fn rename_specs_in_app(&mut self) -> bool {
+        let mut changed = false;
+        for op in &mut self.outbox {
+            let Some(data) = op.get_mut("data").and_then(Value::as_object_mut) else { continue };
+            let Some(old) = data.remove("specs_in_app") else { continue };
+            changed = true;
+            if !data.contains_key("spec_commit") {
+                let commit = if old.as_bool() == Some(true) { "none" } else { "whole" };
+                data.insert("spec_commit".into(), Value::from(commit));
+            }
+        }
+        changed
+    }
+}
+
 /// A repository of the workspace's that is not on this Mac.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Elsewhere {
@@ -72,7 +91,9 @@ pub struct Elsewhere {
     #[serde(default)]
     pub spec_folder: Option<String>,
     #[serde(default)]
-    pub specs_in_app: bool,
+    pub spec_toolset: Option<String>,
+    #[serde(default, alias = "specs_in_app", deserialize_with = "super::project::commit_or_flag")]
+    pub spec_commit: SpecCommit,
     /// Who added it, by name, when the workspace says.
     #[serde(default)]
     pub added_by: Option<String>,
@@ -132,7 +153,8 @@ pub fn records(cfg: &AppConfig) -> Records {
                 "update_by": p.update_by,
                 "check_command": p.check,
                 "spec_folder": p.spec_folder,
-                "specs_in_app": p.specs_in_app,
+                "spec_toolset": p.spec_toolset,
+                "spec_commit": p.spec_commit,
             }))
         });
     }
@@ -147,7 +169,8 @@ pub fn records(cfg: &AppConfig) -> Records {
                 "update_by": e.update_by,
                 "check_command": e.check,
                 "spec_folder": e.spec_folder,
-                "specs_in_app": e.specs_in_app,
+                "spec_toolset": e.spec_toolset,
+                "spec_commit": e.spec_commit,
             }))
         });
     }
@@ -361,7 +384,8 @@ pub fn take_record(p: &mut Project, e: Elsewhere) {
     p.update_by = e.update_by;
     p.check = e.check;
     p.spec_folder = e.spec_folder;
-    p.specs_in_app = e.specs_in_app;
+    p.spec_toolset = e.spec_toolset;
+    p.spec_commit = e.spec_commit;
 }
 
 pub fn new_id() -> String {
@@ -429,9 +453,16 @@ fn describe(model: &str) -> &'static str {
 /// What an update may change: the rest is fixed when a record is made.
 fn patch_keys(model: &str) -> &'static [&'static str] {
     match model {
-        REPOSITORY => {
-            &["name", "default_branch", "group_name", "update_by", "check_command", "spec_folder", "specs_in_app"]
-        }
+        REPOSITORY => &[
+            "name",
+            "default_branch",
+            "group_name",
+            "update_by",
+            "check_command",
+            "spec_folder",
+            "spec_toolset",
+            "spec_commit",
+        ],
         CONNECTION => &["settings"],
         LOG_SOURCE => &["name", "region", "bucket", "prefix", "athena"],
         AGENT_MODEL => &["models"],
@@ -464,7 +495,8 @@ mod tests {
             check: None,
             check_approved: None,
             spec_folder: None,
-            specs_in_app: false,
+            spec_toolset: None,
+            spec_commit: Default::default(),
             remote: remote.map(String::from),
             repository_id: None,
         }
@@ -523,6 +555,27 @@ mod tests {
         let id = cfg.projects[0].repository_id.clone();
         change(&mut cfg, |c| c.projects.clear());
         assert_eq!(cfg.shared.outbox, vec![json!({ "action": "delete", "model": REPOSITORY, "id": id })]);
+    }
+
+    #[test]
+    fn a_repositorys_spec_toolset_and_commit_mode_are_sent_as_the_workspace_takes_them() {
+        let mut cfg = in_a_workspace(vec![]);
+        change(&mut cfg, |c| c.projects.push(project("p1", "/code/api", Some("github.com/acme/api"))));
+        assert_eq!(cfg.shared.outbox[0]["data"]["spec_commit"], "whole");
+        assert_eq!(cfg.shared.outbox[0]["data"]["spec_toolset"], Value::Null);
+        assert!(cfg.shared.outbox[0]["data"].get("specs_in_app").is_none());
+        cfg.shared.outbox.clear();
+
+        let sent = change(&mut cfg, |c| {
+            c.projects[0].spec_toolset = Some("openspec".into());
+            c.projects[0].spec_commit = SpecCommit::Own;
+        });
+        assert_eq!((sent.queued, sent.refused.len()), (1, 0), "{:?}", sent.refused);
+        assert_eq!(cfg.shared.outbox[0]["data"], json!({ "spec_toolset": "openspec", "spec_commit": "own" }));
+
+        // A toolset id no manifest could have is the workspace's to refuse.
+        let sent = change(&mut cfg, |c| c.projects[0].spec_toolset = Some("../x".into()));
+        assert_eq!(sent.refused.len(), 1);
     }
 
     #[test]
@@ -625,5 +678,19 @@ mod tests {
         change(&mut cfg, |c| c.jira = Some(acme_jira("me@acme.example")));
         assert_eq!(cfg.shared.connections.get("jira"), Some(&id));
         assert!(cfg.shared.outbox.is_empty(), "{:?}", cfg.shared.outbox);
+    }
+
+    #[test]
+    fn a_not_on_this_mac_record_with_specs_in_app_reads_as_commit_none() {
+        let old = |flag: &str| -> Elsewhere {
+            serde_json::from_str(&format!(
+                r#"{{"id":"r","remote_key":"github.com/acme/api","name":"api","default_branch":"main"{flag}}}"#
+            ))
+            .unwrap()
+        };
+        assert_eq!(old(r#","specs_in_app":true"#).spec_commit, SpecCommit::None);
+        assert_eq!(old(r#","specs_in_app":false"#).spec_commit, SpecCommit::Whole);
+        assert_eq!(old("").spec_commit, SpecCommit::Whole);
+        assert_eq!(old(r#","spec_commit":"own""#).spec_commit, SpecCommit::Own);
     }
 }

@@ -84,7 +84,7 @@
   background: var(--hover);
 }
 .sub-row.active {
-  background: var(--selected);
+  background: color-mix(in srgb, var(--signal) 16%, transparent);
 }
 .sub-row .label {
   flex: 1;

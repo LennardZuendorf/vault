@@ -1,9 +1,12 @@
-//! Committing some files and no others: a spec the user approved (SPEC-6),
+//! Committing some files and no others: the spec Commit spec puts (SPEC-35)
 //! in a worktree where an agent may be halfway through its own change.
 
 use std::path::Path;
 
-use super::{in_progress, run};
+use std::io::Write;
+use std::process::Stdio;
+
+use super::{command, in_progress, run};
 use crate::error::{Error, Result};
 
 /// Commit what is under `paths` (relative to `dir`), added, changed or
@@ -107,6 +110,58 @@ pub fn head_commit(dir: &Path) -> Result<String> {
     Ok(run(dir, &["rev-parse", "HEAD"])?.trim().to_string())
 }
 
+/// What each of `rels` held at the commit `dir` is on, in one git process
+/// (Commit spec asks this of every spec file, every time the Pull requests
+/// tab looks). None for one it held nothing at (not in it, or no commit
+/// yet), or nothing that is text. Commit spec compares this with what it
+/// would write, so a spec file committed by hand is not "changed".
+pub fn committed_texts(dir: &Path, rels: &[&str]) -> Result<Vec<Option<String>>> {
+    // A name with a line break in it cannot be asked for on a line.
+    let asked: Vec<&str> = rels.iter().copied().filter(|r| !r.contains('\n')).collect();
+    if asked.is_empty() {
+        return Ok(vec![None; rels.len()]);
+    }
+    let mut child = command(dir, &["cat-file", "--batch"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| Error::Git(format!("failed to run git in {}: {e}", dir.display())))?;
+    let input: String = asked.iter().map(|r| format!("HEAD:{r}\n")).collect();
+    let mut stdin = child.stdin.take().ok_or_else(|| Error::Git("git took no input".into()))?;
+    // Written beside the read: a big answer would fill the pipe and stop git
+    // halfway through the questions.
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let out = child.wait_with_output().map_err(|e| Error::Git(format!("git cat-file failed: {e}")))?;
+    let _ = writer.join();
+    if !out.status.success() {
+        return Err(Error::Git(String::from_utf8_lossy(&out.stderr).trim().to_string()));
+    }
+    let mut answers = parse_batch(&out.stdout).into_iter();
+    Ok(rels.iter().map(|r| if r.contains('\n') { None } else { answers.next().flatten() }).collect())
+}
+
+/// `git cat-file --batch`'s answers, in order: a blob's text, or None.
+fn parse_batch(mut out: &[u8]) -> Vec<Option<String>> {
+    let mut answers = Vec::new();
+    while let Some(end) = out.iter().position(|&b| b == b'\n') {
+        let head = String::from_utf8_lossy(&out[..end]).to_string();
+        out = &out[end + 1..];
+        let parts: Vec<&str> = head.split(' ').collect();
+        match parts[..] {
+            [_, kind, size] => {
+                let size: usize = size.parse().unwrap_or(0).min(out.len());
+                let body = &out[..size];
+                out = out.get(size + 1..).unwrap_or_default();
+                answers.push((kind == "blob").then(|| String::from_utf8(body.to_vec()).ok()).flatten());
+            }
+            // `<name> missing`, `<name> ambiguous`
+            _ => answers.push(None),
+        }
+    }
+    answers
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +239,21 @@ mod tests {
         assert_eq!(in_house_style(&dir, "Approve the design for T-1."), "Approve the design for T-1.");
         assert!(!is_conventional("Keep new files: when a task is finished."));
         assert!(!is_conventional("feat(): nothing in the scope"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn committed_texts_answers_every_name_in_one_go_and_none_for_what_head_lacks() {
+        let dir = repo();
+        std::fs::create_dir_all(dir.join("d")).unwrap();
+        std::fs::write(dir.join("d/b.md"), "two\nlines\n").unwrap();
+        run(&dir, &["add", "-A"]).unwrap();
+        run(&dir, &["commit", "-qm", "b"]).unwrap();
+        std::fs::write(dir.join("a.txt"), "changed, not committed\n").unwrap();
+
+        let got = committed_texts(&dir, &["a.txt", "nope.md", "d/b.md", "d", "bad\nname"]).unwrap();
+
+        assert_eq!(got, [Some("one\n".to_string()), None, Some("two\nlines\n".to_string()), None, None]);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

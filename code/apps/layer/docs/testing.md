@@ -81,9 +81,10 @@ harness is already served. Don't start a second server.
 | `scenario` | `busy` (everything connected, agents in every state), `empty` (first launch), `unlinked` (a task whose worktrees lost their repository), `tickets` (the PR sweep moved one ticket and wants a status chosen for another), `reviews` (a task with feedback on two PRs) | `busy` |
 | `view` | `work`, `tickets`, `reviews`, `chat`, `runs` (Usage), `repos` | `work` |
 | `task` | a task id from `src/__mock__/world.ts` (`t-login`, `t-audit`) | none, which is the All agents overview |
-| `tab` | `spec`, `terminals`, `diff`, `pr` | `terminals` |
+| `tab` | `terminals`, `spec`, `diff`, `pr` | `terminals` |
+| `toolset` | `openspec`, `superpowers`: ACME-123's spec is that toolset's (§19), laid out as its manifest says; Kiro's otherwise | Kiro |
+| `install` | `failed`, `running`: ACME-123's toolset install failed (Retry runs it, and writes the files), or is still going | done |
 | `loop` | `checking`, `held`, `passed`, `gave_up`: the selected task's agents on a loop (§21) | none |
-| `spec` | `split`: ACME-123 with a spec per repository from before (SPEC-25) | none |
 | `role` | `member`: a member of the workspace, not an admin, who sees its connections read-only (SET-7) | admin |
 | `theme` | a saved theme (SET-5): `night`, `day`, `tokyo-night`, `system`, … | the app's default |
 
@@ -99,6 +100,8 @@ __mock.on("github_open_prs", () => [{ checkout_id: "c-login-api", repo: "api", o
 __mock.world.panes[0].activity = "done"; __mock.emit("pty:activity", "pane-claude")
 __mock.emit("system-notify-click", "pane:t-login:pane-shell")   // a banner clicked (NOTE-4)
 __mock.print("pane-shell", "hello\r\n")    // a pane prints, live over its terminal's channel
+__mock.spec.write("t-login", "tasks.md", text)   // an agent writes a spec file: the Spec tab follows (SPEC-36)
+__mock.spec.commitFails = ["web"]             // Commit spec fails in web, and keeps api's
 ```
 
 - **The data** is in `src/__mock__/world.ts`, typed against `src/lib/types.ts`.
@@ -112,6 +115,19 @@ __mock.print("pane-shell", "hello\r\n")    // a pane prints, live over its termi
   integrations). It tests the UI's handling of answers, not the answers.
 - Opening `/` instead of `/mock.html` loads the app without the mock, and
   the console fills with `reading 'metadata'` errors. That is expected.
+
+What to check for the Spec tab (§19): the tab order (Agents, Spec, Diff, Pull
+requests); each toolset's world (`?toolset=`), its files as a tree and its
+steps per repository; an agent's write following live
+(`__mock.spec.write`) and, with unsaved text typed in the editor, the conflict
+line with Load theirs and Save mine; Commit spec with `__mock.spec.commitFails`
+set; `?install=failed` and Retry; Draft off while text is unsaved, and Undo of a
+draft that made its file (`remove_spec_file` in `__mock.calls`). Settings →
+Code has the default toolset, Always write a spec first and custom toolsets; the
+Repos view has each repository's toolset and commit mode (`web` prefers a
+toolset this Mac lacks, `api` prefers OpenSpec); Start work offers the toolset
+and "Write a spec first" (`start_work_on_ticket` carries `toolset` and
+`writeSpec`).
 
 What to check for a UI change:
 

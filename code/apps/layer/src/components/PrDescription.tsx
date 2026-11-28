@@ -11,6 +11,7 @@ import { api } from "../lib/api";
 import { useRunningAgentsOf } from "../lib/panes";
 import { trackerOfKey } from "../lib/tracker";
 import type { CheckoutPr, DraftImage, RepoResult, TaskView } from "../lib/types";
+import { PrShots } from "./PrShots";
 import { Field, Spinner } from "./ui";
 
 type Failure = { fail: (e: unknown) => void; clear: () => void };
@@ -206,28 +207,12 @@ export function PrDescriptionField({ d }: { d: PrDescription }) {
         onChange={(e) => d.setBody(e.target.value)}
       />
       {d.images.length > 0 && (
-        <div className="pr-shots">
-          <div className="pr-shots-list">
-            {d.images.map((i) => (
-              <figure key={i.path} className="pr-shot">
-                {i.preview && <img src={i.preview} alt={i.caption} />}
-                <figcaption>{where(i)}</figcaption>
-                <button
-                  className="pr-shot-remove"
-                  title="Leave out"
-                  aria-label={`Leave out ${i.caption}`}
-                  onClick={() => d.removeImage(i.path)}
-                >
-                  ×
-                </button>
-              </figure>
-            ))}
-          </div>
-          <div className="muted">
-            Open adds these to the pull request, stored in the repository for everyone who can read
-            it.
-          </div>
-        </div>
+        <PrShots
+          images={d.images}
+          label={where}
+          onRemove={d.removeImage}
+          note="Open adds these to the pull request, stored in the repository for everyone who can read it."
+        />
       )}
       {d.problems.map((p) => (
         <div key={p} className="muted">

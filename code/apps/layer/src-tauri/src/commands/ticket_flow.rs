@@ -289,6 +289,7 @@ mod tests {
 
     fn task(moved: Option<&str>) -> Task {
         Task {
+            toolset: None,
             id: "t".into(),
             name: "ACME-1".into(),
             root: "/t".into(),

@@ -15,6 +15,7 @@ import type {
   ReviewQueue,
   TaskView,
   UpdateBy,
+  WaitingPane,
 } from "./types";
 
 /** Panes started from the Chat view carry this instead of a real task id. */
@@ -86,9 +87,27 @@ export function needsYou(pane: PaneInfo): boolean {
  * one task were two identical tabs.
  */
 export function paneName(pane: PaneInfo): string {
+  if (pane.task_id === CHAT_TASK_ID && pane.details?.display_name) return pane.details.display_name;
   if (!pane.topic) return pane.title;
   const scope = paneScope(pane);
   return scope ? `${pane.topic} · ${scope}` : pane.topic;
+}
+
+export function waitingChatName(pane: WaitingPane, label?: string): string {
+  return pane.details?.display_name ?? pane.title ?? label ?? "Chat";
+}
+
+/** The row is already in the open/saved lists; the backend rechecks existence on save. */
+export function canEditChatDetails(
+  pane: Pick<WaitingPane, "task_id" | "kind" | "cwd"> & { checkout_id?: string | null },
+): boolean {
+  return (
+    pane.task_id === CHAT_TASK_ID &&
+    pane.kind === "agent" &&
+    !!pane.cwd &&
+    !pane.checkout_id &&
+    !/[/\\]_chat[/\\](?:henchman|routines)(?:[/\\]|$)/.test(pane.cwd)
+  );
 }
 
 /** Where a pane works: the repo or task after " · " in its title. Null for a chat. */

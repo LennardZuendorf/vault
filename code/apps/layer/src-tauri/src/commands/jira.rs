@@ -223,6 +223,26 @@ pub async fn task_prompt(
     checkout_id: Option<String>,
 ) -> Result<String> {
     let task = state.config.task(&task_id)?;
+    let prompt = bare_prompt(app.clone(), &state, &task, checkout_id).await?;
+    with_spec(app, task, prompt).await
+}
+
+/// `prompt` with the spec's line after it (SPEC-11, SPEC-38): where the spec is,
+/// and with Spec first on, to write it before any code. A route that adds to
+/// `bare_prompt` (a handoff, a sub-task's work prompt) calls this once on the
+/// whole, so the line is the last thing the agent reads.
+pub(crate) async fn with_spec(app: AppHandle, task: Task, prompt: String) -> Result<String> {
+    super::blocking(app, move |state| Ok(super::spec_work::with_spec_line(state, &task, prompt))).await
+}
+
+/// `task_prompt` without the spec's line, for a route that goes on to add more.
+pub(crate) async fn bare_prompt(
+    app: AppHandle,
+    state: &State<'_, AppState>,
+    task: &Task,
+    checkout_id: Option<String>,
+) -> Result<String> {
+    let task = task.clone();
     let at_task_root = checkout_id.is_none();
     let repos = match checkout_id.as_deref() {
         Some(id) => {
@@ -235,22 +255,26 @@ pub async fn task_prompt(
             let origin = state.config.project(&checkout.project_id).map(|p| p.path).unwrap_or_default();
             vec![(folder, origin)]
         }
-        None => task_repos(&state, &task),
+        None => task_repos(state, &task),
     };
-    // SPEC-5: wherever the agent starts, it is told where the spec is.
-    let spec = super::spec_work::prompt_line(&state, &task).map(|line| format!("\n\n{line}")).unwrap_or_default();
 
     if let Some(key) = task.issue_key.as_deref() {
-        if let Ok(tracker) = super::tickets::linked_tracker(&state, &task) {
+        if let Ok(tracker) = super::tickets::linked_tracker(state, &task) {
             if let Ok(issue) = tracker.ticket(key).await {
                 let prompt = ticket_prompt(&issue, &task, &repos, at_task_root);
                 keep_ticket(app, task, issue).await;
-                return Ok(prompt + &spec);
+                return Ok(prompt);
             }
         }
     }
 
     // No ticket, or Jira unreachable: describe what we do know.
+    Ok(plain_prompt(&task, &repos, at_task_root))
+}
+
+/// The opening prompt of a task whose ticket is not at hand: its name and
+/// link, where the repositories are, and what to do first.
+pub(crate) fn plain_prompt(task: &Task, repos: &[(String, String)], at_task_root: bool) -> String {
     let mut prompt = format!("Task: {}\n\n", task.name);
     if let Some(url) = &task.issue_url {
         prompt.push_str(&format!("Ticket: {url}\n\n"));
@@ -262,7 +286,7 @@ pub async fn task_prompt(
             repos.len(),
             task.branch,
         ));
-        for (folder, origin) in &repos {
+        for (folder, origin) in repos {
             prompt.push_str(&format!("  {folder}/  — {origin}\n"));
         }
         prompt.push('\n');
@@ -279,7 +303,7 @@ pub async fn task_prompt(
         "Start by exploring the relevant code, then implement the change. Ask before \
          making sweeping refactors.",
     );
-    Ok(prompt + &spec)
+    prompt
 }
 
 /// Where an agent is asked to leave a drafted pull request description.
@@ -681,12 +705,9 @@ pub async fn handoff_prompt(app: AppHandle, state: State<'_, AppState>, pane_id:
     let pane = state.ptys.info(&pane_id)?;
     let task = state.config.task(&pane.task_id)?;
 
-    let mut out = String::from("You are taking over work another agent started and could not finish.\n\n");
-
     // The original briefing, scoped the same way the outgoing agent was, so a
     // handoff from a pinned repo does not claim the whole task folder.
-    out.push_str(&task_prompt(app, state.clone(), task.id.clone(), pane.checkout_id.clone()).await?);
-    out.push_str("\n\n---\n\n## What has happened so far\n\n");
+    let opening = bare_prompt(app.clone(), &state, &task, pane.checkout_id.clone()).await?;
 
     // git, per repo: on the blocking pool, not the async workers.
     let checkouts: Vec<(String, crate::config::Checkout)> = state
@@ -730,24 +751,33 @@ pub async fn handoff_prompt(app: AppHandle, state: State<'_, AppState>, pane_id:
         out
     })
     .await?;
+
+    // The outgoing agent's own words, as far as they got.
+    let tail = state.ptys.transcript(&pane_id, 120).ok().filter(|t| !t.trim().is_empty());
+    let text = handoff_text(&opening, &history, tail.as_deref().map(|t| (pane.title.as_str(), t)));
+    // After all of it: the spec's line is the last thing the new agent reads.
+    with_spec(app, task, text).await
+}
+
+/// A handoff: the opening briefing, what happened so far (`history`, empty
+/// when nothing was committed or changed), and, when there is one, the
+/// previous agent's title and terminal tail.
+pub(crate) fn handoff_text(opening: &str, history: &str, previous: Option<(&str, &str)>) -> String {
+    let mut out = String::from("You are taking over work another agent started and could not finish.\n\n");
+    out.push_str(opening);
+    out.push_str("\n\n---\n\n## What has happened so far\n\n");
     if history.is_empty() {
         out.push_str("Nothing has been committed or changed yet.\n\n");
     } else {
-        out.push_str(&history);
+        out.push_str(history);
     }
-
-    // The outgoing agent's own words, as far as they got.
-    if let Ok(tail) = state.ptys.transcript(&pane_id, 120) {
-        if !tail.trim().is_empty() {
-            out.push_str(&format!(
-                "## The previous agent's terminal, most recent last\n\n\
-                 This is raw output from {}, not a summary, and may be truncated \
-                 mid-thought.\n\n```\n{tail}\n```\n\n",
-                pane.title,
-            ));
-        }
+    if let Some((title, tail)) = previous {
+        out.push_str(&format!(
+            "## The previous agent's terminal, most recent last\n\n\
+             This is raw output from {title}, not a summary, and may be truncated \
+             mid-thought.\n\n```\n{tail}\n```\n\n",
+        ));
     }
-
     out.push_str(concat!(
         "## What to do\n\n",
         "Work out from the diff and the transcript above where the previous agent got ",
@@ -755,7 +785,7 @@ pub async fn handoff_prompt(app: AppHandle, state: State<'_, AppState>, pane_id:
         "something half-finished. Say what you think was already done before you start ",
         "changing anything.",
     ));
-    Ok(out)
+    out
 }
 
 /// Move a ticket into progress on request, for one that fell out of step.

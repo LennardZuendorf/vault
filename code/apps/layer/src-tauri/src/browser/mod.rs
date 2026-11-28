@@ -519,6 +519,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("vl-browser-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let task = Task {
+            toolset: None,
             id: "t1".into(),
             name: "Try the form".into(),
             root: root.to_string_lossy().to_string(),

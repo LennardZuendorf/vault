@@ -1,67 +1,39 @@
-//! What the Spec tab is shown of a task's spec (SPEC-8), and the drafts it
-//! keeps while the user edits (SPEC-6).
-
-use std::path::Path;
+//! What the Spec tab is shown of a task's spec (SPEC-8), and the one command
+//! that writes a file of it: the toolset's files with their steps, how far
+//! each repository is, what was last committed, and how the install stands.
 
 use serde::Serialize;
 
-use crate::config::Task;
+use crate::config::{SpecCommit, Task};
 use crate::error::Result;
 use crate::git;
-use crate::spec::{Kind, Part, Requirement, Step};
+use crate::spec::glob;
+use crate::spec::owned::{owned_steps, OwnedStep};
+use crate::spec::toolset::{Extra, Toolset};
 
-use super::panes::agent_file_dir;
-use super::spec::{slot_of, spec_of, Check, Proposal, LEGACY_FILE};
+use super::spec::{check_of, Check};
+use super::spec_commit::{changed_since_commit, repositories};
+use super::spec_copy::{list_files, read_all, read_file, spec_dir, toolset_of};
+use super::spec_install::{state_of, InstallState};
+use super::spec_work::{remove_spec, with_spec_moved, write_checked};
 use super::AppState;
 
-/// A task's spec as the Spec tab shows it (SPEC-8).
+/// The toolset as the tab shows it: its name, and which extras it has. Not the
+/// manifest: nothing in the install steps or the agents' paragraph is for the UI.
 #[derive(Debug, Serialize)]
-pub struct TaskSpec {
-    pub kind: Kind,
-    /// Requirements, design, then each repository's tasks.
-    pub parts: Vec<PartView>,
-    pub requirements: Vec<Requirement>,
-    pub repos: Vec<RepoSpec>,
-    /// A `SPEC.md` from before, to start the requirements from (SPEC-17).
-    pub legacy: Option<String>,
-    /// The repositories have specs of their own from before, to merge (SPEC-25).
-    pub split: bool,
+pub struct ToolsetInfo {
+    pub id: String,
+    pub name: String,
+    pub version: Option<String>,
+    pub extras: Vec<Extra>,
 }
 
+/// One file of the spec. `steps` are those of a file the toolset keeps steps in.
 #[derive(Debug, Serialize)]
-pub struct PartView {
-    pub part: Part,
-    /// Whose tasks; None for the task's requirements and design.
-    pub checkout_id: Option<String>,
-    pub file: String,
-    pub approved: Option<String>,
-    pub draft: Option<String>,
-    /// Approved, but an earlier file was approved since (SPEC-7).
-    pub stale: bool,
-    /// Copies changed outside the app (SPEC-22).
-    pub outside: Vec<Outside>,
-    /// A change an agent proposed, which `draft` holds (SPEC-24).
-    pub proposal: Option<Proposal>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct Outside {
-    pub checkout_id: String,
-    pub folder: String,
-    /// What the copy holds; empty when it is gone.
+pub struct SpecFileView {
+    pub path: String,
     pub text: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct RepoSpec {
-    pub checkout_id: String,
-    pub repo: String,
-    pub folder: String,
-    /// Where its copy is kept, and whether that is in the repository (SPEC-3).
-    pub home: String,
-    pub in_repo: bool,
-    pub steps: Vec<Step>,
-    pub check: Option<CheckView>,
+    pub steps: Vec<OwnedStep>,
 }
 
 #[derive(Debug, Serialize)]
@@ -72,80 +44,273 @@ pub struct CheckView {
     pub stale: bool,
 }
 
-/// Runs git, for whether a check is still current.
-pub(super) fn view(state: &AppState, task: &Task) -> TaskSpec {
-    let spec = spec_of(state, task);
-    let kind = spec.kind();
-    let notes = spec.notes();
-    let parts = spec
-        .slots()
+/// One repository's share: how far its steps are, and where Commit spec stands.
+#[derive(Debug, Serialize)]
+pub struct RepoSpecView {
+    pub checkout_id: String,
+    pub repo: String,
+    pub folder: String,
+    pub commit: SpecCommit,
+    /// Steps ticked of all those the repository owns, or that belong to everyone.
+    pub done: u32,
+    pub total: u32,
+    /// What Commit spec would write now is not what its last commit holds.
+    pub changed_since_commit: bool,
+    /// The last check against the spec (Kiro's extra).
+    pub check: Option<CheckView>,
+}
+
+/// A task's spec as the Spec tab shows it.
+#[derive(Debug, Serialize)]
+pub struct SpecView {
+    pub toolset: ToolsetInfo,
+    /// The working copy: where agents and the user edit.
+    pub dir: String,
+    pub files: Vec<SpecFileView>,
+    /// Files the toolset keeps that are not UTF-8 text, so they are not shown or
+    /// committed. Named so that a file missing from the tree is explained.
+    pub unreadable: Vec<String>,
+    pub repos: Vec<RepoSpecView>,
+    pub install: Option<InstallState>,
+}
+
+fn holds_steps(t: &Toolset, rel: &str) -> bool {
+    t.steps.iter().any(|g| glob::matches(g, rel))
+}
+
+/// The text of each file of steps the spec has, with its path: what an epic
+/// plans its sub-tasks from and counts them by. A file that cannot be read is
+/// left out.
+pub(crate) fn step_texts(state: &AppState, task: &Task) -> Vec<(String, String)> {
+    let task = with_spec_moved(state, task).unwrap_or_else(|_| task.clone());
+    let (t, dir) = (toolset_of(state, &task), spec_dir(state, &task));
+    let files = list_files(&dir, &t).unwrap_or_default();
+    files
         .into_iter()
-        .map(|slot| PartView {
-            part: slot.part,
-            checkout_id: slot.repo.as_ref().and_then(|f| spec.home(f)).map(|h| h.checkout.id.clone()),
-            file: slot.part.file(kind).to_string(),
-            approved: spec.approved(&slot),
-            draft: spec.draft(&slot),
-            stale: notes.stale.contains(&slot),
-            outside: spec
-                .outside(&slot, kind)
-                .into_iter()
-                .map(|(h, text)| Outside { checkout_id: h.checkout.id.clone(), folder: h.folder.clone(), text })
-                .collect(),
-            proposal: notes.proposals.iter().find(|p| p.slot == slot).cloned(),
+        .filter(|rel| holds_steps(&t, rel))
+        .filter_map(|rel| Some((rel.clone(), read_file(&dir, &t, &rel).ok()?)))
+        .collect()
+}
+
+/// The steps of one repository among `steps`: its own and everyone's.
+fn mine<'a>(steps: &'a [OwnedStep], folder: &'a str) -> impl Iterator<Item = &'a OwnedStep> {
+    steps.iter().filter(move |s| s.repos.is_empty() || s.repos.iter().any(|r| r.eq_ignore_ascii_case(folder)))
+}
+
+/// Runs git, for whether a check is current and what is committed.
+pub(crate) fn view(state: &AppState, task: &Task) -> Result<SpecView> {
+    let task = with_spec_moved(state, task)?;
+    let (t, dir) = (toolset_of(state, &task), spec_dir(state, &task));
+    let repos = repositories(state, &task);
+    let folders: Vec<String> = repos.iter().map(|r| r.folder.clone()).collect();
+    let (texts, unreadable) = read_all(&dir, &t)?;
+    let files: Vec<SpecFileView> = texts
+        .into_iter()
+        .map(|(path, text)| {
+            let steps = if holds_steps(&t, &path) { owned_steps(&text, &folders) } else { Vec::new() };
+            SpecFileView { path, text, steps }
         })
         .collect();
-    let repos = spec
-        .homes
+    let behind = changed_since_commit(state, &task);
+    let repos = repos
         .iter()
-        .map(|h| {
-            let head = git::head_commit(Path::new(&h.checkout.path)).ok();
-            RepoSpec {
-                checkout_id: h.checkout.id.clone(),
-                repo: h.project.name.clone(),
-                folder: h.folder.clone(),
-                home: h.rel.clone().map(|r| format!("{}/{r}", h.folder)).unwrap_or_else(|| h.shown()),
-                in_repo: h.rel.is_some(),
-                steps: spec.steps(h),
-                check: spec
-                    .check(h)
+        .map(|r| {
+            let own: Vec<&OwnedStep> = files.iter().flat_map(|f| mine(&f.steps, &r.folder)).collect();
+            let head = git::head_commit(std::path::Path::new(&r.checkout.path)).ok();
+            RepoSpecView {
+                checkout_id: r.checkout.id.clone(),
+                repo: r.project.name.clone(),
+                folder: r.folder.clone(),
+                commit: r.project.spec_commit,
+                done: own.iter().filter(|s| s.done).count() as u32,
+                total: own.len() as u32,
+                changed_since_commit: behind.contains(&r.folder),
+                check: check_of(state, &task, &r.folder)
                     .map(|check| CheckView { stale: head.as_deref() != Some(check.sha.as_str()), check }),
             }
         })
         .collect();
-    TaskSpec { kind, parts, requirements: spec.requirements(), repos, legacy: legacy(state, task), split: spec.split() }
-}
-
-fn legacy(state: &AppState, task: &Task) -> Option<String> {
-    let text = std::fs::read_to_string(agent_file_dir(state, task)?.join(LEGACY_FILE)).ok()?;
-    (!text.trim().is_empty()).then_some(text)
-}
-
-/// The task's spec.
-#[tauri::command]
-pub async fn read_spec(app: tauri::AppHandle, task_id: String) -> Result<TaskSpec> {
-    super::blocking(app, move |state| {
-        let task = state.config.task(&task_id)?;
-        Ok(view(state, &task))
+    Ok(SpecView {
+        toolset: ToolsetInfo {
+            id: t.id.clone(),
+            name: t.name.clone(),
+            version: t.version.clone(),
+            extras: t.extras.clone(),
+        },
+        dir: dir.display().to_string(),
+        files,
+        unreadable,
+        repos,
+        install: state_of(state, &task),
     })
-    .await
 }
 
-/// Keep what the editor holds for one file, or with None let it go: kept in
-/// the task folder, so quitting loses nothing, and seen by no agent (SPEC-6).
+/// The task's spec: its files with their steps. A spec kept the way earlier
+/// builds did is moved into place first.
 #[tauri::command]
-pub async fn save_spec_draft(
+pub async fn read_spec(app: tauri::AppHandle, task_id: String) -> Result<SpecView> {
+    super::blocking(app, move |state| view(state, &state.config.task(&task_id)?)).await
+}
+
+/// Replace one file of the spec with `text`, as an agent's `spec_write` does,
+/// through the same lock and the same refusals: a path outside the spec
+/// folder, a file the toolset does not keep, a link. An editor's save sends
+/// `base`, the text it began from, and is not written (false) when the file
+/// holds something else by then: an agent wrote it (SPEC-37). `force` is Save
+/// mine, which writes over it.
+#[tauri::command]
+pub async fn write_spec_file(
     app: tauri::AppHandle,
     task_id: String,
-    part: Part,
-    checkout_id: Option<String>,
-    text: Option<String>,
-) -> Result<()> {
+    path: String,
+    text: String,
+    base: Option<String>,
+    force: Option<bool>,
+) -> Result<bool> {
     super::blocking(app, move |state| {
-        let task = state.config.task(&task_id)?;
-        let spec = spec_of(state, &task);
-        let slot = slot_of(&spec, part, checkout_id.as_deref())?;
-        spec.save_draft(&slot, text.as_deref())
+        write_checked(state, &state.config.task(&task_id)?, &path, &text, base.as_deref(), force.unwrap_or(false))
     })
     .await
+}
+
+/// Delete one file of the spec, for the Undo of a draft that made it: the
+/// same refusals as a write, and nothing when it is already gone. With
+/// `base`, what the draft wrote, not when an agent has changed it since
+/// (false).
+#[tauri::command]
+pub async fn remove_spec_file(
+    app: tauri::AppHandle,
+    task_id: String,
+    path: String,
+    base: Option<String>,
+) -> Result<bool> {
+    super::blocking(app, move |state| remove_spec(state, &state.config.task(&task_id)?, &path, base.as_deref())).await
+}
+
+/// Ask an agent to write the spec, from an empty Spec tab: Spec first's line
+/// (SPEC-38), typed into `pane_id` when given, else only returned, to start
+/// an agent with. The same words a task started with "Write a spec first"
+/// gives it, so the agent stops for the user's go either way.
+#[tauri::command]
+pub async fn ask_for_spec(app: tauri::AppHandle, task_id: String, pane_id: Option<String>) -> Result<String> {
+    super::blocking(app, move |state| {
+        let task = state.config.task(&task_id)?;
+        let prompt = super::spec_work::spec_first_line(&spec_dir(state, &task));
+        if let Some(id) = &pane_id {
+            super::panes::hand_over(state, &task, id, super::panes::FIRST_PROMPT, &prompt)?;
+        }
+        Ok(prompt)
+    })
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::spec_work::write_spec;
+    use crate::commands::spec_world::{get, put, world};
+
+    #[test]
+    fn read_spec_lists_the_toolsets_files_with_their_steps() {
+        let (root, state, task) = world(&["api", "web"]);
+        let spec = root.join("tasks/T-1/spec");
+        put(&spec.join("requirements.md"), "## Requirements\n- R-1 [api]: x\n");
+        put(&spec.join("tasks.md"), "# api\n\n## Tasks\n- [x] 1. a\n- [ ] 2. b\n\n# web\n\n## Tasks\n- [ ] 1. c\n");
+        put(&spec.join("notes.txt"), "not a file Kiro keeps");
+
+        let v = view(&state, &task).unwrap();
+
+        assert_eq!((v.toolset.id.as_str(), v.dir.as_str()), ("kiro", spec.to_str().unwrap()));
+        assert_eq!(v.toolset.extras, [Extra::Draft, Extra::Check, Extra::Questions]);
+        let paths: Vec<&str> = v.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["requirements.md", "tasks.md"]);
+        assert!(v.files[0].steps.is_empty() && v.files[0].text.contains("R-1"));
+        assert_eq!(v.files[1].steps.len(), 3);
+        let api = &v.repos[0];
+        assert_eq!((api.folder.as_str(), api.done, api.total), ("api", 1, 2));
+        let web = &v.repos[1];
+        assert_eq!((web.folder.as_str(), web.done, web.total), ("web", 0, 1));
+        assert!(api.changed_since_commit, "nothing was committed");
+        assert!(v.install.is_none(), "nothing was installed");
+        let json = serde_json::to_value(&v).unwrap();
+        assert!(json["toolset"].get("install").is_none() && json["toolset"].get("agents_md").is_none());
+        assert_eq!(json["repos"][0]["commit"], "whole");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_file_that_is_not_utf8_is_named_and_the_rest_of_the_spec_is_still_shown() {
+        let (root, state, task) = world(&["api"]);
+        let spec = root.join("tasks/T-1/spec");
+        put(&spec.join("requirements.md"), "## Requirements\n");
+        std::fs::write(spec.join("design.md"), [0xff, 0xfe, 0x00]).unwrap();
+
+        let v = view(&state, &task).unwrap();
+
+        let paths: Vec<&str> = v.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["requirements.md"]);
+        assert_eq!(v.unreadable, ["design.md"]);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn read_spec_moves_a_spec_kept_the_old_way_first() {
+        let (root, state, task) = world(&["api"]);
+        put(&root.join("tasks/T-1/.spec-drafts/approved/requirements.md"), "# Old\n");
+
+        let v = view(&state, &task).unwrap();
+
+        assert_eq!(v.files.len(), 1);
+        assert_eq!(get(&root.join("tasks/T-1/spec/requirements.md")), "# Old\n");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_tab_writes_a_file_as_an_agent_does_and_is_refused_as_one_is() {
+        let (root, state, task) = world(&["api"]);
+
+        write_spec(&state, &task, "design.md", "# D\n").unwrap();
+        assert_eq!(get(&root.join("tasks/T-1/spec/design.md")), "# D\n");
+
+        assert!(write_spec(&state, &task, "../escape.md", "x").is_err());
+        assert!(write_spec(&state, &task, "notes.txt", "x").is_err());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_tab_removes_a_file_a_draft_made_and_nothing_else() {
+        let (root, state, task) = world(&["api"]);
+        let spec = root.join("tasks/T-1/spec");
+        put(&spec.join("design.md"), "# D\n");
+        put(&spec.join("notes.txt"), "not Kiro's");
+
+        assert!(!remove_spec(&state, &task, "design.md", Some("# Drafted\n")).unwrap(), "an agent changed it");
+        assert!(spec.join("design.md").exists(), "so it stays");
+        assert!(remove_spec(&state, &task, "design.md", Some("# D\n")).unwrap());
+        assert!(!spec.join("design.md").exists(), "the drafted file is gone, not emptied");
+        remove_spec(&state, &task, "design.md", None).expect("already gone is what was asked for");
+
+        assert!(remove_spec(&state, &task, "notes.txt", None).is_err(), "not a file Kiro keeps");
+        assert!(remove_spec(&state, &task, "../escape.md", None).is_err());
+        assert!(spec.join("notes.txt").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_install_shows_as_its_record_says() {
+        let (root, state, task) = world(&["api"]);
+        put(
+            &root.join("tasks/T-1/.spec-install.json"),
+            r#"{"toolset":"openspec","version":"1.14.3","ok":false,"error":"no npx","log_tail":"","written":[]}"#,
+        );
+
+        let v = view(&state, &task).unwrap();
+
+        let install = v.install.unwrap();
+        assert_eq!(
+            (install.toolset.as_str(), install.ok, install.error.as_deref()),
+            ("openspec", false, Some("no npx"))
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

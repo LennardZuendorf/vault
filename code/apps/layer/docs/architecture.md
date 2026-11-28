@@ -169,7 +169,7 @@ settings (never tokens), `shared` (the workspace that keeps the shared
 setup, and what is on its way there), and a schema `version`.
 
 - Read once at launch. `config.read()` returns a clone.
-- Changed only through `config.update(|c| …)`. That takes a disk lock,
+- Ordinary changes go through `config.update(|c| …)`. That takes a disk lock,
   applies the change under the write lock, then writes the whole file to a
   temp file, fsyncs and renames. **Do not call any `ConfigStore` accessor
   inside the closure**: the locks are not reentrant and it deadlocks.
@@ -181,6 +181,43 @@ setup, and what is on its way there), and a schema `version`.
 - Before a migration, and for a newer schema than the build knows, the
   file is copied to `config.json.v<N>`. A newer one is never migrated down. A file that will not parse is kept as
   `config.json.unreadable`.
+
+### Profile-local item details
+
+Chat and Work details (DETAIL-1–DETAIL-4 in `features.md`) are a
+presentation layer, not new item identities or source titles. `AppConfig`
+keeps default-empty task details by `Task.id`, chat details by the saved
+room path, and one default-empty canonical text-tag catalog. New fields use
+`#[serde(default)]`; old profiles therefore have no overrides. A room path
+is an opaque lookup key, never a path to open, pane id or ACP session id.
+Eligibility comes from the saved Chat record, excluding Henchman, routine
+and task-owned panes.
+
+Metadata writes take the profile's config disk lock before checking that
+the item still exists, normalizing, merging and persisting. Use a narrow
+persist-before-publish operation following `ConfigStore::mirror`:
+`ConfigStore::update` changes memory before persistence and cannot provide
+the editor's all-or-nothing failure guarantee. Do not change unrelated
+callers' write behavior. Disk work runs through `commands::blocking`.
+Rust owns validation (DETAIL-3), including raw control/separator rejection
+before trimming, Unicode scalar limits, assignment order and first-saved
+catalog spelling. An invalid or failed assignment adds no catalog entry.
+Desktop patches and MCP field edits resolve and merge under the same write
+lock so concurrent edits to different fields do not overwrite each other.
+
+Remove empty item entries, but retain the tag catalog. Remove task details
+when the task record goes, including loss of its last repository. Remove
+chat details on intentional ordinary-chat close or explicit waiting-chat
+forget, not temporary stop, internal restart, restore or close while still
+linked to a Slack thread. Saved transcripts remain untouched.
+
+Keep these fields out of `config/shared.rs`, workspace records and phone,
+agent and Slack payloads. Project optional `details` only in desktop
+`list_tasks`, `list_panes` and `waiting_panes` responses, not `Task` or the
+`TaskView` from `list_tasks_inner`, which MCP also serializes. Never replace
+`Task.name`, `sub_task.title`, launch title, CLI topic or transcript title.
+PR/diff defaults, generated context and run history retain their source
+names. Display helpers preserve each surface's existing fallback on clear.
 
 **Secrets: the keychain** (`secrets.rs`). One item per build identifier
 holds every token as JSON. It is one item because macOS prompts per item
@@ -214,6 +251,37 @@ restart (selected task, view, tab, sidebar) goes to `localStorage` through
   row per repo instead (`RepoResult`, a row `error`) and shows them with
   `reportRepoResults`.
 
+### Item-details IPC
+
+The Rust backend, desktop types and mock share these contracts (C-1–C-3):
+
+- `ItemDetails` is `{ display_name: string | null, tags: string[],
+  color: "data-1" | "data-2" | "data-3" | "data-4" | "data-5" | "data-6" | null }`.
+  Missing details mean no override, tags or color.
+- `set_task_details({ taskId, patch })` and
+  `set_chat_details({ room, patch })` accept edited `ItemDetails` fields.
+  Omission preserves a field, `null` clears name/color and `[]` clears
+  assigned tags. A successful write returns canonical details; an error
+  publishes nothing and does not recreate an absent item.
+- `list_tags` returns canonical tag names as `string[]`.
+  `add_tag({ tag })` validates one nonempty tag and returns its canonical
+  spelling, reusing a case-insensitive match. A new assigned tag is added
+  with the item edit in the same transaction.
+- Register commands in `lib.rs`, wrap them only in `src/lib/api.ts`,
+  mirror the payloads in `src/lib/types.ts` and implement the same mock
+  responses. No server schema or new dependency is needed.
+
+The profile's authenticated MCP server exposes
+`task_rename({ task_id?, name })`, `task_set_tag({ task_id?, tag, assigned })`
+and `task_set_color({ task_id?, color })` (C-4, MCP-6). A focused tool module
+uses the same backend operations and blocking helper as desktop edits.
+Explicit IDs resolve existing Work tasks only; omission resolves the
+caller's eligible Work task or standalone Chat room. Unknown targets and
+absent/ineligible callers fail. The pane header identifies a routing target,
+not a credential. Null name/color clears that field, `assigned` is required,
+and removing an unassigned tag is a no-op. Replies contain canonical
+details; unspecified fields remain unchanged.
+
 ## Events
 
 Backend → frontend. The guard checks that every event emitted is listened
@@ -228,11 +296,13 @@ for, and the reverse, and that each is in this table.
 | `pr:draft` | `{ task_id, text }` | a chunk of a drafted PR description | `PrPanel.tsx` |
 | `pr:images-offered` | task id | an agent offered screenshots for a PR with `pr_images` (PR-13) | `PrImageOffer.tsx` |
 | `issue:draft` | `{ request_id, text }` | a chunk of an improved ticket description | `tickets/OptimizeDescription.tsx` |
-| `spec:draft` | `{ request_id, part, checkout_id, text }` | one file's draft so far, whole each time: the task's requirements or design (`checkout_id` null), or one repository's tasks (SPEC-5); the requirements as Apply answers rewrites them (SPEC-20); or the merge of specs from before (SPEC-25) | `Watchers.tsx` → `useSpecs.chunk`, into that editor |
-| `spec:changed` | task id | an agent ticked a step of the task's spec (`spec_task`, SPEC-13) or proposed a change (`spec_propose`, SPEC-24) | `Watchers.tsx` → `useSpecs.changed`, which reads it again if it has been read; `pty:activity` for an agent that stopped does the same, to show a spec file it changed outside the app (SPEC-22) |
+| `spec:draft` | `{ request_id, path, text }` | one file's draft so far, whole each time, `path` being its file in the spec folder: Kiro's requirements, design or tasks (Draft, SPEC-5), or the requirements as Apply answers rewrites them (SPEC-20); the backend writes the file when the run is done | `Watchers.tsx` → `useSpecs.chunk`, into that file's editor |
+| `spec:changed` | task id | an agent ticked a step of the task's spec (`spec_task`) or wrote a file of it (`spec_write`), SPEC-13; or anything changed in `<task>/spec/` of the task whose Spec tab is on screen, once it has been quiet for 200 ms (`spec_watch.rs`, a `notify` watcher that `watch_spec` points at one task at a time, SPEC-36) | `Watchers.tsx` → `useSpecs.changed`, which reads it again if it has been read; `pty:activity` for an agent that stopped does the same, to show a spec file it wrote |
+| `spec:install` | `{ taskId, state }`, the `InstallState` | a task's spec toolset install started, finished or failed (`spec_install_run.rs`, SPEC-30, SPEC-31: run when the task is made, when a repository is added to a task with a folder and no install on record, or on Retry through `install_spec_toolset`) | `Watchers.tsx` → `useSpecs.installed`, kept per task for the Spec tab's install line; a finished install also reads the spec again, as it may have written files into it |
 | `system-notify-click` | a `Target` (`target.rs`) | a banner was clicked | `Watchers.tsx` → `goTo`, which opens what it is about (NOTE-4) |
 | `app:notices` | none | a notice was queued after startup (`commands::notify`) | `Watchers.tsx` → `takeNotices`, as toasts, failures in the top bar's status |
 | `panes:waiting` | none | the panes a launch did not put back changed: marked at launch, reopened, forgotten (PANE-7), a Slack thread's chat stopped or picked up again (BOT-14) | `Watchers.tsx` → `refreshWaiting` |
+| `item-details:changed` | affected kind (`task`, `chat`, or `catalog`) and whether the catalog changed | a successful metadata write changed saved details or the catalog, from desktop or MCP | `lib/item-details-watcher.ts`, mounted by `Watchers.tsx`, one listener → refresh affected task or pane/waiting lists, and the catalog when needed |
 | `messages:changed` | none | the message center's log changed: recorded, read or cleared (`messages.rs`) | `Watchers.tsx` → `refreshMessages` |
 | `henchman:orders` | none | the Henchman's standing orders or what it leaves alone changed, by its tools or the lair (HEN-7, HEN-8) | `Watchers.tsx` → `useOrders.refresh` |
 | `henchman:lair` | the lair (`needs`, `did`) | the Henchman raised a need, the user closed one, one was seen, or its tools did something (HEN-13, HEN-14) | `Watchers.tsx` → `useLair.set` |
@@ -251,6 +321,11 @@ What still polls, and why, is marked at each `setInterval` with
 `// guard: allow poll — <reason>`. Everything polls only while the window is
 in front, and slower once nobody has touched it for 45 seconds
 (`Watchers.tsx`).
+
+Item-details refreshes add no poll. Compare details in `samePane` so an
+unchanged row keeps its identity. Serialize refreshes or discard stale
+responses: a response requested before a save must not replace its new
+display state.
 
 ## Panes
 

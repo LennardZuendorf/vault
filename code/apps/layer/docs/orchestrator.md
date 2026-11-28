@@ -9,7 +9,7 @@ Twenty tickets are open in Layer, and there is no longer one place that
 says how things stand. Today that means:
 
 - Each task has to be opened to see where it is: an agent waiting, red
-  checks, review comments, a spec not approved, nothing happening for
+  checks, review comments, a spec with steps still open, nothing happening for
   two days.
 - "N need you" counts agents, not work. A merged task that's waiting to
   be finished, a review someone asked you for, and a ticket nobody has

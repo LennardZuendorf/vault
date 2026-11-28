@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react";
 import { api } from "../lib/api";
-import { CHAT_TASK_ID } from "../lib/derive";
+import { canEditChatDetails, CHAT_TASK_ID, waitingChatName } from "../lib/derive";
 import { goTo } from "../lib/goto";
 import { isHenchman } from "../lib/lair";
 import type { Pins } from "../lib/pins";
 import { menuKeys, pressKeys } from "../lib/press";
 import type { WaitingPane } from "../lib/types";
 import { useStore } from "../store";
+import { ItemColorBar, ItemDetailsIndicators } from "./ItemDetails";
 import { ContextMenu } from "./menu";
 import { Confirm, ErrorMessage, useFailure } from "./ui";
 
@@ -93,6 +94,7 @@ interface WaitingChatsProps {
   /** What to call one its CLI has not named. */
   label?: (w: WaitingPane) => string | undefined;
   sub?: string | ((w: WaitingPane) => string);
+  onEdit: (pane: WaitingPane, automaticName: string) => void;
 }
 
 /** Chats the last launch did not put back, under the open ones in the Chat view. */
@@ -102,6 +104,7 @@ export function WaitingChats({
   heading = true,
   label,
   sub = "not reopened at launch · click to reopen",
+  onEdit,
 }: WaitingChatsProps) {
   const waiting = useWaiting(CHAT_TASK_ID).filter(keep);
   const { busy, reopen, ask, confirm, problem } = useActions(CHAT_TASK_ID, (w) => pins.drop(w.cwd));
@@ -132,12 +135,14 @@ export function WaitingChats({
           }}
           title="Reopen this chat where it left off"
         >
+          <ItemColorBar details={w.details} />
           <span className="dot" />
           <span className="chat-item-text">
-            <span className="chat-item-title">{w.title ?? label?.(w) ?? "Chat"}</span>
+            <span className="chat-item-title">{waitingChatName(w, label?.(w))}</span>
             <span className="chat-item-sub">
               {busy === w.id ? "Reopening…" : typeof sub === "string" ? sub : sub(w)}
             </span>
+            <ItemDetailsIndicators details={w.details} />
           </span>
           <span
             role="button"
@@ -161,6 +166,18 @@ export function WaitingChats({
           x={menu.x}
           y={menu.y}
           items={[
+            ...(canEditChatDetails(menu.w)
+              ? [
+                  {
+                    label: "Edit details…",
+                    onSelect: () =>
+                      onEdit(
+                        menu.w,
+                        waitingChatName({ ...menu.w, details: undefined }, label?.(menu.w)),
+                      ),
+                  },
+                ]
+              : []),
             {
               label: pins.has(menu.w) ? "Unpin" : "Pin",
               onSelect: () => menu.w.cwd !== null && pins.toggle(menu.w.cwd),

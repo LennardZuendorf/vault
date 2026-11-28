@@ -8,6 +8,7 @@ import { menuKeys, pressKeys } from "../../lib/press";
 import type { TaskView } from "../../lib/types";
 import { useStore } from "../../store";
 import { ChevronIcon } from "../icons";
+import { ItemColorBar, ItemDetailsIndicators } from "../ItemDetails";
 
 /**
  * An epic in the sidebar's Epics section (EPIC-9): how far its sub-tasks
@@ -30,7 +31,7 @@ export const EpicRow = memo(function EpicRow({
   open: boolean;
   onSelect: (taskId: string) => void;
   onToggle: (taskId: string) => void;
-  onMenu: (x: number, y: number, task: TaskView) => void;
+  onMenu: (x: number, y: number, task: TaskView, automaticName?: string) => void;
 }) {
   const view = useEpicViews((s) => s.byEpic[epic.id]);
   const load = useEpicViews((s) => s.load);
@@ -66,6 +67,7 @@ export const EpicRow = memo(function EpicRow({
   const filed = all.filter((s) => s.task_id);
   const merged = filed.filter((s) => taskReview(prs[s.task_id!] ?? []) === "merged").length;
   const toFile = all.length - filed.length;
+  const automaticName = epic.issue_key ? epic.name.replace(`${epic.issue_key} `, "") : epic.name;
 
   return (
     <div className="side-epic">
@@ -78,9 +80,10 @@ export const EpicRow = memo(function EpicRow({
         onKeyDown={menuKeys(pressKeys(() => onSelect(epic.id)))}
         onContextMenu={(e) => {
           e.preventDefault();
-          onMenu(e.clientX, e.clientY, epic);
+          onMenu(e.clientX, e.clientY, epic, automaticName);
         }}
       >
+        <ItemColorBar details={epic.details} />
         <div className="ws-title">
           <span
             role="button"
@@ -97,9 +100,7 @@ export const EpicRow = memo(function EpicRow({
             <ChevronIcon />
           </span>
           <span className={`dot mark ${waiting ? "idle" : busy ? "live" : ""}`} />
-          <span className="label">
-            {epic.issue_key ? epic.name.replace(`${epic.issue_key} `, "") : epic.name}
-          </span>
+          <span className="label">{epic.details?.display_name ?? automaticName}</span>
         </div>
         <div className="ws-meta">
           <span className="branch">Epic{epic.issue_key && <> · {epic.issue_key}</>}</span>
@@ -117,6 +118,7 @@ export const EpicRow = memo(function EpicRow({
             <span>spec</span>
           )}
         </div>
+        <ItemDetailsIndicators details={epic.details} />
       </div>
       {open &&
         filed.map((s) => {
@@ -165,7 +167,7 @@ export const JiraEpicRow = memo(function JiraEpicRow({
   onOpen: (epic: EpicOf, tasks: TaskView[]) => void;
   onSelect: (taskId: string) => void;
   onToggle: (id: string) => void;
-  onMenu: (x: number, y: number, task: TaskView) => void;
+  onMenu: (x: number, y: number, task: TaskView, automaticName?: string) => void;
 }) {
   const prs = useStore((s) => s.prs);
   const merged = tasks.filter((t) => taskReview(prs[t.id] ?? []) === "merged").length;
@@ -268,7 +270,7 @@ function SubLine({
   task: TaskView;
   selected: boolean;
   onSelect: (taskId: string) => void;
-  onMenu: (x: number, y: number, task: TaskView) => void;
+  onMenu: (x: number, y: number, task: TaskView, automaticName?: string) => void;
 }) {
   const agents = useTaskAgents(task.id);
   const prs = useStore((s) => s.prs);
@@ -283,11 +285,13 @@ function SubLine({
       onKeyDown={menuKeys(pressKeys(() => onSelect(task.id)))}
       onContextMenu={(e) => {
         e.preventDefault();
-        onMenu(e.clientX, e.clientY, task);
+        onMenu(e.clientX, e.clientY, task, title);
       }}
     >
+      <ItemColorBar details={task.details} />
       <span className={`dot ${dot}`} />
-      <span className="label">{title}</span>
+      <span className="label">{task.details?.display_name ?? title}</span>
+      <ItemDetailsIndicators details={task.details} />
       <span className="meta" style={{ color: STATE_COLOR[state] }}>
         {state === "working" ? `${agents.live}▶` : state === "ready" ? "" : state}
       </span>

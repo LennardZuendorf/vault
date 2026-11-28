@@ -17,6 +17,7 @@ import type {
   TicketType,
   JiraTransition,
   Message,
+  ItemDetails,
   PaneInfo,
   Project,
   RepoFeedback,
@@ -34,6 +35,9 @@ import type {
 import type { Elsewhere } from "../lib/types-profiles";
 
 export interface World {
+  taskDetails: Record<string, ItemDetails>;
+  chatDetails: Record<string, ItemDetails>;
+  tagCatalog: string[];
   projects: Project[];
   health: RepoHealth[];
   cleanup: CleanupItem[];
@@ -99,6 +103,14 @@ const disconnected: Settings = {
   henchman_instructions: "",
   worktree_root: "/Users/you/.villain-worktrees",
   worktree_root_is_default: true,
+  spec_first: false,
+  default_toolset: null,
+  toolsets: [
+    { id: "kiro", name: "Kiro (Layer)", version: null, custom: false },
+    { id: "openspec", name: "OpenSpec", version: "1.14.3", custom: false },
+    { id: "superpowers", name: "superpowers", version: "7.0.2", custom: false },
+  ],
+  custom_toolsets: [],
   jira_connected: false,
   tracker: null,
   tracker_chosen: null,
@@ -209,6 +221,7 @@ const projects: Project[] = [
     default_branch: "main",
     group: "platform",
     store: `${copies}/api.git`,
+    spec_toolset: "openspec",
   },
   {
     id: "p-web",
@@ -220,6 +233,8 @@ const projects: Project[] = [
     store: `${copies}/web.git`,
     check: "bun run check",
     check_approved: "bun run check",
+    // A teammate's own toolset, which this Mac does not have.
+    spec_toolset: "acme-flow",
   },
   {
     id: "p-infra",
@@ -833,6 +848,9 @@ const say = (lines: string[]) => lines.join("\r\n") + "\r\n";
 /** Everything connected and in use: the view most screens are designed for. */
 function busy(): World {
   return {
+    taskDetails: {},
+    chatDetails: {},
+    tagCatalog: [],
     projects,
     health,
     cleanup,
@@ -1303,6 +1321,9 @@ function messages(): Message[] {
 /** First launch: nothing added, nothing connected. */
 function empty(): World {
   return {
+    taskDetails: {},
+    chatDetails: {},
+    tagCatalog: [],
     projects: [],
     health: [],
     cleanup: [],

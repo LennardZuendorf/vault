@@ -4,6 +4,7 @@ import { githubRefusal, TOKEN_NEEDS_SSO, TOKEN_REJECTED } from "../lib/derive";
 import type { GithubSource } from "../lib/types";
 import { useStore } from "../store";
 import { ConnectRow, IN_KEYCHAIN, Theirs, Yours } from "./SharedSettings";
+import { SpecSettings } from "./SpecSettings";
 import { ErrorMessage, Field, useFailure } from "./ui";
 
 export function CodeSettings() {
@@ -47,6 +48,7 @@ export function CodeSettings() {
           Add GitHub source
         </button>
       )}
+      <SpecSettings />
     </>
   );
 }

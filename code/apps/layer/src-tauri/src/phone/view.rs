@@ -117,6 +117,7 @@ mod tests {
 
     fn task(id: &str, age_mins: i64) -> Task {
         Task {
+            toolset: None,
             id: id.into(),
             name: format!("Task {id}"),
             root: "/tmp".into(),

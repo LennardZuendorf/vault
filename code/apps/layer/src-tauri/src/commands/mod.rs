@@ -125,6 +125,7 @@ mod browser;
 mod cleanup;
 mod cleanup_folders;
 mod cleanup_remote;
+pub(crate) mod desktop_details;
 mod diff;
 mod elsewhere;
 mod epic_tools;
@@ -141,6 +142,7 @@ mod henchman_orders;
 mod henchman_tools;
 mod henchman_watch;
 mod henchman_work;
+pub(crate) mod item_details;
 mod jira;
 mod landed;
 mod limits;
@@ -170,11 +172,19 @@ mod settings;
 mod slack;
 mod slack_bot;
 mod spec;
+mod spec_commit;
+mod spec_copy;
 mod spec_draft;
-mod spec_outside;
+mod spec_install;
+mod spec_install_run;
+mod spec_old;
 mod spec_prompts;
+mod spec_runner;
+mod spec_settings;
 mod spec_view;
+mod spec_watch;
 mod spec_work;
+mod spec_world;
 mod task_context;
 mod tasks;
 mod ticket_flow;
@@ -188,6 +198,7 @@ pub use attachments::*;
 pub use base_tool::*;
 pub use browser::*;
 pub use cleanup::*;
+pub use desktop_details::*;
 pub use diff::*;
 pub use elsewhere::*;
 pub use epic_tools::*;
@@ -228,10 +239,12 @@ pub use s3_logs::*;
 pub use settings::*;
 pub use slack::*;
 pub use slack_bot::*;
-pub use spec::*;
+pub use spec_commit::*;
 pub use spec_draft::*;
-pub use spec_outside::*;
+pub use spec_install_run::*;
+pub use spec_settings::*;
 pub use spec_view::*;
+pub use spec_watch::*;
 pub use spec_work::*;
 pub use tasks::*;
 pub use ticket_flow::*;
@@ -258,7 +271,8 @@ mod tests {
             check: None,
             check_approved: None,
             spec_folder: None,
-            specs_in_app: false,
+            spec_toolset: None,
+            spec_commit: Default::default(),
             remote: None,
             repository_id: None,
         }
@@ -575,6 +589,7 @@ mod tests {
         p.path = clone.to_string_lossy().to_string();
         cfg.projects.push(p);
         cfg.tasks.push(Task {
+            toolset: None,
             id: "t1".into(),
             name: "T-1".into(),
             root: tasks_root.join("T-1").to_string_lossy().to_string(),

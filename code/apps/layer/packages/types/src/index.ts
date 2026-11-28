@@ -28,6 +28,7 @@ export type * from "./generated/RepositoryCreate";
 export type * from "./generated/RepositoryPatch";
 export type * from "./generated/Role";
 export type * from "./generated/SlackSettings";
+export type * from "./generated/SpecCommit";
 export type * from "./generated/StartTo";
 export type * from "./generated/TicketFlow";
 export type * from "./generated/TrackerKind";

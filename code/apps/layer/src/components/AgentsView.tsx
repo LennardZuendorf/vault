@@ -147,8 +147,11 @@ const AgentCard = memo(function AgentCard({
     <div className="agent-card">
       <span className={`dot ${st.dot}`} />
       <div className="who">
-        <div className="name" title={pane.topic ?? undefined}>
-          {pane.topic ?? agent?.name ?? pane.title}
+        <div
+          className="name"
+          title={(isChat ? pane.details?.display_name : null) ?? pane.topic ?? undefined}
+        >
+          {(isChat ? pane.details?.display_name : null) ?? pane.topic ?? agent?.name ?? pane.title}
           {pane.notice && (
             <span style={{ color: "var(--status-warn-ink)", marginLeft: 6 }} title={pane.notice}>
               {pane.notice === "trust_prompt" ? "?" : "⚑"}

@@ -1,8 +1,11 @@
 import type { Operation, TrackerKind } from "@layer/types";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { specApi } from "./api-spec";
 import type {
   AcpVersion,
   AcpView,
+  DetailsPatch,
+  ItemDetails,
   AddedRepo,
   AgentStatus,
   AwsSetup,
@@ -47,12 +50,6 @@ import type {
   SlackConfig,
   GrafanaDatasource,
   StartTo,
-  AppliedAnswers,
-  SpecApproved,
-  SpecCheck,
-  SpecKind,
-  SpecPart,
-  TaskSpec,
   Started,
   Synced,
   Task,
@@ -90,6 +87,7 @@ import type { RoutinePatch, RoutineRun, Routines } from "./types-routines";
 import type { RunLog } from "./types-runs";
 
 export const api = {
+  ...specApi,
   // projects
   listProjects: () => invoke<Project[]>("list_projects"),
   addProjects: (paths: string[], group?: string | null) =>
@@ -126,6 +124,12 @@ export const api = {
 
   // tasks
   listTasks: (focus?: string | null) => invoke<TaskView[]>("list_tasks", { focus: focus ?? null }),
+  setTaskDetails: (taskId: string, patch: DetailsPatch) =>
+    invoke<ItemDetails>("set_task_details", { taskId, patch }),
+  setChatDetails: (room: string, patch: DetailsPatch) =>
+    invoke<ItemDetails>("set_chat_details", { room, patch }),
+  listTags: () => invoke<string[]>("list_tags"),
+  addTag: (tag: string) => invoke<string>("add_tag", { tag }),
   /** The task for one of your pull requests, made on its branch if there is none (REV-7). */
   taskForPr: (repo: string, head: string, base: string, title: string, url: string) =>
     invoke<Task>("task_for_pr", { repo, head, base, title, url }),
@@ -321,41 +325,6 @@ export const api = {
       description: args.description,
       kind: args.kind,
     }),
-  readSpec: (taskId: string) => invoke<TaskSpec>("read_spec", { taskId }),
-  /** Keep what the editor holds for one file (tasks: one checkout's); null lets it go (SPEC-6). */
-  saveSpecDraft: (taskId: string, part: SpecPart, checkoutId: string | null, text: string | null) =>
-    invoke<void>("save_spec_draft", { taskId, part, checkoutId, text }),
-  /** Approve files of the spec: written into every repository (tasks into their own), and committed there. */
-  approveSpec: (
-    taskId: string,
-    texts: { part: SpecPart; checkout_id: string | null; text: string }[],
-    kind: SpecKind | null,
-  ) => invoke<SpecApproved>("approve_spec", { taskId, texts, kind }),
-  /** Write what was approved back over one repository's copy changed outside the app (SPEC-22). */
-  putBackSpec: (taskId: string, part: SpecPart, checkoutId: string) =>
-    invoke<TaskSpec>("put_back_spec", { taskId, part, checkoutId }),
-  /** Turn down a change an agent proposed, and tell it (SPEC-24). */
-  turnDownSpecProposal: (taskId: string, part: SpecPart, checkoutId: string | null) =>
-    invoke<TaskSpec>("turn_down_spec_proposal", { taskId, part, checkoutId }),
-  /** Draft one file for the whole task, streamed as `spec:draft`: tasks are every repository's at once. */
-  draftSpec: (taskId: string, part: SpecPart, kind: SpecKind | null, requestId: string) =>
-    invoke<void>("draft_spec", { taskId, part, kind, requestId }),
-  /** Merge the specs each repository had of its own into drafts of one (SPEC-25). */
-  mergeSpecs: (taskId: string, requestId: string) =>
-    invoke<void>("merge_specs", { taskId, requestId }),
-  /** Build the answered open questions into the requirements, streamed as `spec:draft` (SPEC-20). */
-  applySpecAnswers: (taskId: string, requestId: string) =>
-    invoke<AppliedAnswers>("apply_spec_answers", { taskId, requestId }),
-  checkSpec: (taskId: string, checkoutId: string) =>
-    invoke<SpecCheck>("check_spec", { taskId, checkoutId }),
-  /** What Start agent adds to the opening prompt: work through the tasks (SPEC-12). */
-  specWorkPrompt: (taskId: string, checkoutId: string | null) =>
-    invoke<string>("spec_work_prompt", { taskId, checkoutId }),
-  /** Tell the task's running agents the spec changed (SPEC-14); how many were told. */
-  tellSpecChange: (taskId: string, parts: SpecPart[]) =>
-    invoke<number>("tell_spec_change", { taskId, parts }),
-  setProjectSpecs: (projectId: string, inApp: boolean, folder: string) =>
-    invoke<void>("set_project_specs", { projectId, inApp, folder }),
   requestPrDescription: (taskId: string, paneId: string) =>
     invoke<string>("request_pr_description", { taskId, paneId }),
   takePrDescription: (taskId: string) => invoke<PrDraft | null>("take_pr_description", { taskId }),
@@ -398,6 +367,10 @@ export const api = {
     base?: string | null,
     epic = false,
     expectedUrl?: string,
+    /** The spec toolset the task is made with; none: the app's default. */
+    toolset?: string | null,
+    /** Tell the agent to write the spec first, for this start (Spec first does it for every one). */
+    writeSpec = false,
   ) =>
     invoke<Started>("start_work_on_ticket", {
       key,
@@ -407,6 +380,8 @@ export const api = {
       base: base ?? null,
       epic,
       expectedUrl,
+      toolset: toolset ?? null,
+      writeSpec,
     }),
   // epics (§26)
   epicView: (epicId: string) => invoke<EpicView>("epic_view", { epicId }),
@@ -548,6 +523,8 @@ export const api = {
   serverOpen: (id: string) => invoke<void>("server_open", { id }),
   serverResume: () => invoke<WorkspacePlace>("server_resume"),
   openMembers: () => invoke<void>("open_members"),
+  /** Spec first (SPEC-38): every agent Layer starts is told to write the spec before any code. */
+  setSpecFirst: (on: boolean) => invoke<void>("set_spec_first", { on }),
   setWorktreeRoot: (path: string | null) => invoke<void>("set_worktree_root", { path }),
   setUiPrefs: (ui: UiPrefs) => invoke<void>("set_ui_prefs", { ui }),
   disconnect: (which: "jira" | "github" | "slack" | "grafana", source?: string) =>

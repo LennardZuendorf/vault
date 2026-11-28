@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, errMessage } from "../../lib/api";
 import { taskTotals } from "../../lib/derive";
+import { trackerOfKey } from "../../lib/tracker";
 import type { JiraTransition, TaskView } from "../../lib/types";
 import { useStore } from "../../store";
 import { flowOf, mergedTransition } from "../TicketFlow";
@@ -25,8 +26,11 @@ export function DeleteTask({
   const settings = useStore((s) => s.settings);
   const rows = useStore((s) => s.prs[task.id]);
   const issue = useStore((s) => issueForTask(s.issues, task));
-  // Only Jira has transitions to offer (TKT-18).
-  const key = settings?.tracker === "jira" ? task.issue_key : null;
+  // They keep the epic in the list while they sit under its ticket (EPIC-13).
+  const subs = useStore((s) => s.tasks.filter((t) => t.sub_task?.epic === task.id).length);
+  // Only Jira has transitions to offer (TKT-18). An epic's ticket is never
+  // moved from here (EPIC-15): it is only taken off the list.
+  const key = settings?.tracker === "jira" && !task.epic ? task.issue_key : null;
   const merged = (rows ?? []).some((r) => r.pr?.merged);
   const [transitions, setTransitions] = useState<JiraTransition[] | null>(key ? null : []);
   const [ticketError, setTicketError] = useState<string | null>(null);
@@ -63,7 +67,7 @@ export function DeleteTask({
 
   return (
     <Modal
-      title="Delete task"
+      title={task.epic ? "Remove from list" : "Delete task"}
       onClose={onCancel}
       footer={
         <>
@@ -76,16 +80,39 @@ export function DeleteTask({
             disabled={transitions === null}
             onClick={() => onDelete(dirty > 0, chosen)}
           >
-            Delete task
+            {task.epic ? "Remove" : "Delete task"}
           </button>
         </>
       }
     >
       <div style={{ lineHeight: 1.6 }}>
-        Delete <b>{task.name}</b> and remove {repos} worktree{repos === 1 ? "" : "s"} from disk?
-        <div className="muted" style={{ marginTop: 8 }}>
-          Branch <code>{task.branch}</code> is left alone, in the repositories and on any remote.
-        </div>
+        {task.epic ? (
+          <>
+            Remove <b>{task.name}</b> from the list?
+            <div className="muted" style={{ marginTop: 8 }}>
+              {task.issue_key ? (
+                <>
+                  {task.issue_key} is not changed in {trackerOfKey(task.issue_key)}.{" "}
+                </>
+              ) : null}
+              Its spec is kept.{" "}
+              {subs === 1 &&
+                "Its sub-task stays as a task, still under the epic until it goes too. "}
+              {subs > 1 &&
+                `Its ${subs} sub-tasks stay as tasks, still under the epic until they go too. `}
+              {repos === 1 ? "Its worktree goes" : `Its ${repos} worktrees go`} from disk; branch{" "}
+              <code>{task.branch}</code> is left alone.
+            </div>
+          </>
+        ) : (
+          <>
+            Delete <b>{task.name}</b> and remove {repos} worktree{repos === 1 ? "" : "s"} from disk?
+            <div className="muted" style={{ marginTop: 8 }}>
+              Branch <code>{task.branch}</code> is left alone, in the repositories and on any
+              remote.
+            </div>
+          </>
+        )}
         {dirty > 0 && (
           <div className="confirm-detail">
             {dirty} uncommitted change{dirty === 1 ? "" : "s"} will be lost. This can't be undone.

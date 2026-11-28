@@ -155,7 +155,8 @@ pub(crate) fn task_work(
             // Over ACP where the CLI speaks it: the Henchman reads its turns
             // and the errors they end on, which a terminal keeps from it.
             let acp = def.acp.is_some();
-            let first = format!("[villain-layer · from the Henchman] {text}");
+            let first =
+                super::spec_work::with_spec_line(state, &task, format!("[villain-layer · from the Henchman] {text}"));
             let pane =
                 start_agent(app, state, task.id.clone(), agent_id, None, Some(first), Resume::No, None, None, acp)?;
             STARTED.lock().push(Instant::now());

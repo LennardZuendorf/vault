@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { canRestart, paneName } from "../src/lib/derive";
+import { canRestart, paneName, waitingChatName, canEditChatDetails } from "../src/lib/derive";
 import type { AgentStatus, PaneInfo } from "../src/lib/types";
 
 function pane(title: string, topic: string | null): PaneInfo {
@@ -24,6 +24,41 @@ function pane(title: string, topic: string | null): PaneInfo {
 }
 
 describe("what a pane is called (PANE-12)", () => {
+  test("a chat alias wins over later CLI topics and clearing restores the latest topic", () => {
+    const chat = { ...pane("Claude Code", "Latest topic"), task_id: "chat" };
+    const details = { display_name: "My chat", tags: [], color: null };
+    expect(paneName({ ...chat, details })).toBe("My chat");
+    expect(paneName({ ...chat, details: { ...details, display_name: null } })).toBe("Latest topic");
+    expect(paneName({ ...chat, topic: null })).toBe("Claude Code");
+    expect(paneName({ ...pane("Claude Code · api", "Work topic"), details })).toBe(
+      "Work topic · api",
+    );
+  });
+  test("waiting aliases preserve title then Slack label then Chat fallback", () => {
+    const w = {
+      id: "w",
+      task_id: "chat",
+      kind: "agent" as const,
+      agent_id: "claude",
+      cwd: "/room",
+      title: null,
+    };
+    expect(waitingChatName(w)).toBe("Chat");
+    expect(waitingChatName(w, "#help")).toBe("#help");
+    expect(waitingChatName({ ...w, title: "CLI" }, "#help")).toBe("CLI");
+    expect(
+      waitingChatName({ ...w, details: { display_name: "Alias", tags: [], color: null } }, "#help"),
+    ).toBe("Alias");
+  });
+  test("only standalone agent rooms offer details editing", () => {
+    const chat = { ...pane("Claude", null), task_id: "chat" };
+    expect(canEditChatDetails(chat)).toBe(true);
+    for (const cwd of [null, "", "/home/_chat/henchman", "/home/_chat/routines/r/run"])
+      expect(canEditChatDetails({ ...chat, cwd })).toBe(false);
+    expect(canEditChatDetails({ ...chat, kind: "shell" })).toBe(false);
+    expect(canEditChatDetails({ ...chat, checkout_id: "checkout" })).toBe(false);
+    expect(canEditChatDetails({ ...chat, task_id: "work" })).toBe(false);
+  });
   test("is the agent's name until the conversation has one", () => {
     expect(paneName(pane("Claude Code · api", null))).toBe("Claude Code · api");
   });

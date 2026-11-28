@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::commands::AppState;
 use crate::config::shared::{take_held, take_record, Elsewhere, Held};
-use crate::config::{AppConfig, AthenaTable, LogSource, ModelChoice};
+use crate::config::{AppConfig, AthenaTable, LogSource, ModelChoice, SpecCommit};
 use crate::error::Result;
 use crate::git::UpdateBy;
 use crate::notes::Note;
@@ -56,7 +56,9 @@ struct RepositoryRecord {
     #[serde(default)]
     spec_folder: Option<String>,
     #[serde(default)]
-    specs_in_app: bool,
+    spec_toolset: Option<String>,
+    #[serde(default)]
+    spec_commit: SpecCommit,
     #[serde(default)]
     added_by: Option<String>,
 }
@@ -153,7 +155,8 @@ fn merge(
             update_by: r.update_by,
             check: r.check_command,
             spec_folder: r.spec_folder,
-            specs_in_app: r.specs_in_app,
+            spec_toolset: r.spec_toolset,
+            spec_commit: r.spec_commit,
             added_by,
         };
         let mut here = false;

@@ -650,3 +650,47 @@ async fn in_development_a_page_asked_of_the_server_opens_from_vite(pool: PgPool)
     let api = app.oneshot(ask("/api/nothing")).await.unwrap();
     assert_eq!(api.status(), StatusCode::NOT_FOUND);
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn an_older_layers_specs_in_app_is_taken_as_spec_commit_and_its_false_changes_nothing(
+    pool: PgPool,
+) {
+    let app = App::new(pool);
+    let (ada, workspace) = app.signup("Ada", "Code Villain").await;
+    let mut old = repository("github.com/code-villain/api");
+    old["specs_in_app"] = json!(true);
+    let added = create(&app, &ada, &workspace, "Repository", old).await;
+    assert_eq!(added.status, StatusCode::OK, "{}", added.body);
+    let read = app.records(&ada, &workspace, "Repository").await;
+    assert_eq!(read[0]["spec_commit"], "none");
+    assert!(read[0].get("specs_in_app").is_none(), "{}", read[0]);
+
+    let id = read[0]["id"].clone();
+    let update = |data: Value| json!([{ "action": "update", "model": "Repository", "id": id, "data": data }]);
+    let own = app
+        .sync(&ada, &workspace, update(json!({ "spec_commit": "own" })))
+        .await;
+    assert_eq!(own.status, StatusCode::OK, "{}", own.body);
+    // An older Layer reads `own` as `specs_in_app: false`, and sends that
+    // back with whatever it changes.
+    let renamed = app
+        .sync(
+            &ada,
+            &workspace,
+            update(json!({ "name": "api2", "specs_in_app": false })),
+        )
+        .await;
+    assert_eq!(renamed.status, StatusCode::OK, "{}", renamed.body);
+    let read = app.records(&ada, &workspace, "Repository").await;
+    assert_eq!(
+        (read[0]["name"].as_str(), read[0]["spec_commit"].as_str()),
+        (Some("api2"), Some("own"))
+    );
+
+    let alone = app
+        .sync(&ada, &workspace, update(json!({ "specs_in_app": false })))
+        .await;
+    assert_eq!(alone.status, StatusCode::OK, "{}", alone.body);
+    let read = app.records(&ada, &workspace, "Repository").await;
+    assert_eq!(read[0]["spec_commit"], "own");
+}

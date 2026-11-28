@@ -16,10 +16,10 @@ mod snapshot;
 mod store;
 mod upkeep;
 pub use landed::{all_landed, have_commit, landed_through};
-pub use only::{commit_only, head_commit};
+pub use only::{commit_only, committed_texts, head_commit};
 pub use outgoing::{outgoing_commits, outgoing_from, outgoing_patch};
 pub use remote::{
-    clone_by_key, forget_origins, github_origin, github_origin_cached, verify_github_push_origin, GithubOrigin,
+    clone_at, clone_by_key, forget_origins, github_origin, github_origin_cached, verify_github_push_origin, GithubOrigin,
 };
 pub use snapshot::fingerprint;
 pub use store::{

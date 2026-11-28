@@ -236,7 +236,8 @@ pub(super) fn describe_project(path: &str, group: Option<&str>) -> Result<Projec
         check: None,
         check_approved: None,
         spec_folder: None,
-        specs_in_app: false,
+        spec_toolset: None,
+        spec_commit: Default::default(),
         remote: git::origin_url(&root_path).map(|url| git::remote_key(&url)),
         repository_id: None,
     })
@@ -281,6 +282,9 @@ pub(crate) fn remove_project_inner(state: &AppState, id: &str) -> Result<()> {
             .map(|t| t.id.clone())
             .collect();
         c.tasks.retain(|t| !dropped.contains(&t.id));
+        for task in &dropped {
+            c.task_details.remove(task);
+        }
         (gone, dropped)
     })?;
     state.status_cache.lock().retain(|cid, _| !gone.contains(cid));
